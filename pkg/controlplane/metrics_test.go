@@ -69,6 +69,104 @@ func TestControlMetricsCountTerminalTakeoverLoss(t *testing.T) {
 	requireControlLosses(t, body, 1)
 }
 
+func TestControlMetricsOmitLostCallDuringIntentCleanup(t *testing.T) {
+	p, _, _, _ := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	liveID, _, err := p.Create(ctx, "offer", "b")
+	require.NoError(t, err)
+	lease, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	require.Contains(t, planeMetricsBody(p), "relais_control_active_calls 2\n")
+	authorizeTestControl(t, p)
+	s := &statusIntentCleanupStore{ControlStore: p.restart.store, entered: make(chan struct{}), release: make(chan struct{})}
+	p.restart.store = s
+	source := p.workers["a"]
+	expireObservedWorker(t, source)
+	finished := make(chan struct{})
+	var outcome *MoveResult
+	go func() {
+		defer close(finished)
+		outcome = p.recovery.recover(ctx, source, lease, time.Now()) // missing snapshot
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-s.release:
+		default:
+			close(s.release)
+		}
+		cancel()
+		<-finished
+	})
+	select {
+	case <-s.entered:
+	case <-ctx.Done():
+		t.Fatal("terminal cleanup did not reach intent deletion")
+	}
+	// Intent deletion retains the terminal call after lease cleanup is done.
+	p.mu.Lock()
+	c := p.calls[id]
+	retained, terminal, pending := c != nil, c != nil && c.terminal, c != nil && c.cleanupPending
+	p.mu.Unlock()
+	require.True(t, retained)
+	require.True(t, terminal)
+	require.False(t, pending)
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	require.Len(t, status.Calls, 1)
+	require.Equal(t, liveID, status.Calls[0].ID)
+	require.EqualValues(t, 1, status.LostCount)
+	require.Contains(t, planeMetricsBody(p), "relais_control_active_calls 1\n")
+	close(s.release)
+	<-finished
+	require.NotNil(t, outcome)
+	require.True(t, outcome.Lost)
+	p.mu.Lock()
+	retained = p.calls[id] != nil
+	p.mu.Unlock()
+	require.False(t, retained)
+	require.Contains(t, planeMetricsBody(p), "relais_control_active_calls 1\n")
+	p.restart.store = s.ControlStore
+	require.NoError(t, p.End(ctx, liveID))
+	require.Contains(t, planeMetricsBody(p), "relais_control_active_calls 0\n")
+}
+
+func TestControlMetricsOmitHungUpCallDuringCleanupRetry(t *testing.T) {
+	p, _, _, base := setup(t)
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	queueUncertainExport(t, p, id)
+	source := p.workers["a"]
+	pending := pendingRecovery(p, source, id)
+	require.NotNil(t, pending)
+	lease, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	require.NoError(t, p.store.Release(ctx, lease)) // worker-side normal end
+	r := &retryTenureRelay{fakeRelay: base, failures: 1}
+	p.SetRelay(r)
+	outcome := p.recovery.recover(ctx, source, *pending, time.Now())
+	require.NotNil(t, outcome)
+	require.False(t, outcome.Lost)
+	require.Equal(t, 1, r.attempts)
+	p.mu.Lock()
+	c := p.calls[id]
+	retained, terminal, cleanup := c != nil, c != nil && c.terminal, c != nil && c.cleanupPending
+	hungUp := c != nil && c.hungUp.Load()
+	p.mu.Unlock()
+	require.True(t, retained)
+	require.False(t, terminal)
+	require.True(t, cleanup)
+	require.True(t, hungUp)
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	require.Empty(t, status.Calls)
+	require.Zero(t, status.LostCount)
+	require.Contains(t, planeMetricsBody(p), "relais_control_active_calls 0\n")
+}
+
 func TestControlMetricsCountRolledBackMove(t *testing.T) {
 	p, _, b, _ := setup(t)
 	id, _, err := p.Create(context.Background(), "offer", "a")
