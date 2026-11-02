@@ -123,6 +123,7 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 	}
 	defer p.finishIntent(c)
 	if c.terminal {
+		m.finishPending(source, c.id)
 		return nil
 	}
 	p.mu.Lock()

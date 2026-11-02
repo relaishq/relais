@@ -12,21 +12,37 @@ import (
 )
 
 type relayEpisode struct {
-	intent                        sessionstore.ControlIntent
-	deadline                      time.Time
-	done                          chan struct{}
-	once                          sync.Once
-	running, loaded, cleanupReady bool // guarded by relayEpisodeMu
-	completed                     atomic.Bool
+	intent                                  sessionstore.ControlIntent
+	controlEpoch                            uint64 // guarded by relayEpisodeMu
+	deadline                                time.Time
+	done                                    chan struct{}
+	once                                    sync.Once
+	running, loaded, watching, cleanupReady bool // guarded by relayEpisodeMu
+	completed                               atomic.Bool
+}
+
+type relayIntentSnapshot struct {
+	epoch   uint64
+	records map[string]sessionstore.ControlIntent
 }
 
 // The existing journal stores the first detection time, independently of the
 // call operation lock. A busy operation or a repeated caller request cannot
 // buy another 15 seconds. No new signaling payload is involved.
-func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time.Time, snapshot ...map[string]sessionstore.ControlIntent) (*relayEpisode, error) {
+func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time.Time, snapshot ...relayIntentSnapshot) (*relayEpisode, error) {
 	c.relayEpisodeMu.Lock()
 	defer c.relayEpisodeMu.Unlock()
 	journal := p.store.(sessionstore.ControlStore)
+	epoch := p.relayControlEpoch()
+	if len(snapshot) > 0 && snapshot[0].epoch != epoch {
+		return nil, ErrNotReady
+	}
+	rearm := false
+	if e := c.relayEpisode; e != nil && !e.completed.Load() && e.controlEpoch != epoch {
+		// Confirm the old intent before re-arming it in a new control term.
+		e.loaded, e.watching, rearm = false, false, true
+		p.clearRelayEndReason(c)
+	}
 	if e := c.relayEpisode; e != nil && e.completed.Load() {
 		if !e.cleanupReady {
 			return nil, ErrMoveInProgress
@@ -37,23 +53,15 @@ func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time
 		c.relayEpisode = nil
 	}
 	if c.relayEpisode == nil {
-		c.stateMu.Lock()
-		lease, capable := c.lease, c.relayCapable
-		c.stateMu.Unlock()
-		kind := "relay-recovery"
-		if !capable {
-			kind = "relay-recovery-unsupported"
-		}
-		intent := sessionstore.ControlIntent{ID: "relay-recovery:" + c.id, Token: randomToken(), Kind: kind, Started: detected, Lease: lease}
-		e := &relayEpisode{intent: intent, deadline: intent.Started.Add(relayRecoveryLimit), done: make(chan struct{})}
-		c.relayEpisode = e
-		p.watchRelayEpisode(c, e)
+		p.newRelayEpisode(c, detected, epoch)
+		p.watchRelayEpisode(c, c.relayEpisode)
+		c.relayEpisode.watching = true
 	}
 	e := c.relayEpisode
 	if !e.loaded {
 		var records []sessionstore.ControlIntent
 		if len(snapshot) > 0 {
-			if saved, ok := snapshot[0][e.intent.ID]; ok {
+			if saved, ok := snapshot[0].records[e.intent.ID]; ok {
 				records = append(records, saved)
 			}
 		} else {
@@ -63,28 +71,88 @@ func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time
 				return nil, err
 			}
 		}
+		if p.relayControlEpoch() != epoch {
+			return nil, ErrNotReady
+		}
+		found := false
 		for _, saved := range records {
 			if saved.ID == e.intent.ID {
 				if saved.Kind == "relay-recovery-complete" {
 					if err := journal.DeleteControlIntent(ctx, saved.ID, saved.Token); err != nil {
 						return nil, err
 					}
-				} else if saved.Token != e.intent.Token {
-					e.completed.Store(true)
-					e.once.Do(func() { close(e.done) })
-					e = &relayEpisode{intent: saved, deadline: saved.Started.Add(relayRecoveryLimit), done: make(chan struct{})}
-					c.relayEpisode = e
-					p.watchRelayEpisode(c, e)
+				} else {
+					found = true
+					if saved.Token != e.intent.Token {
+						e.completed.Store(true)
+						e.once.Do(func() { close(e.done) })
+						e = &relayEpisode{intent: saved, controlEpoch: epoch, deadline: saved.Started.Add(relayRecoveryLimit), done: make(chan struct{})}
+						c.relayEpisode = e
+						rearm = false
+					}
 				}
 				break
 			}
 		}
-		e.loaded = true
+		if rearm {
+			if !found {
+				e.completed.Store(true)
+				e.once.Do(func() { close(e.done) })
+				e = p.newRelayEpisode(c, detected, epoch)
+			}
+		}
 	}
-	return e, journal.PutControlIntent(ctx, e.intent)
+	if p.relayControlEpoch() != epoch {
+		return nil, ErrNotReady
+	}
+	err := journal.PutControlIntent(ctx, e.intent)
+	if p.relayControlEpoch() != epoch {
+		return nil, ErrNotReady
+	}
+	e.loaded = err == nil
+	if err == nil && !e.completed.Load() && !e.watching {
+		e.controlEpoch, e.running, e.watching = epoch, false, true
+		p.watchRelayEpisode(c, e)
+	}
+	return e, err
+}
+
+// The caller holds relayEpisodeMu.
+func (p *Plane) newRelayEpisode(c *call, detected time.Time, epoch uint64) *relayEpisode {
+	c.stateMu.Lock()
+	lease, capable := c.lease, c.relayCapable
+	c.stateMu.Unlock()
+	kind := "relay-recovery"
+	if !capable {
+		kind = "relay-recovery-unsupported"
+	}
+	intent := sessionstore.ControlIntent{ID: "relay-recovery:" + c.id, Token: randomToken(), Kind: kind, Started: detected, Lease: lease}
+	e := &relayEpisode{intent: intent, controlEpoch: epoch, deadline: intent.Started.Add(relayRecoveryLimit), done: make(chan struct{})}
+	c.relayEpisode = e
+	return e
+}
+
+func (p *Plane) clearRelayEndReason(c *call) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !c.terminal && !c.hungUp.Load() {
+		c.stateMu.Lock()
+		c.relayEndReason = ""
+		c.stateMu.Unlock()
+	}
+}
+
+func (p *Plane) relayControlEpoch() uint64 {
+	if p.restart != nil {
+		if guard := p.restart.guard.Load(); guard != nil {
+			return guard.lease.Epoch
+		}
+	}
+	return 0
 }
 
 func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
+	epoch := e.controlEpoch
 	go func() {
 		timer := time.NewTimer(time.Until(e.deadline))
 		defer timer.Stop()
@@ -93,45 +161,61 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 			return
 		case <-timer.C:
 		}
-		// A delayed renewal of the same tenure does not rebuild calls. Retain
-		// the expired deadline and enforce it as soon as authority returns.
-		for !p.controlAuthority() {
-			if p.restart != nil && p.restart.stopping.Load() {
+		for {
+			// A delayed renewal of the same tenure does not rebuild calls. Retain
+			// the expired deadline and enforce it as soon as authority returns.
+			for !p.controlAuthority() {
+				if e.completed.Load() || p.relayControlEpoch() != epoch || p.restart != nil && p.restart.stopping.Load() {
+					return
+				}
+				select {
+				case <-e.done:
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			if e.completed.Load() || p.relayControlEpoch() != epoch {
 				return
 			}
+			// Cancellation must release a busy holder before waiting for its lock.
+			// Publish at the deadline while the cancelled holder unwinds.
+			// Termination still requires the locked authority re-check.
+			c.controlMu.Lock()
+			if c.relayCancel != nil {
+				c.relayCancel()
+			}
+			if c.controlCancel != nil {
+				c.controlCancel()
+			}
+			c.controlMu.Unlock()
+			c.stateMu.Lock()
+			if e.completed.Load() || p.relayControlEpoch() != epoch {
+				c.stateMu.Unlock()
+				return
+			}
+			c.relayEndReason = "relay_change_failed"
 			select {
-			case <-e.done:
-				return
-			case <-time.After(50 * time.Millisecond):
+			case c.relayWake <- struct{}{}:
+			default:
 			}
-		}
-		if e.completed.Load() {
+			c.stateMu.Unlock()
+			c.mu.Lock()
+			if e.completed.Load() || p.relayControlEpoch() != epoch {
+				c.mu.Unlock()
+				return
+			}
+			if !p.controlAuthority() {
+				c.mu.Unlock()
+				continue
+			}
+			defer c.mu.Unlock()
+			c.stateMu.Lock()
+			lease := c.lease
+			c.stateMu.Unlock()
+			p.endRelayFailure(c, lease, "relay_change_failed")
+			p.completeRelayEpisode(context.Background(), c, e)
 			return
 		}
-		// Publish the terminal event at the deadline even while a cancelled
-		// operation is unwinding; ownership cleanup still uses the call lock.
-		c.stateMu.Lock()
-		c.relayEndReason = "relay_change_failed"
-		select {
-		case c.relayWake <- struct{}{}:
-		default:
-		}
-		c.stateMu.Unlock()
-		c.controlMu.Lock()
-		if c.relayCancel != nil {
-			c.relayCancel()
-		}
-		if c.controlCancel != nil {
-			c.controlCancel()
-		}
-		c.controlMu.Unlock()
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.stateMu.Lock()
-		lease := c.lease
-		c.stateMu.Unlock()
-		p.endRelayFailure(c, lease, "relay_change_failed")
-		p.completeRelayEpisode(context.Background(), c, e)
 	}()
 }
 
@@ -173,14 +257,24 @@ func (p *Plane) startRelayRecovery(ctx context.Context, c *call, sameSlot bool) 
 		return nil
 	}
 	e.running = true
+	epoch := e.controlEpoch
 	c.relayEpisodeMu.Unlock()
 	go func() {
-		defer func() { c.relayEpisodeMu.Lock(); e.running = false; c.relayEpisodeMu.Unlock() }()
+		defer func() {
+			c.relayEpisodeMu.Lock()
+			if e.controlEpoch == epoch {
+				e.running = false
+			}
+			c.relayEpisodeMu.Unlock()
+		}()
 		recovery, cancel := context.WithDeadline(context.WithoutCancel(ctx), e.deadline)
 		defer cancel()
 		tried := map[string]bool{}
-		for recovery.Err() == nil {
+		for recovery.Err() == nil && !e.completed.Load() && p.relayControlEpoch() == epoch {
 			err = p.recoverRelay(recovery, c, sameSlot, tried)
+			if e.completed.Load() || p.relayControlEpoch() != epoch {
+				return
+			}
 			if errors.Is(err, ErrNoTarget) {
 				clear(tried)
 			}
@@ -189,6 +283,8 @@ func (p *Plane) startRelayRecovery(ctx context.Context, c *call, sameSlot bool) 
 				return
 			}
 			select {
+			case <-e.done:
+				return
 			case <-recovery.Done():
 				return
 			case <-time.After(50 * time.Millisecond):

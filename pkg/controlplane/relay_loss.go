@@ -81,6 +81,9 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 	if binding.lostAt.IsZero() {
 		binding.lostAt = time.Now()
 	}
+	if binding.lossUnaffected == nil {
+		binding.lossUnaffected = make(map[string]bool)
+	}
 	binding.lost = true
 	p.relaySet[slot] = binding
 	var slots []mediaworker.RelaySlot
@@ -124,10 +127,62 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 		err = errors.Join(err, e)
 	}
 	if err != nil {
+		// Only calls without a loaded episode need store work on a cut-off retry.
+		epoch := p.relayControlEpoch()
+		var affected []*call
+		for _, c := range calls {
+			c.stateMu.Lock()
+			capable := c.relayCapable
+			c.stateMu.Unlock()
+			if capable {
+				continue
+			}
+			c.relayEpisodeMu.Lock()
+			e := c.relayEpisode
+			loaded := e != nil && e.loaded && e.controlEpoch == epoch
+			c.relayEpisodeMu.Unlock()
+			if loaded {
+				continue
+			}
+			p.mu.Lock()
+			unaffected := binding.lossUnaffected[c.id]
+			p.mu.Unlock()
+			if unaffected {
+				continue
+			}
+			_, assignment, readErr := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id)
+			if errors.Is(readErr, sessionstore.ErrNotFound) || errors.Is(readErr, sessionstore.ErrEnded) || readErr == nil && assignment.Slot != slot && assignment.Pending != slot {
+				p.mu.Lock()
+				binding.lossUnaffected[c.id] = true
+				p.mu.Unlock()
+				continue
+			}
+			err = errors.Join(err, readErr)
+			if readErr == nil && (assignment.Slot == slot || assignment.Pending == slot) {
+				affected = append(affected, c)
+			}
+		}
+		if len(affected) == 0 {
+			return err
+		}
+		snapshotEpoch := p.relayControlEpoch()
+		records, readErr := p.store.(sessionstore.ControlStore).ControlIntents(ctx)
+		if readErr != nil {
+			return errors.Join(err, readErr)
+		}
+		journal := make(map[string]sessionstore.ControlIntent, len(records))
+		for _, record := range records {
+			journal[record.ID] = record
+		}
+		for _, c := range affected {
+			_, e := p.relayRecoveryEpisode(ctx, c, binding.lostAt, relayIntentSnapshot{epoch: snapshotEpoch, records: journal})
+			err = errors.Join(err, e)
+		}
 		return err
 	}
 	// Cut-off needs no call/store lookups. Once acknowledged, share one journal
 	// snapshot and bound initialization I/O; recovery drivers still start together.
+	snapshotEpoch := p.relayControlEpoch()
 	records, err := p.store.(sessionstore.ControlStore).ControlIntents(ctx)
 	if err != nil {
 		return err
@@ -146,7 +201,7 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 					continue
 				}
 				if e == nil && (assignment.Slot == slot || assignment.Pending == slot) {
-					if _, e = p.relayRecoveryEpisode(ctx, c, binding.lostAt, journal); e == nil {
+					if _, e = p.relayRecoveryEpisode(ctx, c, binding.lostAt, relayIntentSnapshot{epoch: snapshotEpoch, records: journal}); e == nil {
 						c.controlMu.Lock()
 						if c.relayCancel != nil && (!c.relayUnplanned || c.relayTarget == slot) {
 							c.relayCancel()

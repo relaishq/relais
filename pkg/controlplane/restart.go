@@ -743,9 +743,14 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			p.rebuildCall(lease)
 		}
 	}
+	snapshotEpoch := p.relayControlEpoch()
 	intents, err := p.restart.store.ControlIntents(ctx)
 	if err != nil {
 		return err
+	}
+	journal := make(map[string]sessionstore.ControlIntent, len(intents))
+	for _, intent := range intents {
+		journal[intent.ID] = intent
 	}
 	for _, intent := range intents {
 		if strings.HasPrefix(intent.Kind, "relay-recovery") {
@@ -761,7 +766,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 				c.stateMu.Lock()
 				c.relayCapable = intent.Kind == "relay-recovery"
 				c.stateMu.Unlock()
-				if _, e = p.relayRecoveryEpisode(ctx, c, intent.Started); e != nil {
+				if _, e = p.relayRecoveryEpisode(ctx, c, intent.Started, relayIntentSnapshot{epoch: snapshotEpoch, records: journal}); e != nil {
 					return e
 				}
 			}
@@ -851,12 +856,17 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 }
 func (p *Plane) rebuildCall(lease sessionstore.Lease) *call {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	c := p.calls[lease.SessionID]
 	if c == nil {
 		c = &call{id: lease.SessionID, lease: lease}
 		p.calls[c.id] = c
 	}
+	p.mu.Unlock()
+	c.relayEpisodeMu.Lock()
+	if e := c.relayEpisode; e != nil && e.controlEpoch != p.relayControlEpoch() {
+		p.clearRelayEndReason(c)
+	}
+	c.relayEpisodeMu.Unlock()
 	return c
 }
 
