@@ -856,11 +856,30 @@ func (m *moveRecovery) complete(source *registration, c *call, lease sessionstor
 func (m *moveRecovery) finishPending(source *registration, id string) {
 	p := m.plane
 	p.mu.Lock()
+	if pending := m.pending[source][id]; pending != nil && pending.call.terminal {
+		m.retainCleanupLocked(pending.call, pending)
+	}
 	delete(m.pending[source], id)
 	if len(m.pending[source]) == 0 {
 		delete(m.pending, source)
 	}
 	p.mu.Unlock()
+}
+
+// retainCleanupLocked runs under the call and registry locks, before pending
+// removal or cleanup consumes the retained route and hold.
+func (m *moveRecovery) retainCleanupLocked(c *call, pending *moveTransfer) {
+	c.cleanupPlanned = c.cleanupPlanned || pending.held || pending.planned
+	routed := pending.routedLease
+	if routed.Epoch == 0 || sameTenure(routed, c.lossLease) {
+		return
+	}
+	for _, lease := range c.cleanupLeases {
+		if sameTenure(lease, routed) {
+			return
+		}
+	}
+	c.cleanupLeases = append(c.cleanupLeases, routed)
 }
 
 // Storage disappearance, no target, and unrelated resume errors are losses,

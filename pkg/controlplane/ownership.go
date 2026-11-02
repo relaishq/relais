@@ -123,6 +123,13 @@ func (p *Plane) cleanupExpired(ctx context.Context, c *call) {
 	p.mu.Lock()
 	pending := c.cleanupPending
 	r := p.relay
+	if pending {
+		for _, entries := range p.recovery.pending {
+			if transfer := entries[c.id]; transfer != nil {
+				p.recovery.retainCleanupLocked(c, transfer)
+			}
+		}
+	}
 	p.mu.Unlock()
 	if !pending || time.Now().Before(c.cleanupAfter) {
 		return
