@@ -28,6 +28,7 @@ type storeWireCommand struct {
 type storeWireRecorder struct {
 	mu       sync.Mutex
 	commands []storeWireCommand
+	noScript string
 }
 
 func (w *storeWireRecorder) take() []storeWireCommand {
@@ -38,7 +39,8 @@ func (w *storeWireRecorder) take() []storeWireCommand {
 	return out
 }
 
-// Put a transparent RESP proxy in front of the disposable endpoint. NewRedis
+// Put a RESP proxy in front of the disposable endpoint. It can answer one
+// EVALSHA with an injected NOSCRIPT (noScript). NewRedis
 // builds the real production client, including its normal connection options.
 func recordedRedis(t *testing.T) (*Redis, *storeWireRecorder) {
 	t.Helper()
@@ -102,12 +104,23 @@ func recordedRedis(t *testing.T) (*Redis, *storeWireRecorder) {
 					if e != nil {
 						return
 					}
-					if _, e = io.Copy(back, bytes.NewReader(raw)); e != nil {
-						return
+					wire.mu.Lock()
+					noScript := len(args) > 1 && args[0] == "evalsha" && args[1] == wire.noScript
+					if noScript {
+						wire.noScript = ""
 					}
-					reply, e := rediswiretest.Read(out)
-					if e != nil {
-						return
+					wire.mu.Unlock()
+					var reply []byte
+					if noScript {
+						reply = []byte("-NOSCRIPT No matching script. Please use EVAL.\r\n")
+					} else {
+						if _, e = io.Copy(back, bytes.NewReader(raw)); e != nil {
+							return
+						}
+						reply, e = rediswiretest.Read(out)
+						if e != nil {
+							return
+						}
 					}
 					wire.mu.Lock()
 					wire.commands = append(wire.commands, storeWireCommand{raw, reply, args})
@@ -161,7 +174,12 @@ func TestRedisRouteAndIndexScriptCache(t *testing.T) {
 		{"index", indexLua, indexScript, func() error { return r.indexContext(ctx, lease, time.Minute) }, 210},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, r.client.ScriptFlush(ctx).Err())
+			require.NoError(t, r.client.ScriptLoad(ctx, tc.body).Err())
+			// The script cache is server-wide and shared with parallel packages, so
+			// load the script for the warm call and inject one NOSCRIPT for the cold one.
+			wire.mu.Lock()
+			wire.noScript = tc.script.Hash()
+			wire.mu.Unlock()
 			wire.take()
 			require.NoError(t, tc.call())
 			cold := scriptCommands(wire.take(), tc.script, tc.body)
