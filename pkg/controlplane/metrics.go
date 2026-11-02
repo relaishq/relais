@@ -18,8 +18,10 @@ type planeMetrics struct {
 func (p *Plane) metricSamples() []metrics.Sample {
 	p.mu.Lock()
 	calls := len(p.calls)
+	// Lost and hung-up calls stay finished even when intent cleanup clears
+	// cleanupPending before removing them from the registry.
 	for _, c := range p.calls {
-		if c.cleanupPending {
+		if c.terminal || c.hungUp.Load() {
 			calls--
 		}
 	}
