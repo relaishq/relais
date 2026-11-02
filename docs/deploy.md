@@ -24,12 +24,12 @@ free; choose a different set if needed. Never use Redis port **6379**.
 | Process | Listener | Purpose |
 | --- | --- | --- |
 | Redis | TCP 16380 | Dedicated disposable session and frame store |
-| Relay | UDP 34780 | Caller media; the one public media port in a deployment |
-| Relay | UDP 34781; HTTP 34700 | Private worker leg and control |
-| Worker w1 | UDP 34711; HTTP 34701 | Private media and coordination |
-| Worker w2 | UDP 34712; HTTP 34702 | Private media and coordination |
-| Control | HTTP 34710 | Private calls, placement, moves, heartbeats, status |
-| Signal | HTTPS 34743 | Authenticated test signaling |
+| Relay | UDP 25780 | Caller media; the one public media port in a deployment |
+| Relay | UDP 25781; HTTP 25700 | Private worker leg and control |
+| Worker w1 | UDP 25711; HTTP 25701 | Private media and coordination |
+| Worker w2 | UDP 25712; HTTP 25702 | Private media and coordination |
+| Control | HTTP 25710 | Private calls, placement, moves, heartbeats, status |
+| Signal | HTTPS 25743 | Authenticated test signaling |
 
 Run the following blocks in one shell from the repository root. Keep it open
 until cleanup. The PIDs belong only to these commands; do not reuse them after
@@ -54,34 +54,34 @@ its log if any command fails.
 
 ```sh
 env -u RELAIS_SESSIONSTORE_KEY ./bin/relais-relay \
-  -media=127.0.0.1:34780 -leg=127.0.0.1:34781 -http=127.0.0.1:34700 \
+  -media=127.0.0.1:25780 -leg=127.0.0.1:25781 -http=127.0.0.1:25700 \
   >"$run_dir/relay.log" 2>&1 &
 relay_pid=$!
 curl --fail --retry 30 --retry-connrefused --retry-delay 1 \
-  http://127.0.0.1:34700/status
+  http://127.0.0.1:25700/status
 
-./bin/relais-worker -name=w1 -media=127.0.0.1:34711 -http=127.0.0.1:34701 \
-  -relay-leg=127.0.0.1:34781 -relay-media=127.0.0.1:34780 \
-  -control=http://127.0.0.1:34710 -agent=demo >"$run_dir/w1.log" 2>&1 &
+./bin/relais-worker -name=w1 -media=127.0.0.1:25711 -http=127.0.0.1:25701 \
+  -relay-leg=127.0.0.1:25781 -relay-media=127.0.0.1:25780 \
+  -control=http://127.0.0.1:25710 -agent=demo >"$run_dir/w1.log" 2>&1 &
 w1_pid=$!
-./bin/relais-worker -name=w2 -media=127.0.0.1:34712 -http=127.0.0.1:34702 \
-  -relay-leg=127.0.0.1:34781 -relay-media=127.0.0.1:34780 \
-  -control=http://127.0.0.1:34710 -agent=demo >"$run_dir/w2.log" 2>&1 &
+./bin/relais-worker -name=w2 -media=127.0.0.1:25712 -http=127.0.0.1:25702 \
+  -relay-leg=127.0.0.1:25781 -relay-media=127.0.0.1:25780 \
+  -control=http://127.0.0.1:25710 -agent=demo >"$run_dir/w2.log" 2>&1 &
 w2_pid=$!
 curl --fail --retry 30 --retry-connrefused --retry-delay 1 \
-  http://127.0.0.1:34701/status
+  http://127.0.0.1:25701/status
 curl --fail --retry 30 --retry-connrefused --retry-delay 1 \
-  http://127.0.0.1:34702/status
+  http://127.0.0.1:25702/status
 
-./bin/relais-control -http=127.0.0.1:34710 -relay=http://127.0.0.1:34700 \
-  -worker=w1=http://127.0.0.1:34701 -worker=w2=http://127.0.0.1:34702 \
+./bin/relais-control -http=127.0.0.1:25710 -relay=http://127.0.0.1:25700 \
+  -worker=w1=http://127.0.0.1:25701 -worker=w2=http://127.0.0.1:25702 \
   >"$run_dir/control.log" 2>&1 &
 control_pid=$!
 curl --fail --retry 30 --retry-connrefused --retry-delay 1 \
-  http://127.0.0.1:34710/status
+  http://127.0.0.1:25710/status
 
-./bin/relais-signal -listen=127.0.0.1:34743 \
-  -control=http://127.0.0.1:34710 -advertise-ips=127.0.0.1 \
+./bin/relais-signal -listen=127.0.0.1:25743 \
+  -control=http://127.0.0.1:25710 -advertise-ips=127.0.0.1 \
   -cert-out="$run_dir/frontend.pem" >"$run_dir/signal.log" 2>&1 &
 signal_pid=$!
 ```
@@ -93,7 +93,7 @@ fingerprint before trusting `frontend.pem`. Then check authenticated status:
 ```sh
 curl --fail --cacert "$run_dir/frontend.pem" \
   -H "Authorization: Bearer $RELAIS_SIGNAL_TOKEN" \
-  https://127.0.0.1:34743/status
+  https://127.0.0.1:25743/status
 ```
 
 Control should list both workers alive. Use [Connect an app](connect-an-app.md)

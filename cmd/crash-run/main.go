@@ -696,6 +696,7 @@ func run() (err error) {
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
 	pauseWorker := flag.Bool("worker-stop", false, "SIGSTOP the owning worker; prove heartbeat takeover without waiting for lease expiry")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
+	relayLoss := flag.Bool("relay-loss", false, "eight-call relay-slot loss: interleaved SIGSTOP/SIGCONT and SIGKILL of active plus standby")
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
 	profile := flag.String("profile", "lan", "lan, region, far-caller or lossy-dc (shaping requires netns)")
@@ -719,6 +720,9 @@ func run() (err error) {
 	flag.DurationVar(&pair.Settle, "pair-settle", 5*time.Second, "media observation after each replacement step")
 	selectedWorker.Flags(flag.CommandLine)
 	flag.Parse()
+	if *relayLoss && (*relayStandby || *relayRestart || *terminate || *pauseWorker || *bufferOn || *compareBuffer || *storeStall != "" || *scenario != "" || *topologyOption != "loopback" || workerdriver.IsCustom(selectedWorker.Agent)) {
+		return errors.New("relay-loss requires the loopback echo topology and cannot combine with another fault mode")
+	}
 	if *releasePair {
 		return runReleasePairCommand(pair, *binArg, *redisAddr, *redisBinary, flag.NFlag())
 	}
@@ -896,6 +900,9 @@ func run() (err error) {
 	}
 	if *storeStall != "" {
 		return runStoreStallTrials(ctx, manager, ownedRedis, bin, dir, hex.EncodeToString(key[:]), addr, *storeStall, *stallDuration, *runs, *after, *verbose)
+	}
+	if *relayLoss {
+		return runRelayLossTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after)
 	}
 	if *scenario != "" {
 		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRouteTuning: *privateRouteTuning, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)

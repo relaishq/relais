@@ -11,6 +11,7 @@ import (
 // Generation is the lease epoch. ExpiresAt is the consent deadline, independent
 // of lease and snapshot TTLs. Restoring or moving must not renew this evidence.
 type Route struct {
+	Slot              string         `json:"relay_slot,omitempty"`
 	Caller            netip.AddrPort `json:"caller"`
 	SessionID         string         `json:"session_id"`
 	Generation        uint64         `json:"generation"`
@@ -18,6 +19,15 @@ type Route struct {
 	LastAuthenticated time.Time      `json:"last_authenticated"`
 	ExpiresAt         time.Time      `json:"expires_at"`
 }
+
+type routeKey struct {
+	slot   string
+	caller netip.AddrPort
+}
+type routeSessionKey struct{ slot, id string }
+
+func (r Route) key() routeKey               { return routeKey{r.Slot, r.Caller} }
+func (r Route) sessionKey() routeSessionKey { return routeSessionKey{r.Slot, r.SessionID} }
 
 var ErrRouteLimit = errors.New("sessionstore: persisted route limit exceeded")
 
@@ -89,7 +99,8 @@ func (m *Memory) PutRoute(ctx context.Context, route Route, nominated bool) erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lease, ok := m.leases[route.SessionID]
-	if !ok || lease.Epoch != route.Generation || !time.Now().Before(lease.ExpiresAt) {
+	if !ok || lease.Epoch != route.Generation || !time.Now().Before(lease.ExpiresAt) ||
+		route.Slot != "" && !m.relayAssignments[route.SessionID].Allows(route.Slot) {
 		return ErrLeaseLost
 	}
 	if !time.Now().Before(route.ExpiresAt) {
@@ -100,42 +111,57 @@ func (m *Memory) PutRoute(ctx context.Context, route Route, nominated bool) erro
 			m.dropRoute(caller)
 		}
 	}
-	if old, ok := m.routes[route.Caller]; ok && !newerRoute(route, old) {
+	if old, ok := m.routes[route.key()]; ok && !newerRoute(route, old) {
 		return nil
 	}
-	if marker, ok := m.routeNominations[route.SessionID]; ok && marker.Generation == route.Generation && marker.ConfirmedAt.After(route.ConfirmedAt) {
+	if marker, ok := m.routeNominations[route.sessionKey()]; ok && marker.Generation == route.Generation && marker.ConfirmedAt.After(route.ConfirmedAt) {
 		return nil
 	}
-	if old, ok := m.routes[route.Caller]; ok && old.SessionID == route.SessionID && old.Generation == route.Generation {
+	if old, ok := m.routes[route.key()]; ok && old.SessionID == route.SessionID && old.Generation == route.Generation {
 		nominated = false
 	}
 	if nominated {
 		for caller := range m.routeSessions[route.SessionID] {
 			old := m.routes[caller]
+			if old.Slot != route.Slot {
+				continue
+			}
 			if old.ConfirmedAt.After(route.ConfirmedAt) {
 				return nil
 			}
 		}
-		m.routeNominations[route.SessionID] = route
+		m.routeNominations[route.sessionKey()] = route
 		for caller := range m.routeSessions[route.SessionID] {
-			m.dropRoute(caller)
+			if caller.slot == route.Slot {
+				m.dropRoute(caller)
+			}
 		}
 	}
-	m.dropRoute(route.Caller)
-	m.routes[route.Caller] = route
+	m.dropRoute(route.key())
+	m.routes[route.key()] = route
 	if m.routeSessions[route.SessionID] == nil {
-		m.routeSessions[route.SessionID] = make(map[netip.AddrPort]struct{})
+		m.routeSessions[route.SessionID] = make(map[routeKey]struct{})
 	}
-	m.routeSessions[route.SessionID][route.Caller] = struct{}{}
-	for len(m.routeSessions[route.SessionID]) > MaxRoutesPerSession {
+	m.routeSessions[route.SessionID][route.key()] = struct{}{}
+	count := 0
+	for key := range m.routeSessions[route.SessionID] {
+		if key.slot == route.Slot {
+			count++
+		}
+	}
+	for count > MaxRoutesPerSession {
 		var oldest Route
 		for caller := range m.routeSessions[route.SessionID] {
 			candidate := m.routes[caller]
+			if candidate.Slot != route.Slot {
+				continue
+			}
 			if oldest.SessionID == "" || routeEvidenceNewer(oldest, candidate) {
 				oldest = candidate
 			}
 		}
-		m.dropRoute(oldest.Caller)
+		m.dropRoute(oldest.key())
+		count--
 	}
 	return nil
 }
@@ -175,13 +201,13 @@ func (m *Memory) DeleteRoute(ctx context.Context, route Route) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.routes[route.Caller] == route {
-		m.dropRoute(route.Caller)
+	if m.routes[route.key()] == route {
+		m.dropRoute(route.key())
 	}
 	return nil
 }
 
-func (m *Memory) dropRoute(caller netip.AddrPort) {
+func (m *Memory) dropRoute(caller routeKey) {
 	route, ok := m.routes[caller]
 	if !ok {
 		return
@@ -193,7 +219,11 @@ func (m *Memory) dropRoute(caller netip.AddrPort) {
 	}
 }
 func (m *Memory) forgetRoutes(id string) {
-	delete(m.routeNominations, id)
+	for key := range m.routeNominations {
+		if key.id == id {
+			delete(m.routeNominations, key)
+		}
+	}
 	for caller := range m.routeSessions[id] {
 		m.dropRoute(caller)
 	}

@@ -21,6 +21,8 @@ import (
 const maxSafeInteger = 9007199254740991
 
 const (
+	// CallerMaximum includes startup, media, evidence collection and stop.
+	CallerMaximum   = 22 * time.Minute
 	NearRTT         = 10 * time.Millisecond
 	ClockBurstCount = 10
 	ReportGrace     = 180 * time.Second
@@ -133,7 +135,7 @@ func (m Manifest) Validate(i Identity, now time.Time) error {
 	if m.Gate == operator.Failover && m.Plan.DurationSeconds < 1020 {
 		return errors.New("insufficient-failover-duration")
 	}
-	if m.Version != 1 || m.Identity != i || m.PublicSHA != m.Plan.PublicSHA || m.Phase != m.Plan.Phase || m.ArmedAt < 0 || m.CreatedAt < m.ArmedAt || m.CreatedAt > now.UnixMilli() || m.Deadline <= now.UnixMilli() || m.Deadline-m.ArmedAt > int64(105*time.Minute/time.Millisecond) || m.Deadline-m.CreatedAt > int64(20*time.Minute/time.Millisecond) || int64(m.Plan.DurationSeconds)*1000+120000 > m.Deadline-now.UnixMilli() || m.Endpoints.RunID != i.RunID {
+	if m.Version != 1 || m.Identity != i || m.PublicSHA != m.Plan.PublicSHA || m.Phase != m.Plan.Phase || m.ArmedAt < 0 || m.CreatedAt < m.ArmedAt || m.CreatedAt > now.UnixMilli() || m.Deadline <= now.UnixMilli() || m.Deadline-m.ArmedAt > int64(105*time.Minute/time.Millisecond) || m.Deadline-m.CreatedAt > int64(CallerMaximum/time.Millisecond) || int64(m.Plan.DurationSeconds)*1000+120000 > m.Deadline-now.UnixMilli() || m.Endpoints.RunID != i.RunID {
 		return errors.New("invalid-caller-manifest")
 	}
 	e := m.Endpoints

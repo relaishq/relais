@@ -80,10 +80,16 @@ type Options struct {
 	// control plane to transfer ownership and re-point the relay.
 	Workers int
 
+	// AgentCallbackTimeout sets the local workers' callback deadline.
+	// Zero uses the production default.
+	AgentCallbackTimeout time.Duration
+
 	// Relay runs every call through a relay with a session-owner store
 	// (Memory by default): answers advertise the relay's public address, and the workers
 	// bind only private sockets behind it.
 	Relay bool
+	// DialOutWorkers selects indices using real outbound HTTP/2 links. Requires Relay.
+	DialOutWorkers []int
 	// SessionStore selects the relay topology's store. Nil uses Memory.
 	// The caller owns its lifetime; it must outlive Harness.Close.
 	SessionStore sessionstore.Store
@@ -130,6 +136,10 @@ type Harness struct {
 
 // Start starts a local topology, or attaches callers to Options.External.
 func Start(opts Options) (*Harness, error) {
+	if len(opts.DialOutWorkers) > 0 && !opts.Relay {
+		return nil, errors.New("callharness: dial-out workers require Relay")
+	}
+
 	if opts.External != nil {
 		if opts.Relay || opts.Workers != 0 || opts.SessionStore != nil || opts.FrameCache != nil {
 			return nil, errors.New("callharness: external topology cannot start local workers")
@@ -222,7 +232,7 @@ func (h *Harness) Close() error {
 // postOffer makes the one signaling exchange that starts a call on a media
 // worker: it POSTs the offer and returns the answer and the call's resource
 // URL (from Location).
-func (h *Harness) postOffer(ctx context.Context, worker int, offer string) (answer, resourceURL string, err error) {
+func (h *Harness) postOffer(ctx context.Context, worker int, offer string, relayChange ...bool) (answer, resourceURL string, err error) {
 	target, err := h.offerURL(worker)
 	if err != nil {
 		return "", "", err
@@ -232,6 +242,9 @@ func (h *Harness) postOffer(ctx context.Context, worker int, offer string) (answ
 		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/sdp")
+	if len(relayChange) > 0 && relayChange[0] {
+		req.Header.Set("Relais-Relay-Change", "true")
+	}
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {

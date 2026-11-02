@@ -34,16 +34,22 @@ const workerParam = "worker"
 // store it routes by. The store outlives relay restarts, as a shared store
 // outlives a relay process.
 type relayTopology struct {
+	links         *controlplane.WorkerLinks
+	linkURL       string
+	linkDone      chan struct{}
+	linkWorkers   sync.WaitGroup
+	linkBlocked   *sync.Map
 	owners        sessionstore.Store
 	loggerFactory logging.LoggerFactory
 
-	mu                 sync.Mutex
-	relay              *relay.Relay
-	plane              *controlplane.Plane
-	cancel             context.CancelFunc
-	done               chan struct{}
-	snapshotInterval   time.Duration
-	checkpointEnvelope mediaworker.CheckpointEnvelope
+	mu                   sync.Mutex
+	relay                *relay.Relay
+	plane                *controlplane.Plane
+	cancel               context.CancelFunc
+	done                 chan struct{}
+	snapshotInterval     time.Duration
+	agentCallbackTimeout time.Duration
+	checkpointEnvelope   mediaworker.CheckpointEnvelope
 
 	frames                              framecache.Store
 	disableFrameCache, disableResumePLI bool
@@ -77,13 +83,26 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 	topology.checkpointEnvelope = planeConfig.CheckpointEnvelope
 	topology.plane = controlplane.NewWithConfig(r, topology.owners, planeConfig)
 	topology.snapshotInterval = opts.SnapshotInterval
+	topology.agentCallbackTimeout = opts.AgentCallbackTimeout
 	ctx, cancel := context.WithCancel(context.Background())
 	topology.cancel, topology.done = cancel, make(chan struct{})
 	go func() { defer close(topology.done); _ = topology.plane.Run(ctx) }()
 
 	ws := &workers{relay: topology}
-	for range count {
+	if len(opts.DialOutWorkers) > 0 {
+		if err := topology.startLinks(ctx, opts.DialOutWorkers, count); err != nil {
+			cancel()
+			_ = r.Close()
+			return nil, err
+		}
+	}
+	for index := range count {
+		dialOut := false
+		for _, i := range opts.DialOutWorkers {
+			dialOut = dialOut || i == index
+		}
 		worker, err := mediaworker.New(mediaworker.Config{
+			Agent:                  mediaworker.AgentConfig{CallbackTimeout: opts.AgentCallbackTimeout},
 			CheckpointEnvelope:     topology.checkpointEnvelope,
 			ListenAddr:             "127.0.0.1:0",
 			FrameCache:             topology.frames,
@@ -94,6 +113,7 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 			SnapshotInterval:       opts.SnapshotInterval,
 			SnapshotLimits:         harnessSnapshotLimits(opts.SnapshotInterval),
 			Relay: &mediaworker.RelayConfig{
+				DialOut:    dialOut,
 				Addr:       r.WorkerAddr(),
 				PublicAddr: r.PublicAddr(),
 				Owners:     topology.owners,
@@ -103,9 +123,15 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 			return nil, errors.Join(err, ws.close())
 		}
 		ws.list = append(ws.list, worker)
-		r.AddWorker(worker.LocalAddr())
-		if err := topology.plane.Register(strconv.Itoa(len(ws.list)-1), worker.LocalAddr(), worker); err != nil {
-			return nil, errors.Join(err, ws.close())
+		if dialOut {
+			if err := topology.startDialOut(ctx, index, worker); err != nil {
+				return nil, errors.Join(err, ws.close())
+			}
+		} else {
+			r.AddWorker(worker.LocalAddr())
+			if err := topology.plane.Register(strconv.Itoa(index), worker.LocalAddr(), worker); err != nil {
+				return nil, errors.Join(err, ws.close())
+			}
 		}
 	}
 	ws.signaling = topology.plane.Handler()
@@ -121,6 +147,9 @@ func (t *relayTopology) close() error {
 
 	t.cancel()
 	<-t.done
+	if t.linkDone != nil {
+		<-t.linkDone
+	}
 	return t.relay.Close()
 }
 

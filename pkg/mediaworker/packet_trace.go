@@ -37,7 +37,7 @@ func (s *session) tracePacket(raw []byte, origin string) {
 	if s.worker.cfg.PacketTrace == nil || len(raw) < 8 {
 		return
 	}
-	packet := PacketTrace{SentAt: time.Now(), Worker: s.worker.localAddr, SessionID: s.id, Epoch: s.lease.Epoch, Origin: origin, Bytes: len(raw)}
+	packet := PacketTrace{SentAt: time.Now(), Worker: s.worker.LocalAddr(), SessionID: s.id, Epoch: s.lease.Epoch, Origin: origin, Bytes: len(raw)}
 	if isRTCP(raw) {
 		packet.Protocol = "SRTCP"
 		packet.SSRC = binary.BigEndian.Uint32(raw[4:8])

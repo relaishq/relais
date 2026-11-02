@@ -39,7 +39,7 @@ func startWorkers(opts Options) (*workers, error) {
 	if frames == nil {
 		frames = framecache.NewMemory(framecache.Limits{})
 	}
-	cfg := mediaworker.Config{FrameCache: frames, LoggerFactory: opts.WorkerLoggerFactory, DisableFrameCache: opts.DisableFrameCache, DisableResumePLI: opts.DisableResumePLI}
+	cfg := mediaworker.Config{Agent: mediaworker.AgentConfig{CallbackTimeout: opts.AgentCallbackTimeout}, FrameCache: frames, LoggerFactory: opts.WorkerLoggerFactory, DisableFrameCache: opts.DisableFrameCache, DisableResumePLI: opts.DisableResumePLI}
 	if opts.Workers <= 1 {
 		cfg.ListenAddr = "127.0.0.1:0"
 		worker, err := mediaworker.New(cfg)

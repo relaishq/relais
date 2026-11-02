@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"syscall"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -35,13 +36,24 @@ type trafficConn struct {
 	readBytes, writeBytes prometheus.Counter
 }
 
+type trafficSyscallConn struct {
+	*trafficConn
+	syscall.Conn
+}
+
 func trafficConnForClient(conn net.Conn, transport, client string) net.Conn {
 	var commands, parseFailures prometheus.Counter
 	if transport == "redis" {
 		commands = storeWireCommands.WithLabelValues(client)
 		parseFailures = storeWireParseFailures.WithLabelValues(client)
 	}
-	return &trafficConn{wireParseFailures: parseFailures, wireCommands: commands, Conn: conn, readBytes: transportBytes.WithLabelValues(transport, client, "in"), writeBytes: transportBytes.WithLabelValues(transport, client, "out")}
+	measured := &trafficConn{wireParseFailures: parseFailures, wireCommands: commands, Conn: conn, readBytes: transportBytes.WithLabelValues(transport, client, "in"), writeBytes: transportBytes.WithLabelValues(transport, client, "out")}
+	// Preserve idle-socket health checks, including go-redis's closed-peer
+	// probe. Only expose the outer connection's capability; TLS stays opaque.
+	if raw, ok := conn.(syscall.Conn); ok {
+		return &trafficSyscallConn{trafficConn: measured, Conn: raw}
+	}
+	return measured
 }
 
 func (c *trafficConn) Read(p []byte) (int, error) {

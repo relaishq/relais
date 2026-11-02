@@ -1,5 +1,6 @@
 ## Go parameters
 GOCMD=go
+PYTHON_AGENT ?= python3.12
 GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
@@ -21,7 +22,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relaishq/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: check check-quality check-rules test-external-module test-ci-scripts test-demo-page test-unit-local all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run release-pair release-pair-source help
+.PHONY: check check-quality check-rules test-external-module test-ci-scripts test-python-agent test-demo-page test-unit-local all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run release-pair release-pair-source help
 
 all: test build
 
@@ -100,6 +101,7 @@ check-quality: ## Run every PR quality gate in CI order
 	$(MAKE) test-external-module
 	$(MAKE) build
 	$(MAKE) test-ci-scripts
+	$(MAKE) test-python-agent
 	$(MAKE) test-demo-page
 	$(MAKE) test-operator
 	$(MAKE) check-rules
@@ -112,6 +114,9 @@ test-external-module: ## Build the supported external-module API without CGO
 
 test-ci-scripts: ## Test CI evidence and rule scripts
 	python3 -m unittest discover -s scripts/ci
+
+test-python-agent: ## Test the pinned Python agent in a throwaway Python 3.12 venv
+	PYTHON_AGENT="$(PYTHON_AGENT)" python3 scripts/dev/test-python-agent.py
 
 test-demo-page: ## Test demo page verdict logic
 	node --test cmd/relais-demo/*.test.cjs
@@ -174,11 +179,11 @@ test-harness: ## Run the call harness (audio+video echo calls, direct and throug
 test-harness-short: ## Run the PR call harness with -race and -short (5 s baseline calls), memory only; requires ffmpeg
 	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -race -short -v -count=1 -timeout 15m ./pkg/callharness/
 
-test-harness-smoke: ## Enforce PR timing thresholds without -race: 20 moves, 20 kills and planned wrap, memory only; requires ffmpeg
-	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -v -count=1 -timeout 10m -run '^TestRelay(PlannedHandover|HardKillTakeover|PlannedWrap)$$' ./pkg/callharness/
+test-harness-smoke: ## Enforce PR timing thresholds without -race: 20 moves, 20 kills, planned wrap and relay changes, memory only; requires ffmpeg
+	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -v -count=1 -timeout 10m -run '^TestRelay(PlannedHandover|HardKillTakeover|PlannedWrap|RestartTimeline)$$|^TestPlannedRelayChangeLive$$' ./pkg/callharness/
 
-test-harness-timing: ## Run the relay move, drain and takeover timing tests without the race detector, which enforce issues #6/#7/#8's gap targets, plus the 20-call #127 reorder stress (needs ffmpeg on PATH)
-	$(GOTEST) -v -count=1 -timeout 30m -run '^TestAcceptance|^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup|PlannedWrap|TakeoverWrap)$$|^TestPlannedDrainReorderedPrivateInput$$' ./pkg/callharness/
+test-harness-timing: ## Run the relay move, drain and takeover timing tests without the race detector, which enforce issues #6/#7/#8's gap targets, plus relay changes and the 20-call #127 reorder stress (needs ffmpeg on PATH)
+	$(GOTEST) -v -count=1 -timeout 30m -run '^TestAcceptance|^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup|PlannedWrap|TakeoverWrap)$$|^TestPlannedDrainReorderedPrivateInput$$|^Test(PlannedRelayChangeLive|RelayDrainLive|RelayRestartTimeline|UnplannedRelayLossEightCalls|CallerStallChangesLiveRelay|WrongRelayLossKeepsLiveCall)$$' ./pkg/callharness/
 
 test-full: ## Run race units and the full in-process race/timing matrix; requires dedicated Redis and ffmpeg
 	$(MAKE) test-unit
@@ -217,3 +222,9 @@ operator-rehearsal-build: ensure_bin_dir ## Build the public gate/bridge executa
 
 operator-rehearsal: operator-rehearsal-build ## Run the fixed four-gate Linux Docker profile; needs root systemd and four allowed CPUs
 	$(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)
+
+.PHONY: test-chrome-relay-change
+test-chrome-relay-change: ## Opt-in Chrome relay gate; skips unless RELAIS_CHROME names a binary
+	@if [ -z "$$RELAIS_CHROME" ]; then echo "NOT-RUN: set RELAIS_CHROME to an explicit Chrome binary"; else \
+		$(GOBUILD) -o $(BIN_DIR)/relais-relay ./cmd/relais-relay && \
+		$(GOTEST) -v -count=1 -timeout 5m -run '^TestChromeRelayChange$$' ./cmd/crash-run; fi

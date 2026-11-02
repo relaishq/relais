@@ -199,11 +199,11 @@ func injectExpiredRoutes(t *testing.T, store Store, lease Lease, count int) {
 		switch s := store.(type) {
 		case *Memory:
 			s.mu.Lock()
-			s.routes[route.Caller] = route
+			s.routes[route.key()] = route
 			if s.routeSessions[lease.SessionID] == nil {
-				s.routeSessions[lease.SessionID] = make(map[netip.AddrPort]struct{})
+				s.routeSessions[lease.SessionID] = make(map[routeKey]struct{})
 			}
-			s.routeSessions[lease.SessionID][route.Caller] = struct{}{}
+			s.routeSessions[lease.SessionID][route.key()] = struct{}{}
 			s.mu.Unlock()
 		case *Redis:
 			raw, err := routeJSON(route)

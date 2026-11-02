@@ -99,6 +99,7 @@
   async function readSample(s) {
     const report = await s.pc.getStats(); if (!active(s)) return;
     const all = [...report.values()];
+    s.relayChange?.observe(all);
     const counters = ['packetsReceived','packetsLost','framesDecoded','freezeCount','totalFreezesDuration','pliCount','nackCount','concealedSamples','silentConcealedSamples','concealmentEvents','totalSamplesReceived','lastPacketReceivedTimestamp'];
     const read = (kind) => {
       const stat=all.find((x)=>x.type==='inbound-rtp' && (x.kind || x.mediaType)===kind);
@@ -240,8 +241,10 @@
       note(s,kind,s.pc[key]);
     }
     s.pc.addEventListener('negotiationneeded',() => { if(s.armed) s.negotiations.push(stamp()); });
-    const restart=s.pc.restartIce.bind(s.pc);
-    s.pc.restartIce=() => { if(s.armed) s.restartCalls.push(stamp()); return restart(); };
+    if(typeof s.pc.restartIce==='function'){
+      const restart=s.pc.restartIce.bind(s.pc);
+      s.pc.restartIce=() => { if(s.armed) s.restartCalls.push(stamp()); return restart(); };
+    }
     const remote=new MediaStream();el.remote.srcObject=remote;
     s.pc.ontrack=(e) => {
       if (!active(s)) return;
@@ -320,7 +323,8 @@
         await s.pc.setLocalDescription(await s.pc.createOffer());
         if(!active(s)) throw new Error('call ended');
         await waitFor(s,()=>s.pc.iceGatheringState==='complete',10000,'initial ICE gathering did not finish');
-        const response=await request('/calls',{method:'POST',headers:{'Content-Type':'application/sdp','X-Relais-Demo-Launch-ID':s.launchId},body:s.pc.localDescription.sdp});
+        const relayChangeCapable=typeof RTCPeerConnection.prototype.restartIce==='function';
+        const response=await request('/calls',{method:'POST',headers:{'Content-Type':'application/sdp','X-Relais-Demo-Launch-ID':s.launchId,...(relayChangeCapable?{'Relais-Relay-Change':'true'}:{})},body:s.pc.localDescription.sdp});
         const location=response.headers.get('Location'),body=await response.text();
         if(response.status!==201) throw new Error(`POST /calls ${response.status}: ${body}`);
         if(!location || !/^\/calls\/[^/]+$/.test(location)) throw new Error('invalid call Location');
@@ -328,6 +332,10 @@
         if(s.agentMode==='voice-agent/v1'){s.ptt=new window.relaisPTT.Controller({request,path:`${s.resource}/agent/control`,notice:(message)=>{s.controlNotice=message;if(active(s))el['voice-notice'].textContent=message;}});voiceStatuses(s);}
         if(!active(s)){await request(location,{method:'DELETE'});throw new Error('call ended');}
         await s.pc.setRemoteDescription({type:'answer',sdp:body});
+        if(relayChangeCapable){
+          s.relayChange=new window.relaisRelayChange.Controller({pc:s.pc,path:s.resource,request,end:async reason=>{error(new Error(reason));try{await cleanup(s);}finally{error(new Error(reason));}}});
+          s.relayChange.open();
+        }
         await waitFor(s,()=>mediaReady(s),15000,'media not ready; test tone may need a page click for Chrome autoplay');
         descriptions(s);s.armed=true;s.readyAtMs=performance.now();return snapshot(s);
       }catch(err){error(err);await cleanup(s);throw err;}finally{starting=null;render();}
@@ -458,7 +466,7 @@
   async function cleanup(s) {
     if(s.stopped)return;
     if(s.hold?.status==='pending') {const hidden=M.hiddenDuring(s.hiddenPeriods,s.hold.startedMs,performance.now());s.hold.status=hidden?'invalid':'inconclusive';s.hold.verdict={status:s.hold.status,reasons:[hidden?'page hidden':'call stopped before 60 s']};}
-    s.ptt?.close();s.stoppedAtMs=performance.now();s.stopped=true;clearInterval(s.sourceTimer);clearTimeout(s.holdTimer);
+    s.relayChange?.close();s.ptt?.close();s.stoppedAtMs=performance.now();s.stopped=true;clearInterval(s.sourceTimer);clearTimeout(s.holdTimer);
     if(s.frameCallback!==undefined) el.remote.cancelVideoFrameCallback(s.frameCallback);
     clearInterval(s.delayTimer);s.performanceObserver?.disconnect();s.intersection?.disconnect();document.removeEventListener('visibilitychange',s.visibilityListener);
     s.pc.close();note(s,'connection','closed');note(s,'ice','closed');

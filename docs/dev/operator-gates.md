@@ -12,6 +12,21 @@ inside a gate. `-spool` binds an agreed local blob directory without putting its
 path in artifacts. Configuration and the spool are local inputs, not public
 reports. `relais-gates version` emits the unchanged protocol-v1 hello.
 
+The optional result `diagnostics` array retains each gate's procedure completion
+and fixed reason code, media counters, pooled counters, pending qualification
+and caller-stop confirmation. Media and pool diagnostics also retain indexed
+undecided metric names and causes, phase inclusion/exclusion causes, safe evidence
+field paths, and included/dropped phase, excluded event and saturation counts.
+These use the same fixed label allow-lists as rehearsal reports. Each media/pool
+projection is capped at 12 KiB to fit the unchanged final frame. Phase causes take
+priority; `omittedUndecidedMetrics` and `omittedPhaseDiagnostics` count any rows
+that do not fit, while total counters stay unchanged. Each list stops at its
+first row that does not fit. It contains no resource output. Inconclusive
+diagnostics have a reason even when procedure execution completed. Legacy gate
+reasons remain unchanged. These additive
+fields keep result schema version 1. Preparation consumes the caller's original
+window; procedure and restoration leave one minute each for collection and stop.
+
 The resource-backed runner owns preparation, gate admission, process/release
 procedures, caller brokers, the evidence pool and the pinned judge. Host steps
 use `host.execute`; all caller and mailbox access uses the same session's
@@ -27,7 +42,9 @@ caller/mailbox operations carry their already-defined `admission-boundary`
 manifest phase. Old peers omit the marker and are refused before effects.
 Private configuration must supply `admission.survivorSeconds` and
 `admission.boundarySeconds`. The combined media duration plus the existing
-seven-minute campaign reserve must fit the 20-minute cap; no deadline is renewed.
+seven-minute campaign reserve must fit the 20-minute procedure cap. The separate
+caller maximum is 22 minutes; no deadline is renewed. Boundary fit is checked
+after the actual survivor stop and idle wait, then again after boundary startup.
 
 `PrepareCallers` proves both setups before survivor begin. The public
 `RunAdmission` then collects the survivor, confirms its one reserved stop,
@@ -47,7 +64,7 @@ failure against a fake resource server. Its synthetic evidence proves lifecycle
 and fencing only, not a paid media pass. `TestResourceStoreFailoverRequests`
 pins request-backed observe/failover/observe and unknown fencing.
 
-No frame fields or effect request operations changed. Caller operations have an
+Effect request operations are unchanged. Caller operations have an
 explicit payload contract: Args is `{"manifest": <operatorcaller.Manifest>}`.
 The public session allocates that immutable manifest. The resource server
 configures its fixed launcher from it. A zero-exit readiness reply carries
@@ -68,6 +85,9 @@ Sequence sessions stream traces as trace frames. Final's `trace` contains only
 new terminal entries published after streaming (normally it is empty), avoiding
 a duplicate trace that could exceed the unchanged 256 KiB frame limit. Clients
 append that terminal tail to the streamed trace.
+Request and result traces include allow-listed operation, target and action
+labels. Trial polling emits fixed `trial-takeover`, `trial-settled` and
+`trial-ready` wait-purpose labels, without retaining status payloads.
 The session request bound is 32,768: half-second caller polling can exceed the
 old 4,096 bound within a real campaign. Pending timeouts still have deterministic
 request order. Concurrent caller collection and host requests serialize through
@@ -98,6 +118,88 @@ every request and wait is clamped to that cutoff. Adapter execution must call
 `operatortransport.RequestContext` once at admission and retain the returned
 context through execution and polling. Expired queued requests receive a proved
 `deadline-before-submission` refusal from the pipe adapter boundary.
+
+`host.execute` and optional `host.read-batch` require at least `operator.HostSubmissionMinimum` (30 seconds)
+remaining at submission, including read-only host observations. The public
+exchange checks this after queueing and deadline clamping, before sending;
+adapters must recheck before remote submission because transit consumes time.
+Adapters may require more than 30 seconds. The adapter rounds the remaining
+budget down to whole seconds after transit; the public floor does not guarantee
+admission at the adapter.
+The floor does not apply to caller or mailbox requests. A local refusal follows
+the same proved `notSubmitted` result path as an adapter refusal. The additive
+result `refusals` array retains the request ID, operation, public target/action,
+original absolute deadline and remaining milliseconds, and fixed refusal code.
+The first 64 refusal rows are retained, and `omittedRefusals` counts later
+refusals. Every refusal still reaches terminal request accounting and its result
+trace retains the fixed code. Refusals never become unknown effects
+or successful steps. These additive diagnostics keep protocol and result schema
+version 1; the gate, caller and session maxima and collection/stop reserves are unchanged.
+
+Adapters can advertise optional `host.read-batch` to collect the four
+independent inventory reads or the four independent clock reads in one exchange.
+Without it, the session keeps the serial `host.execute` path. A batch carries
+`HostReadBatchArgs` in `Request.Args`, action `inventory` or `clock`, target
+`hosts`, and no outer script. Its four `reads` use the fixed order `relay`,
+`w1`, `w2`, `shared`. Each carries the original host script. The adapter validates
+all children before submission, keeps the original deadline, rechecks the host
+floor for each submission, and collects all results without retry. The local
+rehearsal adapter executes children one at a time because its containers share
+the service CPUs; simultaneous probes can disturb the pre-fault media baseline.
+This still uses one batch exchange for inventory and one for clocks. An adapter
+for independent hosts may execute children concurrently.
+Whenever any child ran, the adapter must return outer `Transport: Succeeded`
+with exit code 0, even if a child failed or timed out. Children carry their own
+results in `HostReadBatchOutput.replies`, including host certainty, exit status
+and bounded `HostOutput`; child IDs are the corresponding host slots. An outer
+`notSubmitted` refusal is valid only when no child was submitted. Outside
+adapters with a failed/nonzero outer reply still have their complete child
+results classified: definite failures remain failed reads, and unknown or
+unreadable child results latch. An outer failure can never authorize a pass.
+The batch path is stricter than serial reads for outside adapters: a submitted
+`Failed` child without an exit code or a decodable `HostOutput` latches. Serial
+pure-read transport failures can remain definite failures without that evidence.
+Unknown-child diagnostics retain the fixed host slot and allow-listed reason
+alongside the batch uncertainty. Batch unknowns and outer refusals emit the
+existing precondition-check diagnostic; an outer-only failure has no proven
+child slot. Missing, duplicate, malformed or unknown child results latch the
+session. A definite
+failure cannot hide another host's unknown result. Batches never include
+mutations or control status. Every mutation still waits for fresh four-host
+inventory and the existing clock freshness check.
+
+`TestProcedureRoundTripCounts` and `TestMeasurementRoundTripCounts` pin these
+host exchange counts in a deterministic immediate-readiness model. They exclude
+caller setup, mailbox traffic, evidence collection and variable polling. The
+load row is one observation; each additional measurement observation costs
+seven exchanges. These counts are transport evidence, not a completed media gate.
+
+| Procedure | Serial adapter | Batch adapter |
+| --- | ---: | ---: |
+| rollout | 197 | 92 |
+| control-restart | 232 | 109 |
+| upgrade-rollback | 320 | 149 |
+| failover | 63 | 39 |
+| relay-deploy | 22 | 10 |
+| load observation | 7 | 7 |
+
+Process and release procedures reserve `RestoreReserve` (60 seconds) inside
+their original procedure window. Restoration uses that window's full cutoff
+and attempts unfreeze before worker recovery waits. Four inventory reads and
+up to four clock reads precede unfreeze; a batch adapter uses one exchange per
+read set. The reserve and proof checks are unchanged. At 3.05 seconds per read, the reserve
+leaves 35.6 seconds for submission, above the 30-second floor plus a one-second
+rounding/transit margin. `TestProcedureReservesUnfreezeAdmission` checks this
+latency model. Slower reads can still refuse restoration. Failed restoration
+sets `restore-failed`, blocks pool qualification and stops successor gates;
+the final read-only pool still runs. Known failures remain failures.
+`TestFailedRestorationCannotQualifyForPool`,
+`TestPoolPromotionRequiresCompletedProcedure` and
+`TestRestorationFailureStopsSuccessors` check these verdict and fence rules.
+Measure gates use the same `restore-failed` reason and session latch when worker
+restoration fails. Known call loss remains a failure. Rehearsal reports retain
+`restore-failed` after sanitization. `TestMeasureRestorationFailureStopsSuccessors`
+checks the successor fence and final read-only pool. Missing samples alone do not latch.
 
 Each effect is submitted once. Its ID is recorded before writing. A timeout
 retains its pending identity. Unknown completion latches before returning to
@@ -154,13 +256,17 @@ expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
 160 public mutants are owned and killed, 41 are retired with explicit successor
-contracts, and 213 remain assigned to private owners. The 148 additional native
+contracts, and 213 remain assigned to private owners. The 166 additional native
 mutants are counted separately. These are accounting categories, not claims that
 private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
 the removed multi-launch policy with one pending start. The public mutation edits and additional mutants are in
 `scripts/ci/gate-mutation/cases.json`. Four additional resource-session mutants cover retry on unknown, unknown as
-failure, fabricated capability and rehearsal bypass. Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
+failure, fabricated capability and rehearsal bypass. Two further mutants cover
+the host submission floor and refusal metadata retention. Two restoration mutants
+cover failed restoration qualification and incomplete-procedure pool promotion.
+Two additional measure-gate mutants cover the worker restoration latch and known call loss.
+Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
 on one session guard; each original ledger ID is still applied and killed
 separately. `go run ./scripts/ci/gate-mutation` copies source, excluding Git,
 secret environment files and build outputs, into a temporary tree and uses an isolated cache with offline, read-only
@@ -410,8 +516,14 @@ for 180 seconds so a 1.25-second phased first interval stays below the judge's
 Caller preparation, including the ten-probe registration, precedes each fresh
 20-minute gate window. Campaign admission uses one elapsed-clock snapshot so a
 1,200-second minimum fits a full window exactly. Before launch, the caller's
-separate 20-minute manifest must fit media plus 120 seconds; both windows stay
+separate 22-minute manifest includes startup and must fit media plus 120 seconds; both windows stay
 clamped to the original session cutoff, with mutations ending by minute 103.
+Procedure/restoration ends at least two minutes before the caller cutoff,
+collection ends one minute before it, and stop stays within that cutoff.
+The archived 21-minute manifest rejection in `26b5fb0694a332d7.json`, event 7,
+retains its original bytes. `TestOracleCallerManifests` explicitly checks that
+case under the new 22-minute policy; native manifest tests also reject a window
+one millisecond above the new maximum.
 Their UDP bind uses the runner's route source for the relay, with port zero;
 the loader rejects wildcard bind addresses. The bridge checks the staged loader
 hash, executable bit, certificate readability and ffmpeg inside the caller unit.

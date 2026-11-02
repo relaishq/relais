@@ -72,9 +72,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/relaishq/relais/internal/relaytrace"
+
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
 
+	"github.com/relaishq/relais/internal/iceufrag"
 	"github.com/relaishq/relais/internal/relayleg"
 	"github.com/relaishq/relais/internal/socketbind"
 	"github.com/relaishq/relais/internal/udpbuffer"
@@ -133,6 +136,9 @@ const maxDatagram = 65535
 
 // Config configures a relay.
 type Config struct {
+	// SlotID is this socket set's ADR 0004 lease key. Empty preserves legacy
+	// single-relay routing. Named slots require atomic assignment lookups.
+	SlotID string
 	// Buffer enables bounded caller-media replay. Nil retains phase-1 recovery.
 	Buffer *BufferConfig
 	// InstanceID links private status to the fenced lease holder. Empty creates
@@ -376,6 +382,8 @@ type Relay struct {
 	replayPacing map[netip.AddrPort]*replayPacer
 	registryMu   sync.RWMutex
 	registry     map[netip.AddrPort]struct{}
+	bindings     map[string]legBinding
+	drainTargets map[netip.AddrPort]netip.AddrPort
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -404,6 +412,11 @@ type Relay struct {
 
 // New starts a relay.
 func New(cfg Config) (*Relay, error) {
+	if cfg.SlotID != "" {
+		if _, ok := cfg.Owners.(sessionstore.RelayOwners); !ok {
+			return nil, errors.New("relay: named slot requires relay assignment lookup")
+		}
+	}
 	if cfg.Owners == nil {
 		return nil, errors.New("relay: Config.Owners is required")
 	}
@@ -644,7 +657,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 	h.drainNonce = binary.BigEndian.Uint64(nonce[:])
 	drained := make(chan struct{})
 	h.drained = drained
-	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), from)
+	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), r.barrierEndpoint(from))
 	r.forwardMu.Unlock()
 	if err != nil {
 		return
@@ -662,7 +675,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 			// A lost marker or acknowledgement is resent with the same nonce.
 			r.forwardMu.Lock()
 			if r.holds[id] == h && h.drained == drained {
-				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), from)
+				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), r.barrierEndpoint(from))
 			}
 			r.forwardMu.Unlock()
 		case <-timer.C:
@@ -719,6 +732,12 @@ func (r *Relay) RemoveWorker(worker netip.AddrPort) {
 	r.registryMu.Lock()
 	defer r.registryMu.Unlock()
 	delete(r.registry, unmap(worker))
+	delete(r.drainTargets, unmap(worker))
+	for token, b := range r.bindings {
+		if b.address == unmap(worker) || b.drainFor == unmap(worker) {
+			delete(r.bindings, token)
+		}
+	}
 }
 
 func (r *Relay) registered(worker netip.AddrPort) bool {
@@ -824,6 +843,9 @@ func (r *Relay) callerLoop() {
 			continue
 		}
 		from = unmap(from)
+		if relaytrace.Enabled() {
+			relaytrace.Emit("relay-input", r.cfg.SlotID, buf[MaxHeaderLen:MaxHeaderLen+n])
+		}
 
 		if worker, ok := r.route(buf[MaxHeaderLen:MaxHeaderLen+n], from); ok {
 			r.forward(buf[:MaxHeaderLen+n], from, worker)
@@ -841,6 +863,14 @@ func (r *Relay) route(pkt []byte, from netip.AddrPort) (netip.AddrPort, bool) {
 
 	if isSTUN(pkt) {
 		if sessionID, txID, ok := parseBindingRequest(pkt); ok {
+			// A named slot must check its assignment even for a cached flow.
+			// The read stays on the bounded asynchronous lookup path.
+			if r.cfg.SlotID != "" {
+				if !r.lookups.resolve(sessionID, from, pkt, txID) {
+					r.lookupsDropped.Add(1)
+				}
+				return netip.AddrPort{}, false
+			}
 			if worker, ok := r.flows.routeSTUN(from, sessionID, txID, now); ok {
 				if isNomination(pkt) {
 					r.flows.markNomination(from, txID)
@@ -932,6 +962,7 @@ func (r *Relay) sendCaller(datagram []byte, caller, worker netip.AddrPort) bool 
 		r.log.Debugf("forward to worker %s: %v", worker, err)
 		return false
 	}
+	relaytrace.Emit("relay-to-worker", r.cfg.SlotID, datagram[MaxHeaderLen:])
 	r.callerPackets.Add(1)
 	r.callerBytes.Add(uint64(len(datagram) - start))
 	return true
@@ -940,6 +971,13 @@ func (r *Relay) sendCaller(datagram []byte, caller, worker netip.AddrPort) bool 
 func (r *Relay) owner(sessionID string) (netip.AddrPort, uint64, error) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.cfg.OwnerLookupTimeout)
 	defer cancel()
+	if r.cfg.SlotID != "" {
+		lease, assignment, err := r.cfg.Owners.(sessionstore.RelayOwners).RelayOwner(ctx, sessionID)
+		if err == nil && !assignment.Allows(r.cfg.SlotID) {
+			err = sessionstore.ErrNotFound
+		}
+		return lease.Worker, lease.Epoch, err
+	}
 
 	if owners, ok := r.cfg.Owners.(interface {
 		Get(context.Context, string) (sessionstore.Lease, error)
@@ -994,6 +1032,20 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 		for _, w := range waiters {
 			if w.datagram != nil {
 				r.lookupsFailed.Add(1)
+				// During an outage, only the previously confirmed session/worker route
+				// may carry checks. The worker still authenticates them and fences slots.
+				if r.cfg.SlotID != "" {
+					flow, confirmed := r.flows.forwardRoute(w.caller)
+					if confirmed && flow.session == sessionID {
+						if _, ok := r.flows.routeSTUN(w.caller, sessionID, w.txID, now); ok {
+							if isNomination(w.datagram[MaxHeaderLen:]) {
+								r.flows.markNomination(w.caller, w.txID)
+							}
+							r.stunRouted.Add(1)
+							forwards = append(forwards, w)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1019,18 +1071,21 @@ func (r *Relay) workerLoop() {
 			continue
 		}
 		from = unmap(from)
-		if !r.registered(from) {
-			r.unknownWorker.Add(1)
-
+		if r.legBinding(buf[:n], from) {
 			continue
 		}
-
 		if id, ack, ok := relayleg.ParseBarrier(buf[:n]); ok {
 			if ack {
 				r.acknowledgeBarrier(id, from)
 			}
 			continue
 		}
+		if !r.registered(from) {
+			r.unknownWorker.Add(1)
+
+			continue
+		}
+
 		caller, pkt, err := ParseHeader(buf[:n])
 		if err != nil {
 			r.malformed.Add(1)
@@ -1062,6 +1117,7 @@ func (r *Relay) workerLoop() {
 
 			continue
 		}
+		relaytrace.Emit("relay-output", r.cfg.SlotID, pkt)
 		r.workerPackets.Add(1)
 		r.workerBytes.Add(uint64(len(pkt)))
 	}
@@ -1117,8 +1173,11 @@ func parseBindingRequest(pkt []byte) (string, [stun.TransactionIDSize]byte, bool
 		return "", msg.TransactionID, false
 	}
 	sessionID, _, ok := strings.Cut(username.String(), ":")
-
-	return sessionID, msg.TransactionID, ok && sessionID != ""
+	if !ok {
+		return "", msg.TransactionID, false
+	}
+	id, _, valid := iceufrag.Parse(sessionID)
+	return id, msg.TransactionID, valid
 }
 
 func unmap(addr netip.AddrPort) netip.AddrPort {

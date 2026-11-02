@@ -12,12 +12,13 @@ import (
 )
 
 type workerFlags struct {
-	storeConfig                                             processrun.StoreConfig
-	limits                                                  mediaworker.SnapshotLimits
-	bridgeOutput                                            mediaworker.BridgeOutputLimits
-	name, listen, leg, public, control, httpAddr, agentName *string
-	cacheOff, cryptoTrace, split, version                   *bool
-	drainTimeout, taskBudget, moveReserve                   *time.Duration
+	storeConfig                                                      processrun.StoreConfig
+	limits                                                           mediaworker.SnapshotLimits
+	bridgeOutput                                                     mediaworker.BridgeOutputLimits
+	bridgeURL, bridgeToken                                           *string
+	name, listen, leg, public, control, httpAddr, agentName, connect *string
+	cacheOff, cryptoTrace, split, version                            *bool
+	drainTimeout, taskBudget, moveReserve                            *time.Duration
 }
 
 // The registration preflight and Run use the same flag declarations. New boolean
@@ -26,6 +27,7 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 	f := &workerFlags{}
 	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	f.storeConfig.Flags(flags)
+	f.connect = flags.String("connect", "inbound", "worker connection mode: inbound or dial-out")
 	f.name = flags.String("name", processrun.Env("RELAIS_WORKER_NAME", ""), "unique worker name")
 	f.listen = flags.String("media", processrun.Env("RELAIS_WORKER_MEDIA", "127.0.0.1:0"), "private UDP address")
 	f.leg = flags.String("relay-leg", processrun.Env("RELAIS_RELAY_LEG", ""), "relay private UDP address")
@@ -39,6 +41,8 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 		defaultAgent = "echo"
 	}
 	f.agentName = flags.String("agent", defaultAgent, "audio agent: echo, demo or a registered name")
+	f.bridgeURL = flags.String("bridge-url", "", "isolated worker ws://<loopback>:<port>/bridge; runner and bot dial worker")
+	f.bridgeToken = flags.String("bridge-dev-token", "", "static development token (prefer RELAIS_BRIDGE_DEV_TOKEN); isolated loopback only")
 	f.split = flags.Bool("agent-split-checkpoints", false, "use v10 component checkpoints for new calls (upgrade every participant first)")
 	flags.IntVar(&f.limits.MaxBytes, "agent-max-snapshot-bytes", 0, "encoded snapshot byte cap (0: legacy 7168, split hot 6144)")
 	flags.IntVar(&f.limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 0, "payload bytes/s (0: legacy 81920, split 70000)")
@@ -62,6 +66,18 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 	f.moveReserve = flags.Duration("agent-drain-move-reserve", 0, "measured time reserved for control drain; unset skips handler quiescence")
 	f.version = buildinfo.VersionFlag(flags)
 	return flags, f
+}
+
+// Resolve only for a configured bridge, after parsing, so inherited env tokens
+// neither enable the bridge nor appear in flag help or parse errors.
+func (f *workerFlags) bridgeDevelopmentToken() string {
+	if *f.bridgeURL == "" {
+		return ""
+	}
+	if *f.bridgeToken != "" {
+		return *f.bridgeToken
+	}
+	return os.Getenv("RELAIS_BRIDGE_DEV_TOKEN")
 }
 
 // SplitCheckpoints reads the worker's split switch for choosing registrations

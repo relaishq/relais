@@ -98,6 +98,23 @@ func TestReportDropsFreeText(t *testing.T) {
 	}
 }
 
+func TestReportPreservesRestoreFailedReason(t *testing.T) {
+	r := passingReport()
+	r.Gates[0].Status = operator.Inconclusive
+	r.Gates[0].Reason = "restore-failed"
+	var out bytes.Buffer
+	if err := r.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	var saved Report
+	if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Gates[0].Reason != "restore-failed" {
+		t.Fatal("restoration reason lost during sanitization", saved.Gates[0].Reason)
+	}
+}
+
 func TestReportPreservesPreconditionCategories(t *testing.T) {
 	for _, category := range []string{"inventory", "relay-manifest-identity", "w1-not-running", "ssl-cert-verification-error", "store-incomplete", "observation", "compatibility-refused", "precondition-failed:inventory", "precondition-failed:status", "precondition-failed:live-calls", "precondition-failed:w2-local-inventory"} {
 		r := passingReport()

@@ -40,10 +40,11 @@ const sessionStateVersion = 7
 //     continue from the indexes below (restoreInboundIndex,
 //     restoreOutboundIndex and SetIndex).
 type sessionState struct {
-	Agent      agentState
-	Checkpoint CheckpointState
-	Version    int
-	ID         string // the session ID, which is also the worker's ICE ufrag
+	RestartIdentity string `json:",omitempty"`
+	Agent           agentState
+	Checkpoint      CheckpointState
+	Version         int
+	ID              string // the session ID, which is also the worker's ICE ufrag
 
 	ICE  iceState
 	DTLS dtlsState
@@ -56,6 +57,7 @@ type sessionState struct {
 }
 
 type iceState struct {
+	Relay       *RelaySlot `json:",omitempty"`
 	LocalUfrag  string
 	LocalPwd    string
 	RemoteUfrag string

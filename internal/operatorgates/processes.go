@@ -12,6 +12,12 @@ import (
 
 func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p ProcedurePorts, end time.Duration) ProcedureResult {
 	g := newProcedure(c, p, end)
+	g.end -= RestoreReserve
+	return runProcessGate(ctx, gate, g)
+}
+
+func runProcessGate(ctx context.Context, gate operator.Gate, g *procedure) ProcedureResult {
+	p := g.p
 	err := g.process(ctx, gate)
 	result := g.finish(ctx, err, false)
 	if gate == operator.RelayDeploy {
@@ -29,7 +35,14 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		}
 	}
 	if (result.Status == operator.Passed || result.AwaitingPool) && gate == operator.ControlRestart {
-		s, err := g.status(ctx)
+		status := g.status
+		if p.PostMediaStatus != nil {
+			status = p.PostMediaStatus
+		}
+		s, err := status(ctx)
+		if err != nil {
+			result.ProcedureReason = diagnosticCode(code(err))
+		}
 		reg := p.Broker.Registration()
 		if err != nil || slices.ContainsFunc(s.Calls, func(c controlplane.CallStatus) bool { return slices.Contains(reg.Sessions, c.ID) }) || g.evidence.ControlReadyMS == nil {
 			result.Status = operator.Inconclusive
@@ -39,7 +52,7 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			result.AwaitingPool = false
 			result.Completed = false
 		}
-		if g.unknown {
+		if g.unknown || code(err) == "command-result-unknown" {
 			result.Reason = "command-result-unknown"
 		}
 	}
@@ -47,7 +60,7 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	return result
 }
 func (g *procedure) finish(ctx context.Context, err error, release bool) ProcedureResult {
-	r := ProcedureResult{Status: operator.Inconclusive}
+	r := ProcedureResult{Status: operator.Inconclusive, ProcedureReason: diagnosticCode(code(err))}
 	if err == nil {
 		r.Status = operator.Passed
 	}
@@ -67,10 +80,12 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 	}
 	// Definite errors and the normal completed procedure can restore owned state.
 	// An unknown effect cannot authorize even the first restoration request.
+	procedureLate := g.p.Clock.Elapsed() >= g.end
 	restored := true
 	if !g.unknown && r.Reason != "command-result-unknown" {
 		if restore := g.restoreGate(ctx); restore != nil {
 			restored = false
+			r.ProcedureReason = diagnosticCode(code(restore))
 			switch code(restore) {
 			case "command-result-unknown":
 				r.Reason = code(restore)
@@ -79,7 +94,11 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 			}
 		}
 	}
-	procedurePassed := r.Status == operator.Passed
+	if g.restoreLoss {
+		r.Status = operator.Failure
+	}
+	procedureLate = procedureLate || g.p.Clock.Elapsed() >= g.end
+	procedurePassed := r.Status == operator.Passed && restored
 	if g.p.Media != nil {
 		media, err := g.p.Media(ctx)
 		if code(err) == "command-result-unknown" {
@@ -102,13 +121,21 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 		r.Status = operator.Inconclusive
 		r.AwaitingPool = true
 	}
-	if release && err == nil && r.Media != nil && r.Status != operator.Failure {
+	if release && procedurePassed && r.Media != nil && r.Status != operator.Failure {
 		r.Status = operator.Inconclusive
 		r.AwaitingPool = true
 	}
-	if g.p.Clock.Elapsed() >= g.end && r.Status != operator.Failure {
+	if (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {
 		r.Status = operator.Inconclusive
 		r.Reason = "gate-deadline"
+		r.AwaitingPool = false
+	}
+	if !restored {
+		if r.Status != operator.Failure {
+			r.Status = operator.Inconclusive
+		}
+		r.Reason = "restore-failed"
+		r.Category = ""
 		r.AwaitingPool = false
 	}
 	if g.unknown {

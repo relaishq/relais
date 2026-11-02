@@ -312,7 +312,25 @@
     "caller-manifest-cutoff-renews-runtime",
     "mailbox-caller-context-deadline-ignored",
     "launcher-adapter-source-hash-only",
-    "launcher-adapter-hash-before-copy"
+    "launcher-adapter-hash-before-copy",
+    "resource-command-renews-caller-budget",
+    "resource-preparation-skips-caller-fit",
+    "resource-caller-window-uses-procedure-limit",
+    "resource-boundary-forgets-phase-clock",
+    "host-submission-floor",
+    "refusal-retention",
+    "failed-restoration-qualifies",
+    "pool-promotes-incomplete-procedure",
+    "batch-read-disabled",
+    "batch-unknown-hidden",
+    "batch-submission-floor",
+    "batch-validation-skipped",
+    "batch-outer-failure-hides-unknown",
+    "batch-failed-outer-skips-children",
+    "batch-child-uncertainty-dropped",
+    "batch-shared-host-parallel-probes",
+    "measure-restoration-not-latched",
+    "measure-restoration-hides-call-loss"
   ],
   "killed": [
     {
@@ -1102,7 +1120,7 @@
     {
       "id": "recovery-unknown-renamed",
       "owner": "P3",
-      "test": "TestProcedureOracle/a20095066c1b93f6.json/0",
+      "test": "TestWorkerRestorationUnknownStaysUnknown",
       "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": "484bb59b91724abf07a6dc349b322195b50095a5f6fece7d75363d6cab7e393a"
@@ -2780,6 +2798,142 @@
       "evidence": "killed",
       "test": "TestStartScriptStagesMailboxAdapter/copy-change",
       "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "resource-command-renews-caller-budget",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-preparation-skips-caller-fit",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceRunnerCallerStartBudget/late-caller-start",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-caller-window-uses-procedure-limit",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceRunnerCallerStartBudget/two-minute-caller-start",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-boundary-forgets-phase-clock",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceAdmissionCountsActualPhaseGap",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "host-submission-floor",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestReleaseGateWithRemoteHostLatencyAndThirtySecondFloor",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "refusal-retention",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestAdapterRefusalRetainsOriginalRequestMetadata",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "measure-restoration-hides-call-loss",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestMeasureRestorationFailureStopsSuccessors/restoration-call-loss",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "measure-restoration-not-latched",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestMeasureRestorationFailureStopsSuccessors/passed",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "failed-restoration-qualifies",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestFailedRestorationCannotQualifyForPool/refused-unfreeze/process",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "pool-promotes-incomplete-procedure",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestPoolPromotionRequiresCompletedProcedure",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-read-disabled",
+      "test": "TestProcedureRoundTripCounts/upgrade-rollback/batch=true",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-unknown-hidden",
+      "test": "TestBatchedProofFailureAndUncertainty/failed-and-unknown",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-submission-floor",
+      "test": "TestBatchedProofFailureAndUncertainty/floor",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-validation-skipped",
+      "test": "TestReadBatchValidatesAllChildrenBeforeSubmission/action",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-outer-failure-hides-unknown",
+      "test": "TestBatchedProofFailureAndUncertainty/outer-failed-unknown",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-failed-outer-skips-children",
+      "test": "TestBatchedProofFailureAndUncertainty/outer-failed-definite",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-child-uncertainty-dropped",
+      "test": "TestBatchObservationRetainsHostReasonAndDiagnostic/timeout",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-shared-host-parallel-probes",
+      "test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
     }
   ],
   "retired": [
