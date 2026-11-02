@@ -1,6 +1,6 @@
 # ADR 0015: Worker dial-out mode
 
-Status: **Proposed** 2026-10-29. It stays Proposed until the owner reviews it.
+Status: **Accepted** 2026-11-02 by the project lead (proposed 2026-10-29).
 Part of [#276](https://github.com/relaishq/relais/issues/276), first step of
 the scale-to-zero map [#275](https://github.com/relaishq/relais/issues/275).
 **Amends [ADR 0014](0014-python-agent-bridge.md)** (dated amendment there).
