@@ -115,7 +115,8 @@ func (m *moveRecovery) recover(ctx context.Context, source *registration, listed
 
 // takeoverLocked also recovers an ambiguous final export while Move holds c.mu.
 // A non-nil outcome has completed terminal accounting, independent of the
-// bounded status history. Nil means recovery is pending or ownership changed.
+// bounded status history. Nil means recovery is pending, ownership changed, or
+// the call was already terminal (its pending work is then cleared).
 func (m *moveRecovery) continueLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) (outcome *MoveResult) {
 	p := m.plane
 	if err := p.beginIntent(ctx, c, "takeover", listed); err != nil {
@@ -123,6 +124,7 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 	}
 	defer p.finishIntent(c)
 	if c.terminal {
+		m.finishPending(source, c.id)
 		return nil
 	}
 	p.mu.Lock()
