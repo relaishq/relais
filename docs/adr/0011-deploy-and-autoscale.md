@@ -3,6 +3,11 @@
 Status: **Accepted** 2026-10-17 by the project lead — direction and order only; no cloud spend is approved, and each paid run needs its own approval and cost cap. Part of #171.
 Baseline: `1b952f65f0866e42a79fb8b1fd091328bff05b7a` (v0.2.0). Cloud behavior below is accepted design, not implemented or measured unless explicitly stated.
 
+**Amended 2026-11-02 (owner decision) by [ADR 0017](0017-scale-to-zero-store-and-control.md) (Proposed).**
+ADR 0017 amends the store boundary in §4. The reference deployment keeps the
+full guarantee (ADR 0017 §1). Deployments at ADR 0017's weaker level are outside this ADR's supported safety claims. They do not relax
+the reference deployment's store requirements.
+
 ## Owner summary
 
 - AWS creates Relais in the customer's own account from a public link.
