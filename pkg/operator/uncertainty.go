@@ -21,7 +21,7 @@ type UncertaintyRecorder interface{ RecordUncertainty(Uncertainty) }
 // these fields through a manually constructed diagnostic.
 func (u Uncertainty) Public() Uncertainty {
 	switch u.Kind {
-	case "host.execute", "status.read", "caller.ready", "caller.start", "caller.stop", "caller.feed", "mailbox.read", "mailbox.create", "caller.collect", "judge", "store.observe", "store.failover", "session", "gate", "gate.prepare":
+	case "host.read-batch", "host.execute", "status.read", "caller.ready", "caller.start", "caller.stop", "caller.feed", "mailbox.read", "mailbox.create", "caller.collect", "judge", "store.observe", "store.failover", "session", "gate", "gate.prepare":
 	default:
 		u.Kind = "unavailable"
 	}
@@ -38,7 +38,7 @@ func (u Uncertainty) Public() Uncertainty {
 		u.DeadlineUnixMS = "unavailable"
 	}
 	switch u.Target {
-	case "relay", "w1", "w2", "shared", "caller", "store", "judge", "session":
+	case "hosts", "relay", "w1", "w2", "shared", "caller", "store", "judge", "session":
 	default:
 		u.Target = "unavailable"
 	}

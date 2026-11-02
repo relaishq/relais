@@ -85,8 +85,11 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 		}
 		return r, err
 	}
-	wait := func(test func(StepResult) bool) (StepResult, error) {
+	wait := func(purpose string, test func(StepResult) bool) (StepResult, error) {
 		for g.p.Clock.Elapsed() < g.end {
+			if g.p.Wait != nil {
+				g.p.Wait(purpose)
+			}
 			r, err := status()
 			if err != nil {
 				return r, err
@@ -141,7 +144,7 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 				if err != nil {
 					return err
 				}
-				recovered, err := wait(func(r StepResult) bool {
+				recovered, err := wait("trial-takeover", func(r StepResult) bool {
 					c, ok := findCall(r.Status, call.ID)
 					return ok && c.Owner == to && c.Epoch > call.Epoch && len(freshTakeovers(before, r, call.ID, call.Owner)) > 0
 				})
@@ -171,7 +174,7 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 				return err
 			}
 			if batch.kind == "takeover" {
-				if _, err = wait(func(r StepResult) bool { return settled(r.Status, call.Owner) }); err != nil {
+				if _, err = wait("trial-settled", func(r StepResult) bool { return settled(r.Status, call.Owner) }); err != nil {
 					return err
 				}
 				if _, err = g.do(ctx, "replace", "shared", ProcessExtra{Worker: call.Owner}); err != nil {
@@ -181,7 +184,7 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 					return err
 				}
 			}
-			if _, err = wait(func(r StepResult) bool {
+			if _, err = wait("trial-ready", func(r StepResult) bool {
 				c, ok := findCall(r.Status, call.ID)
 				return alive(r.Status, "w1", g.c.Parameters.Workers) && alive(r.Status, "w2", g.c.Parameters.Workers) && ok && c.Owner == to && c.Epoch > call.Epoch
 			}); err != nil {

@@ -444,7 +444,7 @@ func (r *rehearsal) newCaller(ctx context.Context, g operator.Gate, seconds int,
 	}
 	now := r.clock.Wall()
 	deadline := r.wall(end)
-	if maximum := now.Add(20 * time.Minute); maximum.Before(deadline) {
+	if maximum := now.Add(operatorcaller.CallerMaximum); maximum.Before(deadline) {
 		deadline = maximum
 	}
 	identity := operatorcaller.Identity{RunID: r.run, Gate: g, Phase: operatorcaller.Survivor, CallerID: id, Attempt: "1", PublicSHA: ReleaseACommit}

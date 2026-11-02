@@ -76,6 +76,9 @@ func (l *WorkerLinks) legHandler(name string, e *linkEntry, peer **workerlink.Pe
 			} else if !pending && rebindTarget.IsValid() {
 				l.cancelRebind(e)
 				if err := l.relay.AddBoundWorker(r.Context(), w.addr, token); err != nil {
+					// This admission may have bound its token at the new NAT
+					// address. Reconnect at the original source with a fresh token.
+					(*peer).Close()
 					privateapi.Error(rw, err, RemoteErrors)
 					return
 				}

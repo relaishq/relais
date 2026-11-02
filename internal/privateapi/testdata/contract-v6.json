@@ -1,0 +1,4809 @@
+{
+  "payloads": [
+    {
+      "service": "worker",
+      "route": "DELETE /sessions/{id}/restart",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /relays/{id}/drain",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        200,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "POST /relays",
+      "request": {
+        "json": {
+          "slots": [
+            {
+              "id": "fixture",
+              "leg": "192.0.2.1:1234",
+              "public": "192.0.2.1:1234"
+            }
+          ]
+        },
+        "shape": {
+          "slots": {
+            "json_options": "",
+            "type": [
+              {
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "leg": {
+                  "json_options": "",
+                  "type": "IP:port"
+                },
+                "public": {
+                  "json_options": "",
+                  "type": "IP:port"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "POST /sessions/{id}/restart",
+      "request": {
+        "json": {
+          "generation": 1,
+          "offer": "fixture",
+          "slot": "fixture"
+        },
+        "shape": {
+          "generation": {
+            "json_options": "",
+            "type": "uint64"
+          },
+          "offer": {
+            "json_options": "",
+            "type": "string"
+          },
+          "slot": {
+            "json_options": "",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "answer": "fixture"
+        },
+        "shape": {
+          "answer": {
+            "json_options": "",
+            "type": "string"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "GET /calls/{id}/events",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        200,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /calls/{id}/ice-restart",
+      "request": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        200,
+        400,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /calls/{id}/relay",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        200,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "POST /sessions",
+      "request": {
+        "json": {
+          "offer": "fixture",
+          "relay_slot": "fixture"
+        },
+        "shape": {
+          "offer": {
+            "json_options": "",
+            "type": "string"
+          },
+          "relay_slot": {
+            "json_options": ",omitempty",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "answer": "fixture",
+          "id": "fixture",
+          "lease": {
+            "epoch": 1,
+            "expires_at": "2026-10-23T00:00:00Z",
+            "session_id": "fixture",
+            "worker": "192.0.2.1:1234"
+          }
+        },
+        "shape": {
+          "answer": {
+            "json_options": "",
+            "type": "string"
+          },
+          "id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "lease": {
+            "json_options": "",
+            "type": {
+              "epoch": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "expires_at": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "session_id": {
+                "json_options": "",
+                "type": "string"
+              },
+              "worker": {
+                "json_options": "",
+                "type": "IP:port"
+              }
+            }
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "DELETE /sessions/{id}",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "POST /sessions/{id}/export",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "state": "AQ=="
+        },
+        "shape": {
+          "state": {
+            "json_options": "",
+            "type": "base64 bytes"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "POST /sessions/{id}/agent/control",
+      "request": {
+        "json": {
+          "data": "AQ==",
+          "id": "fixture",
+          "name": "fixture",
+          "sequence": 1
+        },
+        "shape": {
+          "data": {
+            "json_options": ",omitempty",
+            "type": "base64 bytes"
+          },
+          "id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "name": {
+            "json_options": "",
+            "type": "string"
+          },
+          "sequence": {
+            "json_options": "",
+            "type": "uint64"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "checkpointed": true,
+          "event_id": "fixture",
+          "id": "fixture",
+          "sequence": 1
+        },
+        "shape": {
+          "checkpointed": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "event_id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "sequence": {
+            "json_options": "",
+            "type": "uint64"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        202,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "POST /sessions/{id}/keyframe",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "POST /resume",
+      "request": {
+        "json": {
+          "caller_sequence_reserve": 1,
+          "checkpoint_age": 1,
+          "checkpoint_stored_at": "2026-10-23T00:00:00Z",
+          "duplicate_windows": [
+            {
+              "First": 1,
+              "Last": 1,
+              "SSRC": 1
+            }
+          ],
+          "input_may_be_duplicated": true,
+          "lease": {
+            "epoch": 1,
+            "expires_at": "2026-10-23T00:00:00Z",
+            "session_id": "fixture",
+            "worker": "192.0.2.1:1234"
+          },
+          "relay_input_replay": true,
+          "relay_replay": true,
+          "resume_kind": "fixture",
+          "sequence_margin": 1,
+          "snapshot_age": 1,
+          "srtcp_index_margin": 1,
+          "state": "AQ=="
+        },
+        "shape": {
+          "caller_sequence_reserve": {
+            "json_options": "",
+            "type": "uint32"
+          },
+          "checkpoint_age": {
+            "json_options": "",
+            "type": "int64"
+          },
+          "checkpoint_stored_at": {
+            "json_options": "",
+            "type": "RFC3339 time"
+          },
+          "duplicate_windows": {
+            "json_options": "",
+            "type": [
+              {
+                "First": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "Last": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "SSRC": {
+                  "json_options": "",
+                  "type": "uint32"
+                }
+              }
+            ]
+          },
+          "input_may_be_duplicated": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "lease": {
+            "json_options": "",
+            "type": {
+              "epoch": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "expires_at": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "session_id": {
+                "json_options": "",
+                "type": "string"
+              },
+              "worker": {
+                "json_options": "",
+                "type": "IP:port"
+              }
+            }
+          },
+          "relay_input_replay": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "relay_replay": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "resume_kind": {
+            "json_options": "",
+            "type": "string"
+          },
+          "sequence_margin": {
+            "json_options": "",
+            "type": "uint16"
+          },
+          "snapshot_age": {
+            "json_options": "",
+            "type": "int64"
+          },
+          "srtcp_index_margin": {
+            "json_options": "",
+            "type": "uint32"
+          },
+          "state": {
+            "json_options": "",
+            "type": "base64 bytes"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "id": "fixture"
+        },
+        "shape": {
+          "id": {
+            "json_options": "",
+            "type": "string"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "GET /status",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "address": "192.0.2.1:1234",
+          "agent_session": {
+            "app": {
+              "fixture": true
+            },
+            "checkpoint_age_ms": 1,
+            "checkpoint_known": true,
+            "history_bytes": 1,
+            "id": "fixture",
+            "last_task_launch": {
+              "at": "2026-10-23T00:00:00Z",
+              "checkpoint_at": "2026-10-23T00:00:00Z",
+              "checkpointed": true,
+              "deadline": "2026-10-23T00:00:00Z",
+              "id": "fixture",
+              "step": "fixture",
+              "store_at": "2026-10-23T00:00:00Z"
+            },
+            "name": "fixture",
+            "pending_bytes": 1,
+            "playback_bytes": 1,
+            "playback_packets": 1,
+            "progress": {
+              "Consumed": 1,
+              "Index": 1,
+              "SSRC": 1,
+              "Timestamp": 1
+            },
+            "recording_bytes": 1,
+            "request_bytes": 1,
+            "side_effect_launches": 1,
+            "snapshot_age_ms": 1,
+            "state": {
+              "Bytes": "AQ==",
+              "Version": 1
+            },
+            "tasks": [
+              {
+                "cursor": 1,
+                "final": true,
+                "id": "fixture",
+                "outcome": "fixture",
+                "phase": "fixture",
+                "published": 1,
+                "step": "fixture",
+                "turn": 1
+              }
+            ]
+          },
+          "agents": {
+            "CallbackDeadlines": 1,
+            "CallbackFailures": 1,
+            "InputDrops": 1,
+            "OversizedStates": 1,
+            "RestoreFailures": 1,
+            "SaveFailures": 1,
+            "UnknownVersions": 1
+          },
+          "draining": true,
+          "inventory": [
+            {
+              "epoch": 1,
+              "id": "fixture",
+              "owner": "192.0.2.1:1234"
+            }
+          ],
+          "inventory_known": true,
+          "replay": {
+            "AppendBytes": 1,
+            "AppendDropped": 1,
+            "AppendErrors": 1,
+            "AppendPending": 1,
+            "Skipped": {
+              "fixture": 1
+            },
+            "Truncated": {
+              "fixture": 1
+            }
+          },
+          "sessions": 1,
+          "truncated": true
+        },
+        "shape": {
+          "address": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "agent_session": {
+            "json_options": ",omitempty",
+            "type": {
+              "optional": {
+                "app": {
+                  "json_options": ",omitempty",
+                  "type": "base64 bytes"
+                },
+                "checkpoint_age_ms": {
+                  "json_options": "",
+                  "type": "float64"
+                },
+                "checkpoint_known": {
+                  "json_options": "",
+                  "type": "bool"
+                },
+                "history_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "last_task_launch": {
+                  "json_options": ",omitempty",
+                  "type": {
+                    "optional": {
+                      "at": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      },
+                      "checkpoint_at": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      },
+                      "checkpointed": {
+                        "json_options": "",
+                        "type": "bool"
+                      },
+                      "deadline": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      },
+                      "id": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "step": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "store_at": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      }
+                    }
+                  }
+                },
+                "name": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "pending_bytes": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "playback_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "playback_packets": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "progress": {
+                  "json_options": "",
+                  "type": {
+                    "Consumed": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "Index": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "SSRC": {
+                      "json_options": "",
+                      "type": "uint32"
+                    },
+                    "Timestamp": {
+                      "json_options": "",
+                      "type": "uint32"
+                    }
+                  }
+                },
+                "recording_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "request_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "side_effect_launches": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "snapshot_age_ms": {
+                  "json_options": "",
+                  "type": "float64"
+                },
+                "state": {
+                  "json_options": "",
+                  "type": {
+                    "Bytes": {
+                      "json_options": "",
+                      "type": "base64 bytes"
+                    },
+                    "Version": {
+                      "json_options": "",
+                      "type": "uint32"
+                    }
+                  }
+                },
+                "tasks": {
+                  "json_options": ",omitempty",
+                  "type": [
+                    {
+                      "cursor": {
+                        "json_options": "",
+                        "type": "uint64"
+                      },
+                      "final": {
+                        "json_options": "",
+                        "type": "bool"
+                      },
+                      "id": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "phase": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "published": {
+                        "json_options": "",
+                        "type": "uint64"
+                      },
+                      "step": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "turn": {
+                        "json_options": "",
+                        "type": "uint64"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "agents": {
+            "json_options": "",
+            "type": {
+              "CallbackDeadlines": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "CallbackFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "InputDrops": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "OversizedStates": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RestoreFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "SaveFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "UnknownVersions": {
+                "json_options": "",
+                "type": "uint64"
+              }
+            }
+          },
+          "draining": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "inventory": {
+            "json_options": "",
+            "type": [
+              {
+                "epoch": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "owner": {
+                  "json_options": "",
+                  "type": "IP:port"
+                }
+              }
+            ]
+          },
+          "inventory_known": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "replay": {
+            "json_options": "",
+            "type": {
+              "AppendBytes": {
+                "json_options": "",
+                "type": "int"
+              },
+              "AppendDropped": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "AppendErrors": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "AppendPending": {
+                "json_options": "",
+                "type": "int"
+              },
+              "Skipped": {
+                "json_options": "",
+                "type": {
+                  "map_key": "string",
+                  "value": "uint64"
+                }
+              },
+              "Truncated": {
+                "json_options": "",
+                "type": {
+                  "map_key": "string",
+                  "value": "uint64"
+                }
+              }
+            }
+          },
+          "sessions": {
+            "json_options": "",
+            "type": "int"
+          },
+          "truncated": {
+            "json_options": "",
+            "type": "bool"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        409
+      ]
+    },
+    {
+      "service": "worker",
+      "route": "GET /metrics",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/begin-replay",
+      "request": {
+        "json": {
+          "from": "192.0.2.1:1234",
+          "inbound": {
+            "1": 1
+          },
+          "to": "192.0.2.1:1234"
+        },
+        "shape": {
+          "from": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "inbound": {
+            "json_options": "",
+            "type": {
+              "map_key": "uint32",
+              "value": "uint64"
+            }
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "complete": true,
+          "packets": 1,
+          "windows": [
+            {
+              "first": 1,
+              "last": 1,
+              "ssrc": 1
+            }
+          ]
+        },
+        "shape": {
+          "complete": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "packets": {
+            "json_options": "",
+            "type": "int"
+          },
+          "windows": {
+            "json_options": ",omitempty",
+            "type": [
+              {
+                "first": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "last": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "ssrc": {
+                  "json_options": "",
+                  "type": "uint32"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/replay",
+      "request": {
+        "json": {
+          "from": "192.0.2.1:1234",
+          "inbound": {
+            "1": 1
+          },
+          "to": "192.0.2.1:1234"
+        },
+        "shape": {
+          "from": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "inbound": {
+            "json_options": "",
+            "type": {
+              "map_key": "uint32",
+              "value": "uint64"
+            }
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "complete": true,
+          "dropped": 1,
+          "duration": 1,
+          "expired": true,
+          "filtered": 1,
+          "packets": 1,
+          "send_failures": 1,
+          "windows": [
+            {
+              "first": 1,
+              "last": 1,
+              "ssrc": 1
+            }
+          ]
+        },
+        "shape": {
+          "complete": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "dropped": {
+            "json_options": "",
+            "type": "int"
+          },
+          "duration": {
+            "json_options": "",
+            "type": "int64"
+          },
+          "expired": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "filtered": {
+            "json_options": "",
+            "type": "int"
+          },
+          "packets": {
+            "json_options": "",
+            "type": "int"
+          },
+          "send_failures": {
+            "json_options": "",
+            "type": "int"
+          },
+          "windows": {
+            "json_options": ",omitempty",
+            "type": [
+              {
+                "first": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "last": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "ssrc": {
+                  "json_options": "",
+                  "type": "uint32"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /workers/rebind",
+      "request": {
+        "json": {
+          "from": "192.0.2.1:1234",
+          "to": "192.0.2.1:1234",
+          "token": "fixture"
+        },
+        "shape": {
+          "from": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "token": {
+            "json_options": "",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /workers/expect",
+      "request": {
+        "json": {
+          "address": "192.0.2.1:1234",
+          "token": "fixture"
+        },
+        "shape": {
+          "address": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "token": {
+            "json_options": ",omitempty",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /workers",
+      "request": {
+        "json": {
+          "address": "192.0.2.1:1234",
+          "token": "fixture"
+        },
+        "shape": {
+          "address": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "token": {
+            "json_options": ",omitempty",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "DELETE /workers",
+      "request": {
+        "json": {
+          "address": "192.0.2.1:1234",
+          "token": "fixture"
+        },
+        "shape": {
+          "address": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "token": {
+            "json_options": ",omitempty",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/hold",
+      "request": {
+        "json": {
+          "epoch": 1,
+          "from": "192.0.2.1:1234",
+          "repair": true,
+          "to": "192.0.2.1:1234"
+        },
+        "shape": {
+          "epoch": {
+            "json_options": ",omitempty",
+            "type": "uint64"
+          },
+          "from": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "repair": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/move",
+      "request": {
+        "json": {
+          "epoch": 1,
+          "from": "192.0.2.1:1234",
+          "repair": true,
+          "to": "192.0.2.1:1234"
+        },
+        "shape": {
+          "epoch": {
+            "json_options": ",omitempty",
+            "type": "uint64"
+          },
+          "from": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "repair": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/release",
+      "request": {
+        "json": {
+          "epoch": 1,
+          "from": "192.0.2.1:1234",
+          "repair": true,
+          "to": "192.0.2.1:1234"
+        },
+        "shape": {
+          "epoch": {
+            "json_options": ",omitempty",
+            "type": "uint64"
+          },
+          "from": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "repair": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "complete": true,
+          "filtered": 1,
+          "lock_held_ns": 1,
+          "packets": 1,
+          "recovered": 1
+        },
+        "shape": {
+          "complete": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "filtered": {
+            "json_options": ",omitempty",
+            "type": "int"
+          },
+          "lock_held_ns": {
+            "json_options": ",omitempty",
+            "type": "int64"
+          },
+          "packets": {
+            "json_options": "",
+            "type": "int"
+          },
+          "recovered": {
+            "json_options": ",omitempty",
+            "type": "int"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/move-after-export",
+      "request": {
+        "json": {
+          "epoch": 1,
+          "from": "192.0.2.1:1234",
+          "repair": true,
+          "to": "192.0.2.1:1234"
+        },
+        "shape": {
+          "epoch": {
+            "json_options": ",omitempty",
+            "type": "uint64"
+          },
+          "from": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "repair": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/release-after-export",
+      "request": {
+        "json": {
+          "input": {
+            "1": {
+              "exact": true,
+              "high": 1,
+              "window": 1
+            }
+          },
+          "to": "192.0.2.1:1234"
+        },
+        "shape": {
+          "input": {
+            "json_options": "",
+            "type": {
+              "map_key": "uint32",
+              "value": {
+                "exact": {
+                  "json_options": ",omitempty",
+                  "type": "bool"
+                },
+                "high": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "window": {
+                  "json_options": ",omitempty",
+                  "type": "uint64"
+                }
+              }
+            }
+          },
+          "to": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "complete": true,
+          "filtered": 1,
+          "lock_held_ns": 1,
+          "packets": 1,
+          "recovered": 1
+        },
+        "shape": {
+          "complete": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "filtered": {
+            "json_options": ",omitempty",
+            "type": "int"
+          },
+          "lock_held_ns": {
+            "json_options": ",omitempty",
+            "type": "int64"
+          },
+          "packets": {
+            "json_options": "",
+            "type": "int"
+          },
+          "recovered": {
+            "json_options": ",omitempty",
+            "type": "int"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "DELETE /sessions/{id}",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "POST /sessions/{id}/forget-tenure",
+      "request": {
+        "json": {
+          "epoch": 1,
+          "expires_at": "2026-10-23T00:00:00Z",
+          "session_id": "fixture",
+          "worker": "192.0.2.1:1234"
+        },
+        "shape": {
+          "epoch": {
+            "json_options": "",
+            "type": "uint64"
+          },
+          "expires_at": {
+            "json_options": "",
+            "type": "RFC3339 time"
+          },
+          "session_id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "worker": {
+            "json_options": "",
+            "type": "IP:port"
+          }
+        }
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "GET /status",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "continuity": {
+            "activate_ns": 1,
+            "bind_failures": 1,
+            "bind_restore_ns": 1,
+            "bind_wait_ns": 1,
+            "claim_at": "2026-10-23T00:00:00Z",
+            "epoch": 1,
+            "fence_ns": 1,
+            "fencing_failures": 1,
+            "store_failures": 1,
+            "wait_ns": 1
+          },
+          "instance": "fixture",
+          "private": "192.0.2.1:1234",
+          "public": "192.0.2.1:1234",
+          "stats": {
+            "BarrierResends": 1,
+            "BarrierTimeouts": 1,
+            "BufferDrops": 1,
+            "BufferExpired": 1,
+            "BufferUntracked": 1,
+            "BufferedBytes": 1,
+            "BufferedPackets": 1,
+            "BufferedSessions": 1,
+            "CallerPackets": 1,
+            "Flows": 1,
+            "FlowsEvicted": 1,
+            "FlowsPromoted": 1,
+            "FlowsRejected": 1,
+            "HeldBytes": 1,
+            "HeldPackets": 1,
+            "HoldDrops": 1,
+            "HoldSendFailures": 1,
+            "HoldTimeouts": 1,
+            "Holds": 1,
+            "LookupsDropped": 1,
+            "LookupsFailed": 1,
+            "Malformed": 1,
+            "OutputDrainTimeouts": 1,
+            "OutputDrains": 1,
+            "PendingFlows": 1,
+            "PlannedFiltered": 1,
+            "PlannedIncomplete": 1,
+            "PlannedRecovered": 1,
+            "PlannedReleaseLockMax": 1,
+            "PlannedReleaseLockTime": 1,
+            "PlannedReleases": 1,
+            "ReplayDrops": 1,
+            "ReplayExpiries": 1,
+            "ReplayFiltered": 1,
+            "ReplayPackets": 1,
+            "ReplaySendFailures": 1,
+            "Replays": 1,
+            "RouteWrites": 1,
+            "RouteWritesDropped": 1,
+            "RouteWritesFailed": 1,
+            "RoutesRestoreFailed": 1,
+            "RoutesRestoreSkipped": 1,
+            "RoutesRestored": 1,
+            "STUNRouted": 1,
+            "SelfFences": 1,
+            "UnknownSession": 1,
+            "UnknownWorker": 1,
+            "Unroutable": 1,
+            "WorkerNoFlow": 1,
+            "WorkerPackets": 1,
+            "Workers": 1
+          }
+        },
+        "shape": {
+          "continuity": {
+            "json_options": ",omitempty",
+            "type": {
+              "optional": {
+                "activate_ns": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "bind_failures": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "bind_restore_ns": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "bind_wait_ns": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "claim_at": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "epoch": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "fence_ns": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "fencing_failures": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "store_failures": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "wait_ns": {
+                  "json_options": "",
+                  "type": "int64"
+                }
+              }
+            }
+          },
+          "instance": {
+            "json_options": "",
+            "type": "string"
+          },
+          "private": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "public": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "stats": {
+            "json_options": "",
+            "type": {
+              "BarrierResends": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "BarrierTimeouts": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "BufferDrops": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "BufferExpired": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "BufferUntracked": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "BufferedBytes": {
+                "json_options": "",
+                "type": "int"
+              },
+              "BufferedPackets": {
+                "json_options": "",
+                "type": "int"
+              },
+              "BufferedSessions": {
+                "json_options": "",
+                "type": "int"
+              },
+              "CallerPackets": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "Flows": {
+                "json_options": "",
+                "type": "int"
+              },
+              "FlowsEvicted": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "FlowsPromoted": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "FlowsRejected": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "HeldBytes": {
+                "json_options": "",
+                "type": "int"
+              },
+              "HeldPackets": {
+                "json_options": "",
+                "type": "int"
+              },
+              "HoldDrops": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "HoldSendFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "HoldTimeouts": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "Holds": {
+                "json_options": "",
+                "type": "int"
+              },
+              "LookupsDropped": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "LookupsFailed": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "Malformed": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "OutputDrainTimeouts": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "OutputDrains": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "PendingFlows": {
+                "json_options": "",
+                "type": "int"
+              },
+              "PlannedFiltered": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "PlannedIncomplete": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "PlannedRecovered": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "PlannedReleaseLockMax": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "PlannedReleaseLockTime": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "PlannedReleases": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "ReplayDrops": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "ReplayExpiries": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "ReplayFiltered": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "ReplayPackets": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "ReplaySendFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "Replays": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RouteWrites": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RouteWritesDropped": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RouteWritesFailed": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RoutesRestoreFailed": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RoutesRestoreSkipped": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RoutesRestored": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "STUNRouted": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "SelfFences": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "UnknownSession": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "UnknownWorker": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "Unroutable": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "WorkerNoFlow": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "WorkerPackets": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "Workers": {
+                "json_options": "",
+                "type": "int"
+              }
+            }
+          }
+        }
+      },
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "service": "relay",
+      "route": "GET /metrics",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /calls",
+      "request": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        201,
+        400,
+        409,
+        415,
+        503
+      ]
+    },
+    {
+      "service": "control",
+      "route": "DELETE /calls/{id}",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        200,
+        404,
+        409,
+        503
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /calls/{id}/agent/control",
+      "request": {
+        "json": {
+          "data": "AQ==",
+          "id": "fixture",
+          "name": "fixture",
+          "sequence": 1
+        },
+        "shape": {
+          "data": {
+            "json_options": ",omitempty",
+            "type": "base64 bytes"
+          },
+          "id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "name": {
+            "json_options": "",
+            "type": "string"
+          },
+          "sequence": {
+            "json_options": "",
+            "type": "uint64"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "checkpointed": true,
+          "event_id": "fixture",
+          "id": "fixture",
+          "sequence": 1
+        },
+        "shape": {
+          "checkpointed": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "event_id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "sequence": {
+            "json_options": "",
+            "type": "uint64"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        202,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /calls/{id}/move",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "checkpoint": {
+            "age_at_capture": 1,
+            "attempts": 1,
+            "captured_at": "2026-10-23T00:00:00Z",
+            "failures": 1,
+            "rtp_packet_rate": 1,
+            "srtcp_packet_rate": 1,
+            "successes": 1,
+            "takeover_age": 1,
+            "takeover_snapshot_age": 1,
+            "takeover_stored_at": "2026-10-23T00:00:00Z"
+          },
+          "checkpoint_age": 1,
+          "checkpoint_policy": "fixture",
+          "checkpoint_stored_at": "2026-10-23T00:00:00Z",
+          "detected_at": "2026-10-23T00:00:00Z",
+          "end": "2026-10-23T00:00:00Z",
+          "error": "fixture",
+          "from": "fixture",
+          "id": "fixture",
+          "kind": "fixture",
+          "last_heartbeat": "2026-10-23T00:00:00Z",
+          "loss_cause": "fixture",
+          "lost": true,
+          "result": {
+            "Drain": 1,
+            "DuplicateWindows": [
+              {
+                "First": 1,
+                "Last": 1,
+                "SSRC": 1
+              }
+            ],
+            "Duration": 1,
+            "Export": 1,
+            "HeldPackets": 1,
+            "HoldExpired": true,
+            "InputDuplicationWindow": 1,
+            "InputMayBeDuplicated": true,
+            "RecoveredPackets": 1,
+            "RelayReplayComplete": true,
+            "RelayReplayDrops": 1,
+            "RelayReplayDuration": 1,
+            "RelayReplayPackets": 1,
+            "RelayReplayRecoveryPLI": true,
+            "RelayReplaySendFailures": 1,
+            "ReleaseLockHeld": 1,
+            "Resume": 1,
+            "RolledBack": true,
+            "SessionID": "fixture",
+            "StateBytes": 1,
+            "move_diagnostic_id": "fixture"
+          },
+          "sequence_margin": 1,
+          "snapshot_age": 1,
+          "srtcp_index_margin": 1,
+          "start": "2026-10-23T00:00:00Z",
+          "to": "fixture"
+        },
+        "shape": {
+          "checkpoint": {
+            "json_options": "",
+            "type": {
+              "age_at_capture": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "attempts": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "captured_at": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "failures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "rtp_packet_rate": {
+                "json_options": "",
+                "type": "float64"
+              },
+              "srtcp_packet_rate": {
+                "json_options": "",
+                "type": "float64"
+              },
+              "successes": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "takeover_age": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "takeover_snapshot_age": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "takeover_stored_at": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              }
+            }
+          },
+          "checkpoint_age": {
+            "json_options": ",omitempty",
+            "type": "int64"
+          },
+          "checkpoint_policy": {
+            "json_options": ",omitempty",
+            "type": "string"
+          },
+          "checkpoint_stored_at": {
+            "json_options": "",
+            "type": "RFC3339 time"
+          },
+          "detected_at": {
+            "json_options": ",omitempty",
+            "type": "RFC3339 time"
+          },
+          "end": {
+            "json_options": "",
+            "type": "RFC3339 time"
+          },
+          "error": {
+            "json_options": ",omitempty",
+            "type": "string"
+          },
+          "from": {
+            "json_options": "",
+            "type": "string"
+          },
+          "id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "kind": {
+            "json_options": "",
+            "type": "string"
+          },
+          "last_heartbeat": {
+            "json_options": ",omitempty",
+            "type": "RFC3339 time"
+          },
+          "loss_cause": {
+            "json_options": ",omitempty",
+            "type": "string"
+          },
+          "lost": {
+            "json_options": ",omitempty",
+            "type": "bool"
+          },
+          "result": {
+            "json_options": "",
+            "type": {
+              "Drain": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "DuplicateWindows": {
+                "json_options": "",
+                "type": [
+                  {
+                    "First": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "Last": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "SSRC": {
+                      "json_options": "",
+                      "type": "uint32"
+                    }
+                  }
+                ]
+              },
+              "Duration": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "Export": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "HeldPackets": {
+                "json_options": "",
+                "type": "int"
+              },
+              "HoldExpired": {
+                "json_options": "",
+                "type": "bool"
+              },
+              "InputDuplicationWindow": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "InputMayBeDuplicated": {
+                "json_options": "",
+                "type": "bool"
+              },
+              "RecoveredPackets": {
+                "json_options": "",
+                "type": "int"
+              },
+              "RelayReplayComplete": {
+                "json_options": "",
+                "type": "bool"
+              },
+              "RelayReplayDrops": {
+                "json_options": "",
+                "type": "int"
+              },
+              "RelayReplayDuration": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "RelayReplayPackets": {
+                "json_options": "",
+                "type": "int"
+              },
+              "RelayReplayRecoveryPLI": {
+                "json_options": "",
+                "type": "bool"
+              },
+              "RelayReplaySendFailures": {
+                "json_options": "",
+                "type": "int"
+              },
+              "ReleaseLockHeld": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "Resume": {
+                "json_options": "",
+                "type": "int64"
+              },
+              "RolledBack": {
+                "json_options": "",
+                "type": "bool"
+              },
+              "SessionID": {
+                "json_options": "",
+                "type": "string"
+              },
+              "StateBytes": {
+                "json_options": "",
+                "type": "int"
+              },
+              "move_diagnostic_id": {
+                "json_options": ",omitempty",
+                "type": "string"
+              }
+            }
+          },
+          "sequence_margin": {
+            "json_options": ",omitempty",
+            "type": "uint16"
+          },
+          "snapshot_age": {
+            "json_options": ",omitempty",
+            "type": "int64"
+          },
+          "srtcp_index_margin": {
+            "json_options": ",omitempty",
+            "type": "uint32"
+          },
+          "start": {
+            "json_options": "",
+            "type": "RFC3339 time"
+          },
+          "to": {
+            "json_options": "",
+            "type": "string"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        404,
+        409,
+        503
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /workers/{name}/drain",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "error": "fixture",
+          "moves": [
+            {
+              "checkpoint": {
+                "age_at_capture": 1,
+                "attempts": 1,
+                "captured_at": "2026-10-23T00:00:00Z",
+                "failures": 1,
+                "rtp_packet_rate": 1,
+                "srtcp_packet_rate": 1,
+                "successes": 1,
+                "takeover_age": 1,
+                "takeover_snapshot_age": 1,
+                "takeover_stored_at": "2026-10-23T00:00:00Z"
+              },
+              "checkpoint_age": 1,
+              "checkpoint_policy": "fixture",
+              "checkpoint_stored_at": "2026-10-23T00:00:00Z",
+              "detected_at": "2026-10-23T00:00:00Z",
+              "end": "2026-10-23T00:00:00Z",
+              "error": "fixture",
+              "from": "fixture",
+              "id": "fixture",
+              "kind": "fixture",
+              "last_heartbeat": "2026-10-23T00:00:00Z",
+              "loss_cause": "fixture",
+              "lost": true,
+              "result": {
+                "Drain": 1,
+                "DuplicateWindows": [
+                  {
+                    "First": 1,
+                    "Last": 1,
+                    "SSRC": 1
+                  }
+                ],
+                "Duration": 1,
+                "Export": 1,
+                "HeldPackets": 1,
+                "HoldExpired": true,
+                "InputDuplicationWindow": 1,
+                "InputMayBeDuplicated": true,
+                "RecoveredPackets": 1,
+                "RelayReplayComplete": true,
+                "RelayReplayDrops": 1,
+                "RelayReplayDuration": 1,
+                "RelayReplayPackets": 1,
+                "RelayReplayRecoveryPLI": true,
+                "RelayReplaySendFailures": 1,
+                "ReleaseLockHeld": 1,
+                "Resume": 1,
+                "RolledBack": true,
+                "SessionID": "fixture",
+                "StateBytes": 1,
+                "move_diagnostic_id": "fixture"
+              },
+              "sequence_margin": 1,
+              "snapshot_age": 1,
+              "srtcp_index_margin": 1,
+              "start": "2026-10-23T00:00:00Z",
+              "to": "fixture"
+            }
+          ]
+        },
+        "shape": {
+          "error": {
+            "json_options": ",omitempty",
+            "type": "string"
+          },
+          "moves": {
+            "json_options": "",
+            "type": [
+              {
+                "checkpoint": {
+                  "json_options": "",
+                  "type": {
+                    "age_at_capture": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "attempts": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "captured_at": {
+                      "json_options": "",
+                      "type": "RFC3339 time"
+                    },
+                    "failures": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "rtp_packet_rate": {
+                      "json_options": "",
+                      "type": "float64"
+                    },
+                    "srtcp_packet_rate": {
+                      "json_options": "",
+                      "type": "float64"
+                    },
+                    "successes": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "takeover_age": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "takeover_snapshot_age": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "takeover_stored_at": {
+                      "json_options": "",
+                      "type": "RFC3339 time"
+                    }
+                  }
+                },
+                "checkpoint_age": {
+                  "json_options": ",omitempty",
+                  "type": "int64"
+                },
+                "checkpoint_policy": {
+                  "json_options": ",omitempty",
+                  "type": "string"
+                },
+                "checkpoint_stored_at": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "detected_at": {
+                  "json_options": ",omitempty",
+                  "type": "RFC3339 time"
+                },
+                "end": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "error": {
+                  "json_options": ",omitempty",
+                  "type": "string"
+                },
+                "from": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "kind": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "last_heartbeat": {
+                  "json_options": ",omitempty",
+                  "type": "RFC3339 time"
+                },
+                "loss_cause": {
+                  "json_options": ",omitempty",
+                  "type": "string"
+                },
+                "lost": {
+                  "json_options": ",omitempty",
+                  "type": "bool"
+                },
+                "result": {
+                  "json_options": "",
+                  "type": {
+                    "Drain": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "DuplicateWindows": {
+                      "json_options": "",
+                      "type": [
+                        {
+                          "First": {
+                            "json_options": "",
+                            "type": "uint64"
+                          },
+                          "Last": {
+                            "json_options": "",
+                            "type": "uint64"
+                          },
+                          "SSRC": {
+                            "json_options": "",
+                            "type": "uint32"
+                          }
+                        }
+                      ]
+                    },
+                    "Duration": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "Export": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "HeldPackets": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "HoldExpired": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "InputDuplicationWindow": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "InputMayBeDuplicated": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "RecoveredPackets": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "RelayReplayComplete": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "RelayReplayDrops": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "RelayReplayDuration": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "RelayReplayPackets": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "RelayReplayRecoveryPLI": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "RelayReplaySendFailures": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "ReleaseLockHeld": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "Resume": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "RolledBack": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "SessionID": {
+                      "json_options": "",
+                      "type": "string"
+                    },
+                    "StateBytes": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "move_diagnostic_id": {
+                      "json_options": ",omitempty",
+                      "type": "string"
+                    }
+                  }
+                },
+                "sequence_margin": {
+                  "json_options": ",omitempty",
+                  "type": "uint16"
+                },
+                "snapshot_age": {
+                  "json_options": ",omitempty",
+                  "type": "int64"
+                },
+                "srtcp_index_margin": {
+                  "json_options": ",omitempty",
+                  "type": "uint32"
+                },
+                "start": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "to": {
+                  "json_options": "",
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "statuses": [
+        200,
+        207,
+        500,
+        503
+      ]
+    },
+    {
+      "service": "control",
+      "route": "GET /status",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "calls": [
+            {
+              "id": "fixture",
+              "last_move": "2026-10-23T00:00:00Z",
+              "last_move_kind": "fixture",
+              "lease_epoch": 1,
+              "move_count": 1,
+              "owner": "fixture",
+              "owner_address": "192.0.2.1:1234",
+              "takeover_count": 1
+            }
+          ],
+          "lost_count": 1,
+          "pool": {
+            "age_seconds": 1,
+            "demand": 1,
+            "draining_workers": 1,
+            "never_answered_workers": 1,
+            "over_cap_calls": 1,
+            "pending_workers": 1,
+            "ready_workers": 1,
+            "refusals": {
+              "fixture": 1
+            },
+            "reservations": 1,
+            "sampled_at": "2026-10-23T00:00:00Z",
+            "stale": true,
+            "unreachable_workers": 1,
+            "worker_call_cap": 1
+          },
+          "ready": true,
+          "rebuild": {
+            "duration": 1,
+            "error": "fixture",
+            "lease_wait": 1,
+            "outcomes": [
+              {
+                "code": "fixture",
+                "id": "fixture",
+                "operation": "fixture",
+                "outcome": "fixture"
+              }
+            ],
+            "phase": "fixture",
+            "ready_at": "2026-10-23T00:00:00Z",
+            "started": "2026-10-23T00:00:00Z"
+          },
+          "session_store_keys": {
+            "counts": {
+              "1": 1
+            },
+            "error": "fixture",
+            "observed_at": "2026-10-23T00:00:00Z",
+            "state": "fixture",
+            "unverifiable": 1
+          },
+          "takeovers": [
+            {
+              "checkpoint": {
+                "age_at_capture": 1,
+                "attempts": 1,
+                "captured_at": "2026-10-23T00:00:00Z",
+                "failures": 1,
+                "rtp_packet_rate": 1,
+                "srtcp_packet_rate": 1,
+                "successes": 1,
+                "takeover_age": 1,
+                "takeover_snapshot_age": 1,
+                "takeover_stored_at": "2026-10-23T00:00:00Z"
+              },
+              "checkpoint_age": 1,
+              "checkpoint_policy": "fixture",
+              "checkpoint_stored_at": "2026-10-23T00:00:00Z",
+              "detected_at": "2026-10-23T00:00:00Z",
+              "end": "2026-10-23T00:00:00Z",
+              "error": "fixture",
+              "from": "fixture",
+              "id": "fixture",
+              "kind": "fixture",
+              "last_heartbeat": "2026-10-23T00:00:00Z",
+              "loss_cause": "fixture",
+              "lost": true,
+              "result": {
+                "Drain": 1,
+                "DuplicateWindows": [
+                  {
+                    "First": 1,
+                    "Last": 1,
+                    "SSRC": 1
+                  }
+                ],
+                "Duration": 1,
+                "Export": 1,
+                "HeldPackets": 1,
+                "HoldExpired": true,
+                "InputDuplicationWindow": 1,
+                "InputMayBeDuplicated": true,
+                "RecoveredPackets": 1,
+                "RelayReplayComplete": true,
+                "RelayReplayDrops": 1,
+                "RelayReplayDuration": 1,
+                "RelayReplayPackets": 1,
+                "RelayReplayRecoveryPLI": true,
+                "RelayReplaySendFailures": 1,
+                "ReleaseLockHeld": 1,
+                "Resume": 1,
+                "RolledBack": true,
+                "SessionID": "fixture",
+                "StateBytes": 1,
+                "move_diagnostic_id": "fixture"
+              },
+              "sequence_margin": 1,
+              "snapshot_age": 1,
+              "srtcp_index_margin": 1,
+              "start": "2026-10-23T00:00:00Z",
+              "to": "fixture"
+            }
+          ],
+          "workers": [
+            {
+              "address": "192.0.2.1:1234",
+              "call_count": 1,
+              "dead": true,
+              "draining": true,
+              "last_heartbeat": "2026-10-23T00:00:00Z",
+              "liveness_unknown": true,
+              "name": "fixture",
+              "recovering": true,
+              "worker_link": {
+                "connected": true,
+                "down_seconds": 1,
+                "reconnects": 1
+              }
+            }
+          ]
+        },
+        "shape": {
+          "calls": {
+            "json_options": "",
+            "type": [
+              {
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "last_move": {
+                  "json_options": "",
+                  "type": {
+                    "optional": "RFC3339 time"
+                  }
+                },
+                "last_move_kind": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "lease_epoch": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "move_count": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "owner": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "owner_address": {
+                  "json_options": "",
+                  "type": "IP:port"
+                },
+                "takeover_count": {
+                  "json_options": "",
+                  "type": "uint64"
+                }
+              }
+            ]
+          },
+          "lost_count": {
+            "json_options": "",
+            "type": "uint64"
+          },
+          "pool": {
+            "json_options": "",
+            "type": {
+              "age_seconds": {
+                "json_options": "",
+                "type": "float64"
+              },
+              "demand": {
+                "json_options": "",
+                "type": {
+                  "optional": "int"
+                }
+              },
+              "draining_workers": {
+                "json_options": "",
+                "type": "int"
+              },
+              "never_answered_workers": {
+                "json_options": "",
+                "type": "int"
+              },
+              "over_cap_calls": {
+                "json_options": "",
+                "type": "int"
+              },
+              "pending_workers": {
+                "json_options": "",
+                "type": "int"
+              },
+              "ready_workers": {
+                "json_options": "",
+                "type": "int"
+              },
+              "refusals": {
+                "json_options": "",
+                "type": {
+                  "map_key": "string",
+                  "value": "uint64"
+                }
+              },
+              "reservations": {
+                "json_options": "",
+                "type": "int"
+              },
+              "sampled_at": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "stale": {
+                "json_options": "",
+                "type": "bool"
+              },
+              "unreachable_workers": {
+                "json_options": "",
+                "type": "int"
+              },
+              "worker_call_cap": {
+                "json_options": "",
+                "type": "int"
+              }
+            }
+          },
+          "ready": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "rebuild": {
+            "json_options": ",omitempty",
+            "type": {
+              "optional": {
+                "duration": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "error": {
+                  "json_options": ",omitempty",
+                  "type": "string"
+                },
+                "lease_wait": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "outcomes": {
+                  "json_options": "",
+                  "type": [
+                    {
+                      "code": {
+                        "json_options": ",omitempty",
+                        "type": "string"
+                      },
+                      "id": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "operation": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "json_options": "",
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "phase": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "ready_at": {
+                  "json_options": ",omitempty",
+                  "type": "RFC3339 time"
+                },
+                "started": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                }
+              }
+            }
+          },
+          "session_store_keys": {
+            "json_options": "",
+            "type": {
+              "counts": {
+                "json_options": "",
+                "type": {
+                  "map_key": "uint8",
+                  "value": "uint64"
+                }
+              },
+              "error": {
+                "json_options": ",omitempty",
+                "type": "string"
+              },
+              "observed_at": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "state": {
+                "json_options": "",
+                "type": "string"
+              },
+              "unverifiable": {
+                "json_options": "",
+                "type": "uint64"
+              }
+            }
+          },
+          "takeovers": {
+            "json_options": "",
+            "type": [
+              {
+                "checkpoint": {
+                  "json_options": "",
+                  "type": {
+                    "age_at_capture": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "attempts": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "captured_at": {
+                      "json_options": "",
+                      "type": "RFC3339 time"
+                    },
+                    "failures": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "rtp_packet_rate": {
+                      "json_options": "",
+                      "type": "float64"
+                    },
+                    "srtcp_packet_rate": {
+                      "json_options": "",
+                      "type": "float64"
+                    },
+                    "successes": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "takeover_age": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "takeover_snapshot_age": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "takeover_stored_at": {
+                      "json_options": "",
+                      "type": "RFC3339 time"
+                    }
+                  }
+                },
+                "checkpoint_age": {
+                  "json_options": ",omitempty",
+                  "type": "int64"
+                },
+                "checkpoint_policy": {
+                  "json_options": ",omitempty",
+                  "type": "string"
+                },
+                "checkpoint_stored_at": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "detected_at": {
+                  "json_options": ",omitempty",
+                  "type": "RFC3339 time"
+                },
+                "end": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "error": {
+                  "json_options": ",omitempty",
+                  "type": "string"
+                },
+                "from": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "kind": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "last_heartbeat": {
+                  "json_options": ",omitempty",
+                  "type": "RFC3339 time"
+                },
+                "loss_cause": {
+                  "json_options": ",omitempty",
+                  "type": "string"
+                },
+                "lost": {
+                  "json_options": ",omitempty",
+                  "type": "bool"
+                },
+                "result": {
+                  "json_options": "",
+                  "type": {
+                    "Drain": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "DuplicateWindows": {
+                      "json_options": "",
+                      "type": [
+                        {
+                          "First": {
+                            "json_options": "",
+                            "type": "uint64"
+                          },
+                          "Last": {
+                            "json_options": "",
+                            "type": "uint64"
+                          },
+                          "SSRC": {
+                            "json_options": "",
+                            "type": "uint32"
+                          }
+                        }
+                      ]
+                    },
+                    "Duration": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "Export": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "HeldPackets": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "HoldExpired": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "InputDuplicationWindow": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "InputMayBeDuplicated": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "RecoveredPackets": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "RelayReplayComplete": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "RelayReplayDrops": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "RelayReplayDuration": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "RelayReplayPackets": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "RelayReplayRecoveryPLI": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "RelayReplaySendFailures": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "ReleaseLockHeld": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "Resume": {
+                      "json_options": "",
+                      "type": "int64"
+                    },
+                    "RolledBack": {
+                      "json_options": "",
+                      "type": "bool"
+                    },
+                    "SessionID": {
+                      "json_options": "",
+                      "type": "string"
+                    },
+                    "StateBytes": {
+                      "json_options": "",
+                      "type": "int"
+                    },
+                    "move_diagnostic_id": {
+                      "json_options": ",omitempty",
+                      "type": "string"
+                    }
+                  }
+                },
+                "sequence_margin": {
+                  "json_options": ",omitempty",
+                  "type": "uint16"
+                },
+                "snapshot_age": {
+                  "json_options": ",omitempty",
+                  "type": "int64"
+                },
+                "srtcp_index_margin": {
+                  "json_options": ",omitempty",
+                  "type": "uint32"
+                },
+                "start": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "to": {
+                  "json_options": "",
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "workers": {
+            "json_options": "",
+            "type": [
+              {
+                "address": {
+                  "json_options": "",
+                  "type": "IP:port"
+                },
+                "call_count": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "dead": {
+                  "json_options": "",
+                  "type": "bool"
+                },
+                "draining": {
+                  "json_options": "",
+                  "type": "bool"
+                },
+                "last_heartbeat": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "liveness_unknown": {
+                  "json_options": ",omitempty",
+                  "type": "bool"
+                },
+                "name": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "recovering": {
+                  "json_options": "",
+                  "type": "bool"
+                },
+                "worker_link": {
+                  "json_options": ",omitempty",
+                  "type": {
+                    "optional": {
+                      "connected": {
+                        "json_options": "",
+                        "type": "bool"
+                      },
+                      "down_seconds": {
+                        "json_options": "",
+                        "type": "float64"
+                      },
+                      "reconnects": {
+                        "json_options": "",
+                        "type": "uint64"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "statuses": [
+        200,
+        503
+      ]
+    },
+    {
+      "service": "control",
+      "route": "GET /metrics",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /private/workers/{name}/mark-draining",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        404,
+        503
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /private/workers/{name}/replace",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {},
+        "shape": {}
+      },
+      "statuses": [
+        200,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /private/workers/{name}/link",
+      "request": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        200,
+        403,
+        409,
+        503,
+        505
+      ]
+    },
+    {
+      "service": "control",
+      "route": "GET /private/workers/{name}/status",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "address": "192.0.2.1:1234",
+          "agent_session": {
+            "app": {
+              "fixture": true
+            },
+            "checkpoint_age_ms": 1,
+            "checkpoint_known": true,
+            "history_bytes": 1,
+            "id": "fixture",
+            "last_task_launch": {
+              "at": "2026-10-23T00:00:00Z",
+              "checkpoint_at": "2026-10-23T00:00:00Z",
+              "checkpointed": true,
+              "deadline": "2026-10-23T00:00:00Z",
+              "id": "fixture",
+              "step": "fixture",
+              "store_at": "2026-10-23T00:00:00Z"
+            },
+            "name": "fixture",
+            "pending_bytes": 1,
+            "playback_bytes": 1,
+            "playback_packets": 1,
+            "progress": {
+              "Consumed": 1,
+              "Index": 1,
+              "SSRC": 1,
+              "Timestamp": 1
+            },
+            "recording_bytes": 1,
+            "request_bytes": 1,
+            "side_effect_launches": 1,
+            "snapshot_age_ms": 1,
+            "state": {
+              "Bytes": "AQ==",
+              "Version": 1
+            },
+            "tasks": [
+              {
+                "cursor": 1,
+                "final": true,
+                "id": "fixture",
+                "outcome": "fixture",
+                "phase": "fixture",
+                "published": 1,
+                "step": "fixture",
+                "turn": 1
+              }
+            ]
+          },
+          "agents": {
+            "CallbackDeadlines": 1,
+            "CallbackFailures": 1,
+            "InputDrops": 1,
+            "OversizedStates": 1,
+            "RestoreFailures": 1,
+            "SaveFailures": 1,
+            "UnknownVersions": 1
+          },
+          "draining": true,
+          "inventory": [
+            {
+              "epoch": 1,
+              "id": "fixture",
+              "owner": "192.0.2.1:1234"
+            }
+          ],
+          "inventory_known": true,
+          "replay": {
+            "AppendBytes": 1,
+            "AppendDropped": 1,
+            "AppendErrors": 1,
+            "AppendPending": 1,
+            "Skipped": {
+              "fixture": 1
+            },
+            "Truncated": {
+              "fixture": 1
+            }
+          },
+          "sessions": 1,
+          "truncated": true
+        },
+        "shape": {
+          "address": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "agent_session": {
+            "json_options": ",omitempty",
+            "type": {
+              "optional": {
+                "app": {
+                  "json_options": ",omitempty",
+                  "type": "base64 bytes"
+                },
+                "checkpoint_age_ms": {
+                  "json_options": "",
+                  "type": "float64"
+                },
+                "checkpoint_known": {
+                  "json_options": "",
+                  "type": "bool"
+                },
+                "history_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "last_task_launch": {
+                  "json_options": ",omitempty",
+                  "type": {
+                    "optional": {
+                      "at": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      },
+                      "checkpoint_at": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      },
+                      "checkpointed": {
+                        "json_options": "",
+                        "type": "bool"
+                      },
+                      "deadline": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      },
+                      "id": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "step": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "store_at": {
+                        "json_options": "",
+                        "type": "RFC3339 time"
+                      }
+                    }
+                  }
+                },
+                "name": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "pending_bytes": {
+                  "json_options": "",
+                  "type": "int64"
+                },
+                "playback_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "playback_packets": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "progress": {
+                  "json_options": "",
+                  "type": {
+                    "Consumed": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "Index": {
+                      "json_options": "",
+                      "type": "uint64"
+                    },
+                    "SSRC": {
+                      "json_options": "",
+                      "type": "uint32"
+                    },
+                    "Timestamp": {
+                      "json_options": "",
+                      "type": "uint32"
+                    }
+                  }
+                },
+                "recording_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "request_bytes": {
+                  "json_options": "",
+                  "type": "int"
+                },
+                "side_effect_launches": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "snapshot_age_ms": {
+                  "json_options": "",
+                  "type": "float64"
+                },
+                "state": {
+                  "json_options": "",
+                  "type": {
+                    "Bytes": {
+                      "json_options": "",
+                      "type": "base64 bytes"
+                    },
+                    "Version": {
+                      "json_options": "",
+                      "type": "uint32"
+                    }
+                  }
+                },
+                "tasks": {
+                  "json_options": ",omitempty",
+                  "type": [
+                    {
+                      "cursor": {
+                        "json_options": "",
+                        "type": "uint64"
+                      },
+                      "final": {
+                        "json_options": "",
+                        "type": "bool"
+                      },
+                      "id": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "phase": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "published": {
+                        "json_options": "",
+                        "type": "uint64"
+                      },
+                      "step": {
+                        "json_options": "",
+                        "type": "string"
+                      },
+                      "turn": {
+                        "json_options": "",
+                        "type": "uint64"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "agents": {
+            "json_options": "",
+            "type": {
+              "CallbackDeadlines": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "CallbackFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "InputDrops": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "OversizedStates": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "RestoreFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "SaveFailures": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "UnknownVersions": {
+                "json_options": "",
+                "type": "uint64"
+              }
+            }
+          },
+          "draining": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "inventory": {
+            "json_options": "",
+            "type": [
+              {
+                "epoch": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "owner": {
+                  "json_options": "",
+                  "type": "IP:port"
+                }
+              }
+            ]
+          },
+          "inventory_known": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "replay": {
+            "json_options": "",
+            "type": {
+              "AppendBytes": {
+                "json_options": "",
+                "type": "int"
+              },
+              "AppendDropped": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "AppendErrors": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "AppendPending": {
+                "json_options": "",
+                "type": "int"
+              },
+              "Skipped": {
+                "json_options": "",
+                "type": {
+                  "map_key": "string",
+                  "value": "uint64"
+                }
+              },
+              "Truncated": {
+                "json_options": "",
+                "type": {
+                  "map_key": "string",
+                  "value": "uint64"
+                }
+              }
+            }
+          },
+          "sessions": {
+            "json_options": "",
+            "type": "int"
+          },
+          "truncated": {
+            "json_options": "",
+            "type": "bool"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "GET /private/workers/{name}/metrics",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": "fixture",
+        "shape": "string"
+      },
+      "statuses": [
+        200,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /private/workers/{name}/heartbeat",
+      "request": {
+        "json": {
+          "address": "192.0.2.1:1234",
+          "token": "fixture"
+        },
+        "shape": {
+          "address": {
+            "json_options": "",
+            "type": "IP:port"
+          },
+          "token": {
+            "json_options": ",omitempty",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "json": {
+          "death_cycle": 1,
+          "rejoin_token": "fixture"
+        },
+        "shape": {
+          "death_cycle": {
+            "json_options": ",omitempty",
+            "type": "uint64"
+          },
+          "rejoin_token": {
+            "json_options": ",omitempty",
+            "type": "string"
+          }
+        }
+      },
+      "statuses": [
+        200,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "errors",
+      "route": "conflict",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "candidate": {
+            "epoch": 1,
+            "expires_at": "2026-10-23T00:00:00Z",
+            "session_id": "fixture",
+            "worker": "192.0.2.1:1234"
+          },
+          "code": "fixture",
+          "message": "fixture"
+        },
+        "shape": {
+          "candidate": {
+            "json_options": ",omitempty",
+            "type": {
+              "optional": {
+                "epoch": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "expires_at": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "session_id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "worker": {
+                  "json_options": "",
+                  "type": "IP:port"
+                }
+              }
+            }
+          },
+          "code": {
+            "json_options": "",
+            "type": "string"
+          },
+          "message": {
+            "json_options": "",
+            "type": "string"
+          }
+        }
+      },
+      "statuses": [
+        409
+      ]
+    },
+    {
+      "service": "errors",
+      "route": "move-result",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "codes": [
+            "fixture"
+          ],
+          "error": "fixture",
+          "result": {
+            "checkpoint": {
+              "age_at_capture": 1,
+              "attempts": 1,
+              "captured_at": "2026-10-23T00:00:00Z",
+              "failures": 1,
+              "rtp_packet_rate": 1,
+              "srtcp_packet_rate": 1,
+              "successes": 1,
+              "takeover_age": 1,
+              "takeover_snapshot_age": 1,
+              "takeover_stored_at": "2026-10-23T00:00:00Z"
+            },
+            "checkpoint_age": 1,
+            "checkpoint_policy": "fixture",
+            "checkpoint_stored_at": "2026-10-23T00:00:00Z",
+            "detected_at": "2026-10-23T00:00:00Z",
+            "end": "2026-10-23T00:00:00Z",
+            "error": "fixture",
+            "from": "fixture",
+            "id": "fixture",
+            "kind": "fixture",
+            "last_heartbeat": "2026-10-23T00:00:00Z",
+            "loss_cause": "fixture",
+            "lost": true,
+            "result": {
+              "Drain": 1,
+              "DuplicateWindows": [
+                {
+                  "First": 1,
+                  "Last": 1,
+                  "SSRC": 1
+                }
+              ],
+              "Duration": 1,
+              "Export": 1,
+              "HeldPackets": 1,
+              "HoldExpired": true,
+              "InputDuplicationWindow": 1,
+              "InputMayBeDuplicated": true,
+              "RecoveredPackets": 1,
+              "RelayReplayComplete": true,
+              "RelayReplayDrops": 1,
+              "RelayReplayDuration": 1,
+              "RelayReplayPackets": 1,
+              "RelayReplayRecoveryPLI": true,
+              "RelayReplaySendFailures": 1,
+              "ReleaseLockHeld": 1,
+              "Resume": 1,
+              "RolledBack": true,
+              "SessionID": "fixture",
+              "StateBytes": 1,
+              "move_diagnostic_id": "fixture"
+            },
+            "sequence_margin": 1,
+            "snapshot_age": 1,
+            "srtcp_index_margin": 1,
+            "start": "2026-10-23T00:00:00Z",
+            "to": "fixture"
+          }
+        },
+        "shape": {
+          "codes": {
+            "json_options": "",
+            "type": [
+              "string"
+            ]
+          },
+          "error": {
+            "json_options": "",
+            "type": "string"
+          },
+          "result": {
+            "json_options": "",
+            "type": {
+              "checkpoint": {
+                "json_options": "",
+                "type": {
+                  "age_at_capture": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "attempts": {
+                    "json_options": "",
+                    "type": "uint64"
+                  },
+                  "captured_at": {
+                    "json_options": "",
+                    "type": "RFC3339 time"
+                  },
+                  "failures": {
+                    "json_options": "",
+                    "type": "uint64"
+                  },
+                  "rtp_packet_rate": {
+                    "json_options": "",
+                    "type": "float64"
+                  },
+                  "srtcp_packet_rate": {
+                    "json_options": "",
+                    "type": "float64"
+                  },
+                  "successes": {
+                    "json_options": "",
+                    "type": "uint64"
+                  },
+                  "takeover_age": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "takeover_snapshot_age": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "takeover_stored_at": {
+                    "json_options": "",
+                    "type": "RFC3339 time"
+                  }
+                }
+              },
+              "checkpoint_age": {
+                "json_options": ",omitempty",
+                "type": "int64"
+              },
+              "checkpoint_policy": {
+                "json_options": ",omitempty",
+                "type": "string"
+              },
+              "checkpoint_stored_at": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "detected_at": {
+                "json_options": ",omitempty",
+                "type": "RFC3339 time"
+              },
+              "end": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "error": {
+                "json_options": ",omitempty",
+                "type": "string"
+              },
+              "from": {
+                "json_options": "",
+                "type": "string"
+              },
+              "id": {
+                "json_options": "",
+                "type": "string"
+              },
+              "kind": {
+                "json_options": "",
+                "type": "string"
+              },
+              "last_heartbeat": {
+                "json_options": ",omitempty",
+                "type": "RFC3339 time"
+              },
+              "loss_cause": {
+                "json_options": ",omitempty",
+                "type": "string"
+              },
+              "lost": {
+                "json_options": ",omitempty",
+                "type": "bool"
+              },
+              "result": {
+                "json_options": "",
+                "type": {
+                  "Drain": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "DuplicateWindows": {
+                    "json_options": "",
+                    "type": [
+                      {
+                        "First": {
+                          "json_options": "",
+                          "type": "uint64"
+                        },
+                        "Last": {
+                          "json_options": "",
+                          "type": "uint64"
+                        },
+                        "SSRC": {
+                          "json_options": "",
+                          "type": "uint32"
+                        }
+                      }
+                    ]
+                  },
+                  "Duration": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "Export": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "HeldPackets": {
+                    "json_options": "",
+                    "type": "int"
+                  },
+                  "HoldExpired": {
+                    "json_options": "",
+                    "type": "bool"
+                  },
+                  "InputDuplicationWindow": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "InputMayBeDuplicated": {
+                    "json_options": "",
+                    "type": "bool"
+                  },
+                  "RecoveredPackets": {
+                    "json_options": "",
+                    "type": "int"
+                  },
+                  "RelayReplayComplete": {
+                    "json_options": "",
+                    "type": "bool"
+                  },
+                  "RelayReplayDrops": {
+                    "json_options": "",
+                    "type": "int"
+                  },
+                  "RelayReplayDuration": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "RelayReplayPackets": {
+                    "json_options": "",
+                    "type": "int"
+                  },
+                  "RelayReplayRecoveryPLI": {
+                    "json_options": "",
+                    "type": "bool"
+                  },
+                  "RelayReplaySendFailures": {
+                    "json_options": "",
+                    "type": "int"
+                  },
+                  "ReleaseLockHeld": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "Resume": {
+                    "json_options": "",
+                    "type": "int64"
+                  },
+                  "RolledBack": {
+                    "json_options": "",
+                    "type": "bool"
+                  },
+                  "SessionID": {
+                    "json_options": "",
+                    "type": "string"
+                  },
+                  "StateBytes": {
+                    "json_options": "",
+                    "type": "int"
+                  },
+                  "move_diagnostic_id": {
+                    "json_options": ",omitempty",
+                    "type": "string"
+                  }
+                }
+              },
+              "sequence_margin": {
+                "json_options": ",omitempty",
+                "type": "uint16"
+              },
+              "snapshot_age": {
+                "json_options": ",omitempty",
+                "type": "int64"
+              },
+              "srtcp_index_margin": {
+                "json_options": ",omitempty",
+                "type": "uint32"
+              },
+              "start": {
+                "json_options": "",
+                "type": "RFC3339 time"
+              },
+              "to": {
+                "json_options": "",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "statuses": [
+        409
+      ]
+    },
+    {
+      "service": "worker-query",
+      "route": "GET /status?agent-session=id",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": {
+          "app": {
+            "fixture": true
+          },
+          "checkpoint_age_ms": 1,
+          "checkpoint_known": true,
+          "history_bytes": 1,
+          "id": "fixture",
+          "last_task_launch": {
+            "at": "2026-10-23T00:00:00Z",
+            "checkpoint_at": "2026-10-23T00:00:00Z",
+            "checkpointed": true,
+            "deadline": "2026-10-23T00:00:00Z",
+            "id": "fixture",
+            "step": "fixture",
+            "store_at": "2026-10-23T00:00:00Z"
+          },
+          "name": "fixture",
+          "pending_bytes": 1,
+          "playback_bytes": 1,
+          "playback_packets": 1,
+          "progress": {
+            "Consumed": 1,
+            "Index": 1,
+            "SSRC": 1,
+            "Timestamp": 1
+          },
+          "recording_bytes": 1,
+          "request_bytes": 1,
+          "side_effect_launches": 1,
+          "snapshot_age_ms": 1,
+          "state": {
+            "Bytes": "AQ==",
+            "Version": 1
+          },
+          "tasks": [
+            {
+              "cursor": 1,
+              "final": true,
+              "id": "fixture",
+              "outcome": "fixture",
+              "phase": "fixture",
+              "published": 1,
+              "step": "fixture",
+              "turn": 1
+            }
+          ]
+        },
+        "shape": {
+          "app": {
+            "json_options": ",omitempty",
+            "type": "base64 bytes"
+          },
+          "checkpoint_age_ms": {
+            "json_options": "",
+            "type": "float64"
+          },
+          "checkpoint_known": {
+            "json_options": "",
+            "type": "bool"
+          },
+          "history_bytes": {
+            "json_options": "",
+            "type": "int"
+          },
+          "id": {
+            "json_options": "",
+            "type": "string"
+          },
+          "last_task_launch": {
+            "json_options": ",omitempty",
+            "type": {
+              "optional": {
+                "at": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "checkpoint_at": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "checkpointed": {
+                  "json_options": "",
+                  "type": "bool"
+                },
+                "deadline": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "step": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "store_at": {
+                  "json_options": "",
+                  "type": "RFC3339 time"
+                }
+              }
+            }
+          },
+          "name": {
+            "json_options": "",
+            "type": "string"
+          },
+          "pending_bytes": {
+            "json_options": "",
+            "type": "int64"
+          },
+          "playback_bytes": {
+            "json_options": "",
+            "type": "int"
+          },
+          "playback_packets": {
+            "json_options": "",
+            "type": "int"
+          },
+          "progress": {
+            "json_options": "",
+            "type": {
+              "Consumed": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "Index": {
+                "json_options": "",
+                "type": "uint64"
+              },
+              "SSRC": {
+                "json_options": "",
+                "type": "uint32"
+              },
+              "Timestamp": {
+                "json_options": "",
+                "type": "uint32"
+              }
+            }
+          },
+          "recording_bytes": {
+            "json_options": "",
+            "type": "int"
+          },
+          "request_bytes": {
+            "json_options": "",
+            "type": "int"
+          },
+          "side_effect_launches": {
+            "json_options": "",
+            "type": "uint64"
+          },
+          "snapshot_age_ms": {
+            "json_options": "",
+            "type": "float64"
+          },
+          "state": {
+            "json_options": "",
+            "type": {
+              "Bytes": {
+                "json_options": "",
+                "type": "base64 bytes"
+              },
+              "Version": {
+                "json_options": "",
+                "type": "uint32"
+              }
+            }
+          },
+          "tasks": {
+            "json_options": ",omitempty",
+            "type": [
+              {
+                "cursor": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "final": {
+                  "json_options": "",
+                  "type": "bool"
+                },
+                "id": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "outcome": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "phase": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "published": {
+                  "json_options": "",
+                  "type": "uint64"
+                },
+                "step": {
+                  "json_options": "",
+                  "type": "string"
+                },
+                "turn": {
+                  "json_options": "",
+                  "type": "uint64"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "statuses": [
+        200,
+        409
+      ]
+    }
+  ],
+  "wire": {
+    "registered_handlers": [
+      {
+        "service": "control",
+        "route": "DELETE /calls/{id}",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusOK"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "GET /calls/{id}/events",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusConflict"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "GET /metrics",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "GET /private/workers/{name}/metrics",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "reply.StatusCode"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "GET /private/workers/{name}/status",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "GET /status",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "errorStatus(err)"
+        ],
+        "anonymous_response_types": [
+          "struct {\n\tReady\tbool\t\t`json:\"ready\"`\n\tRebuild\t*RebuildStatus\t`json:\"rebuild,omitempty\"`\n\tPool\tPoolSample\t`json:\"pool\"`\n\tError\tstring\t\t`json:\"error\"`\n}"
+        ]
+      },
+      {
+        "service": "control",
+        "route": "POST /calls",
+        "query_parameters": [
+          "worker"
+        ],
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusCreated",
+          "http.StatusUnsupportedMediaType"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /calls/{id}/agent/control",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/agent/v2.ControlMessage",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusAccepted"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /calls/{id}/ice-restart",
+        "query_parameters": [
+          "generation"
+        ],
+        "explicit_statuses": [
+          "400"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /calls/{id}/move",
+        "query_parameters": [
+          "to"
+        ],
+        "explicit_statuses": [
+          "errorStatus(err)"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /calls/{id}/relay",
+        "query_parameters": [
+          "to"
+        ],
+        "explicit_statuses": [
+          "http.StatusOK"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /private/workers/{name}/heartbeat",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/controlplane.HeartbeatRequest",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /private/workers/{name}/link",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /private/workers/{name}/mark-draining",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent",
+          "http.StatusNotFound"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /private/workers/{name}/replace",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusConflict",
+          "http.StatusNotFound"
+        ],
+        "anonymous_response_types": [
+          "struct{}"
+        ]
+      },
+      {
+        "service": "control",
+        "route": "POST /relays/{id}/drain",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusOK"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
+        "route": "POST /workers/{name}/drain",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusMultiStatus"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "DELETE /sessions/{id}",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "DELETE /workers",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.WorkerRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "GET /metrics",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "GET /status",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/begin-replay",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.ReplayRequest",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/forget-tenure",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/sessionstore.Lease",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/hold",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.RouteRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/move",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.RouteRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/move-after-export",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.RouteRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/release",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.RouteRequest",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/release-after-export",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.ExportReleaseRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusBadRequest"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /sessions/{id}/replay",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.ReplayRequest",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /workers",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.WorkerRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /workers/expect",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.WorkerRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "relay",
+        "route": "POST /workers/rebind",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/relay.RebindRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "DELETE /sessions/{id}",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "DELETE /sessions/{id}/restart",
+        "query_parameters": [
+          "generation"
+        ],
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "GET /metrics",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "GET /status",
+        "query_parameters": [
+          "agent-session"
+        ],
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "POST /relays",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/mediaworker.RelaySetRequest",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "POST /resume",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/mediaworker.ResumeRequest",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "POST /sessions",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/mediaworker.CreateRequest",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "POST /sessions/{id}/agent/control",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/agent/v2.ControlMessage",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusAccepted"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "POST /sessions/{id}/export",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "POST /sessions/{id}/keyframe",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
+        "route": "POST /sessions/{id}/restart",
+        "decoded_request_type": "github.com/relaishq/relais/pkg/mediaworker.RestartRequest",
+        "query_parameters": null,
+        "explicit_statuses": null,
+        "anonymous_response_types": null
+      }
+    ],
+    "status_codes_including_helpers": {
+      "control": [
+        "StatusAccepted",
+        "StatusBadRequest",
+        "StatusConflict",
+        "StatusCreated",
+        "StatusForbidden",
+        "StatusHTTPVersionNotSupported",
+        "StatusInternalServerError",
+        "StatusMethodNotAllowed",
+        "StatusMultiStatus",
+        "StatusNoContent",
+        "StatusNotFound",
+        "StatusOK",
+        "StatusServiceUnavailable",
+        "StatusUnsupportedMediaType"
+      ],
+      "relay": [
+        "StatusBadRequest",
+        "StatusNoContent"
+      ],
+      "transport": [
+        "StatusBadRequest",
+        "StatusConflict"
+      ],
+      "worker": [
+        "StatusAccepted",
+        "StatusBadRequest",
+        "StatusNoContent"
+      ]
+    },
+    "failure_codes": [
+      "agent_backpressure",
+      "agent_capacity",
+      "agent_incompatible",
+      "agent_oversize",
+      "agent_restore",
+      "agent_save",
+      "agent_version",
+      "at_capacity",
+      "barrier_timeout",
+      "buffer_disabled",
+      "canceled",
+      "checkpoint_clock",
+      "closed",
+      "control_conflict",
+      "control_invalid",
+      "control_not_ready",
+      "control_order",
+      "control_rejected",
+      "control_stale",
+      "control_unsupported",
+      "deadline",
+      "dtls_exhausted",
+      "ended",
+      "export_incompatible",
+      "export_not_flushed",
+      "held",
+      "hold_expired",
+      "hold_limit",
+      "internal",
+      "lease_lost",
+      "move_budget",
+      "move_in_progress",
+      "no_target",
+      "not_established",
+      "not_found",
+      "relay_change_rolled_back",
+      "relay_conflict",
+      "relay_switched",
+      "relay_unsupported",
+      "replay_in_progress",
+      "replay_not_ready",
+      "replay_target_changed",
+      "restart_mismatch",
+      "sequence_budget",
+      "session_exists",
+      "srtcp_exhausted",
+      "stale_tenure",
+      "transient",
+      "uncertain",
+      "unknown_call",
+      "unknown_session",
+      "unsupported_offer",
+      "worker_command_not_sent",
+      "worker_draining",
+      "worker_link_unavailable"
+    ],
+    "control_status_503": {
+      "status": 503,
+      "body": {
+        "error": "controlplane: not ready for mutations",
+        "pool": {
+          "age_seconds": 0,
+          "demand": 1,
+          "draining_workers": 0,
+          "never_answered_workers": 0,
+          "over_cap_calls": 0,
+          "pending_workers": 0,
+          "ready_workers": 1,
+          "refusals": {
+            "at_capacity": 0,
+            "no_target": 0
+          },
+          "reservations": 0,
+          "sampled_at": "2026-10-23T00:00:00Z",
+          "stale": false,
+          "unreachable_workers": 0,
+          "worker_call_cap": 0
+        },
+        "ready": false
+      }
+    }
+  }
+}

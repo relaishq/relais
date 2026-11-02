@@ -100,7 +100,7 @@ func TestRelayDrainTenCalls(t *testing.T) {
 }
 
 func testRelayDrainTenCalls(t *testing.T, store sessionstore.Store) {
-	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 3})
+	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 3, AgentCallbackTimeout: time.Second})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	calls := make([]*callharness.Call, 10)

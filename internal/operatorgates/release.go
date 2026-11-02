@@ -11,6 +11,11 @@ import (
 
 func RunReleaseGate(ctx context.Context, c *ProcessConfig, p ProcedurePorts, end time.Duration) ProcedureResult {
 	g := newProcedure(c, p, end)
+	g.end -= RestoreReserve
+	return runReleaseGate(ctx, g)
+}
+
+func runReleaseGate(ctx context.Context, g *procedure) ProcedureResult {
 	g.evidence.RelayWindows = "inconclusive"
 	err := g.release(ctx)
 	return g.finish(ctx, err, true)

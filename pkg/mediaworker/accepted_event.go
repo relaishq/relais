@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"github.com/relaishq/relais/internal/agenthost"
 	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
@@ -239,6 +240,12 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 		if event.Kind == agent.Control && errors.Is(err, errSnapshotAdmissionCapacity) {
 			return agent.ErrCapacity
 		}
+		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption && h.v2.bridge != nil && event.Kind == agent.TaskMessage {
+			if hook, ok := h.v2.instance.(agenthost.BridgeDeferral); ok {
+				hook.Deferred(*event.Result)
+			}
+			return errTaskAdmissionBackpressure
+		}
 		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption {
 			return s.refuseSnapshotEvent(event, before)
 		}
@@ -287,10 +294,16 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 	candidate.V2.Playback = s.playbackSnapshotLocked()
 	candidate.V2.Tasks = cloneTaskIntents(intents)
 	h.latest = candidate
-	if !s.fenced.Load() && s.ctx.Err() == nil {
+	published := !s.fenced.Load() && s.ctx.Err() == nil
+	if published {
 		s.state.Agent = cloneAgentState(candidate)
 	}
 	s.mu.Unlock()
+	if published && h.v2.bridge != nil {
+		if hooks, ok := h.v2.instance.(agenthost.BridgeHooks); ok {
+			hooks.Accepted()
+		}
+	}
 	s.wakePacer()
 	if !agentStateEqual(before, candidate) {
 		s.checkpoint.request()

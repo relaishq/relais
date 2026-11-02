@@ -109,6 +109,19 @@ type registration struct {
 }
 
 type call struct {
+	relayEpisodeMu sync.Mutex    // serializes journal access without holding the operation lock
+	relayEpisode   *relayEpisode // guarded by relayEpisodeMu
+
+	relayTarget    string             // guarded by controlMu
+	relayUnplanned bool               // guarded by controlMu
+	relayCancel    context.CancelFunc // guarded by controlMu; published with c.mu ownership
+	relayCapable   bool
+	relaySlot      string // guarded by stateMu; placement hint, never authorization
+	relayEndReason string // guarded by stateMu
+	eventOpen      bool
+	relayWake      chan struct{}               // guarded by stateMu; wakes the single event stream
+	relayEvent     *RelayEvent                 // guarded by stateMu
+	relayRejected  bool                        // guarded by stateMu; applies only to relayEvent
 	intent         *sessionstore.ControlIntent // guarded by mu
 	terminal       bool                        // reads hold mu or the plane registry lock; writes hold both
 	lease          sessionstore.Lease          // guarded by stateMu; last observed placed tenure
@@ -142,6 +155,8 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	relayPlacement  sync.RWMutex // orders create admission against relay drain
+	relaySet        map[string]RelayBinding
 	links           *WorkerLinks
 	recovery        *moveRecovery
 	restart         *restartState
@@ -201,6 +216,8 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	if name == "" || !addr.IsValid() || worker == nil {
 		return errors.New("controlplane: worker needs name, address and interface")
 	}
+	p.relayPlacement.RLock()
+	defer p.relayPlacement.RUnlock()
 
 	p.mu.Lock()
 
@@ -218,11 +235,15 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 
 	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := p.configureWorkerRelays(ctx, worker); err != nil {
+		return err
+	}
 	err := p.saveRegistration(ctx, name, addr, worker)
-	cancel()
 	if err != nil {
 		return err
 	}
+
 	p.mu.Lock()
 	if _, exists := p.workers[name]; exists {
 		p.mu.Unlock()
@@ -412,6 +433,12 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	if !ready {
 		return "", "", ErrNoTarget
 	}
+	p.relayPlacement.RLock()
+	defer p.relayPlacement.RUnlock()
+	slot, slotErr := p.pickRelay(ctx, "")
+	if slotErr != nil {
+		return "", "", slotErr
+	}
 	excluded := make(map[netip.AddrPort]bool, attempts)
 	var w *registration
 	var id, answer string
@@ -428,7 +455,9 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 			return "", "", recordErr
 		}
 		placed = sessionstore.Lease{}
-		if worker, ok := w.worker.(interface {
+		if worker, ok := w.worker.(relayChangeWorker); ok && slot != "" {
+			id, answer, placed, err = worker.CreateSessionAtRelay(ctx, offer, slot)
+		} else if worker, ok := w.worker.(interface {
 			CreateSessionWithLease(context.Context, string) (string, string, sessionstore.Lease, error)
 		}); ok {
 			id, answer, placed, err = worker.CreateSessionWithLease(ctx, offer)
@@ -461,7 +490,7 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	if placed.Epoch == 0 {
 		placed = sessionstore.Lease{SessionID: id, Worker: w.addr}
 	}
-	c := &call{id: id, lease: placed}
+	c := &call{id: id, lease: placed, relaySlot: slot}
 	p.calls[id] = c
 	p.mu.Unlock()
 	if placed.Epoch == 0 {

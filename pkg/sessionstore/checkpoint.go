@@ -35,6 +35,7 @@ func (m *Memory) Checkpoint(ctx context.Context, id string, state []byte) (Check
 	lease, ok := m.leases[id]
 	if !ok || !now.Before(lease.ExpiresAt) {
 		delete(m.leases, id)
+		delete(m.relayAssignments, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
 		delete(m.componentRecords, id)

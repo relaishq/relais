@@ -99,8 +99,36 @@ func (r *Relay) BeginReplay(ctx context.Context, id string, from netip.AddrPort,
 		}
 	}
 	if h := r.holds[id]; h != nil {
-		if !h.replay || h.source != from || h.replaying {
+		if h.source != from || h.replaying || !h.acknowledged {
 			return ReplayPlan{}, ErrHeld
+		}
+		if !h.replay {
+			if r.barrierEndpoint(from) == from {
+				// Keep ordinary uncertain exports on their same-target confirmation
+				// path. That path has not been proven free of this pre-barrier hole:
+				// inbound operator recovery did not reproduce it in three trials.
+				// Promotion is currently limited to an authorized NAT drain.
+				return ReplayPlan{}, ErrHeld
+			}
+			// Control has fenced the uncertain export before requesting replay.
+			// Adopt its planned gate atomically: releasing only its held queue
+			// would omit pre-barrier input missing from the recovery checkpoint.
+			// A later exact move could then recover those old holes behind live
+			// video, reversing the decoder's source clock.
+			h.timer.Stop()
+			h.promotedDeadline = time.Now().Add(r.cfg.HoldTimeout)
+			h.timer = time.AfterFunc(r.cfg.HoldTimeout, func() { r.expireHold(h) })
+			h.replay = true
+			h.queuedHigh = make(map[uint32]uint64)
+			for i := range h.queue {
+				p := &h.queue[i]
+				if ssrc, seq, ok := callerIndex(p.datagram[MaxHeaderLen:]); ok {
+					if high, tracked := r.trackedIndex(r.bufferSession(id), ssrc); tracked {
+						p.media, p.ssrc, p.index = true, ssrc, inboundIndex(high, seq)
+					}
+				}
+			}
+			r.rebuildReplay(h, inbound)
 		}
 		if s := r.bufferSession(id); h.replayTarget.IsValid() && (h.replayTarget != current || s != nil && h.replayTenure != s.routeTenure) {
 			// Keep the gate, but prepare from the new receiver's checkpoint.

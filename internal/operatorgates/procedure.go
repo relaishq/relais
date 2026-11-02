@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -20,6 +21,11 @@ import (
 const CalibrationWarmup = 30 * time.Second
 const FaultCallAge = 190 * time.Second
 const ConsentWindow = 60 * time.Second
+
+// RestoreReserve covers four inventory and four stale-clock reads before
+// unfreeze. At 3.05 s per read, 60 s leaves 35.6 s for command admission,
+// above the 30 s host floor plus 1 s for rounding and transit.
+const RestoreReserve = 60 * time.Second
 const maxSafeEpoch = 1<<53 - 1
 
 // These interfaces are the integration boundary for the caller and evidence
@@ -50,18 +56,24 @@ type GateBroker interface {
 	Events() []Receipt
 }
 type MediaSummary struct {
-	Status              operator.Verdict `json:"status"`
-	QualifiedMoves      *int             `json:"qualifiedMoves,omitempty"`
-	QualifiedTakeovers  *int             `json:"qualifiedTakeovers,omitempty"`
-	ExpectedCalls       int              `json:"expectedCalls"`
-	CompletedCalls      int              `json:"completedCalls"`
-	EventCount          int              `json:"eventCount"`
-	MetricCount         int              `json:"metricCount"`
-	FailedMetrics       int              `json:"failedMetrics"`
-	InconclusiveMetrics int              `json:"inconclusiveMetrics"`
-	MaxMediaGapNS       int64            `json:"maxMediaGapNs"`
-	DecryptionFailures  int              `json:"decryptionFailures"`
-	ICERestarts         int              `json:"iceRestarts"`
+	IncludedPhases      int                                `json:"includedPhases"`
+	DroppedPhases       int                                `json:"droppedPhases"`
+	ExcludedEvents      int                                `json:"excludedEvents"`
+	SaturationOverlaps  int                                `json:"saturationOverlaps"`
+	UndecidedMetrics    []operatorevidence.UndecidedMetric `json:"undecidedMetrics"`
+	PhaseDiagnostics    []operatorevidence.PhaseDiagnostic `json:"phaseDiagnostics"`
+	Status              operator.Verdict                   `json:"status"`
+	QualifiedMoves      *int                               `json:"qualifiedMoves,omitempty"`
+	QualifiedTakeovers  *int                               `json:"qualifiedTakeovers,omitempty"`
+	ExpectedCalls       int                                `json:"expectedCalls"`
+	CompletedCalls      int                                `json:"completedCalls"`
+	EventCount          int                                `json:"eventCount"`
+	MetricCount         int                                `json:"metricCount"`
+	FailedMetrics       int                                `json:"failedMetrics"`
+	InconclusiveMetrics int                                `json:"inconclusiveMetrics"`
+	MaxMediaGapNS       int64                              `json:"maxMediaGapNs"`
+	DecryptionFailures  int                                `json:"decryptionFailures"`
+	ICERestarts         int                                `json:"iceRestarts"`
 }
 type ProcessExtra struct {
 	Worker     string   `json:"worker,omitempty"`
@@ -103,15 +115,21 @@ type StepResult struct {
 }
 type StepFunc func(context.Context, string, string, time.Duration, ProcessExtra) (StepResult, error)
 type ProcedurePorts struct {
-	Clock  Clock
-	Sleep  func(context.Context, time.Duration) error
-	Step   StepFunc
-	Broker GateBroker
+	// Collection owns its reserved evidence window after procedure/restoration.
+	CollectionEnd     time.Duration
+	PostMediaStatus   func(context.Context) (controlplane.Status, error)
+	CollectionContext context.Context
+	Clock             Clock
+	Sleep             func(context.Context, time.Duration) error
+	Step              StepFunc
+	Broker            GateBroker
 	// Media returns the evidence owner's validated, sanitized summary.
 	Media      func(context.Context) (*MediaSummary, error)
 	Duplicates func() *uint64
 	// Inventory must read all hosts and prove the selected release is running.
 	Inventory func(context.Context, string, time.Duration) error
+	// Wait retains a fixed trial polling purpose in the public trace.
+	Wait func(string)
 }
 type ProcessConfig struct {
 	Parameters ProcessParameters
@@ -139,6 +157,9 @@ type ProcessEvidence struct {
 	RelayConnectionInvariants string  `json:"relayConnectionInvariants,omitempty"`
 }
 type ProcedureResult struct {
+	ProcedureReason string `json:"-"`
+	// A procedure deadline alone does not establish the caller stop's outcome.
+	StopDeadlineExpired bool `json:"-"`
 	// Completed records procedure completion independently of strict media qualification.
 	Completed    bool             `json:"-"`
 	Status       operator.Verdict `json:"status"`
@@ -155,18 +176,22 @@ func (r ProcedureResult) GateResult(g operator.Gate) operator.GateResult {
 }
 
 type procedure struct {
-	c        *ProcessConfig
-	p        ProcedurePorts
-	end      time.Duration
-	down     []string
-	stopped  []string
-	frozen   bool
-	unknown  bool
-	evidence ProcessEvidence
+	c          *ProcessConfig
+	p          ProcedurePorts
+	end        time.Duration
+	restoreEnd time.Duration
+	down       []string
+	stopped    []string
+	frozen     bool
+	unknown    bool
+	// Keep positive loss even when an earlier restoration error is returned.
+	restoreLoss bool
+	evidence    ProcessEvidence
 }
 
 func newProcedure(c *ProcessConfig, p ProcedurePorts, end time.Duration) *procedure {
-	return &procedure{c: c, p: p, end: min(end, p.Clock.Elapsed()+GateMaximum, p.Clock.Elapsed()+c.ArmedAt.Add(SessionMaximum).Sub(p.Clock.Wall()))}
+	end = min(end, p.Clock.Elapsed()+GateMaximum, p.Clock.Elapsed()+c.ArmedAt.Add(SessionMaximum).Sub(p.Clock.Wall()))
+	return &procedure{c: c, p: p, end: end, restoreEnd: end}
 }
 
 // ProcedureError is a classified internal outcome. Unclassified errors from

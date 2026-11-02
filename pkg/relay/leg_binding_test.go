@@ -105,3 +105,23 @@ func TestRebindFlapBackRestoresBarrierEndpoint(t *testing.T) {
 	require.NoError(t, r.AddBoundWorker(old, second))
 	require.Equal(t, old, r.barrierEndpoint(old), "fresh binding at original address must cancel stale drain routing")
 }
+
+func TestFlapBackRevokesTokenBoundAtAbandonedAddress(t *testing.T) {
+	r := &Relay{registry: make(map[netip.AddrPort]struct{})}
+	old := netip.MustParseAddrPort("192.0.2.1:17001")
+	next := netip.MustParseAddrPort("192.0.2.1:17002")
+	first, abandoned, fresh := "00112233445566778899aabbccddeeff", "112233445566778899aabbccddeeff00", "2233445566778899aabbccddeeff0011"
+	require.NoError(t, r.ExpectWorker(first))
+	require.True(t, r.observeLeg(first, old))
+	require.NoError(t, r.AddBoundWorker(old, first))
+	require.NoError(t, r.ExpectWorker(abandoned))
+	require.True(t, r.observeLeg(abandoned, next))
+	require.NoError(t, r.PrepareRebind(old, next, abandoned))
+	require.NoError(t, r.ExpectWorker(fresh))
+	require.True(t, r.observeLeg(fresh, old))
+	require.NoError(t, r.AddBoundWorker(old, fresh))
+	require.False(t, r.observeLeg(abandoned, next), "cancelled drain token must not retain permanent leg authority")
+	require.True(t, r.observeLeg(fresh, old))
+	require.Equal(t, old, r.barrierEndpoint(old))
+	require.False(t, r.registered(next))
+}

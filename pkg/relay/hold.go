@@ -61,6 +61,8 @@ type sessionHold struct {
 	// drainNonce and drained track the post-export output drain marker.
 	drainNonce uint64
 	drained    chan struct{}
+	// promotedDeadline fences callbacks already queued by the planned timer.
+	promotedDeadline time.Time
 }
 
 // HoldSession brackets a planned move. Caller packets stop being forwarded
@@ -389,7 +391,7 @@ func (r *Relay) expireHold(h *sessionHold) {
 	r.forwardMu.Lock()
 	defer r.forwardMu.Unlock()
 
-	if r.holds[h.id] != h {
+	if r.holds[h.id] != h || time.Now().Before(h.promotedDeadline) {
 		return
 	}
 

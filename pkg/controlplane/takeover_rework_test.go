@@ -636,6 +636,40 @@ wait:
 	require.False(t, c.hungUp.Load())
 }
 
+func TestTerminalCallClearsPendingTakeover(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		ctx := context.Background()
+		p, _, _, id := relayFailurePlane(t, store)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		c.stateMu.Lock()
+		c.relayCapable = false
+		c.stateMu.Unlock()
+		source := p.workers["a"]
+		expireObservedWorker(t, source)
+		p.store = &recoveryErrorStore{Store: store, step: "transfer", fail: true}
+		require.False(t, p.recoverWorker(ctx, source, time.Now()))
+		require.NotNil(t, pendingRecovery(p, source, id))
+		p.store = store
+
+		// Unsupported relay recovery ends the call through the
+		// worker while its crash takeover is still awaiting a transfer.
+		require.NoError(t, p.recoverRelay(ctx, c, false, map[string]bool{}))
+		require.True(t, c.terminal)
+		_, err = store.Get(ctx, id)
+		require.ErrorIs(t, err, sessionstore.ErrEnded)
+
+		settled := p.recoverWorker(ctx, source, time.Now())
+		require.Empty(t, recoveryWork(p, source), "terminal calls must leave no pending takeover work")
+		require.True(t, settled, "the dead worker must settle after its pending call ends")
+		p.reconcileOwnership(ctx)
+		status, err := p.Status(ctx)
+		require.NoError(t, err)
+		require.Empty(t, status.Calls)
+		require.EqualValues(t, 1, status.LostCount, "retry must not count the terminal call twice")
+	})
+}
+
 func TestHangupDuringPendingTakeoverRecordsEnded(t *testing.T) {
 	for _, step := range []string{"transfer", "route", "cancelled"} {
 		t.Run(step, func(t *testing.T) {

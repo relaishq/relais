@@ -86,7 +86,14 @@ func TestDialOutProcessMoveRestartAndSIGKILL(t *testing.T) {
 	defer stop()
 	sent := make(chan error, 1)
 	go func() { sent <- call.SendMedia(mediaCtx, 60*time.Second) }()
-	defer func() { stop(); <-sent }()
+	defer func() {
+		stop()
+		select {
+		case <-sent:
+		case <-time.After(5 * time.Second):
+			t.Error("caller media sender did not stop")
+		}
+	}()
 	time.Sleep(600 * time.Millisecond)
 	for i := range 20 {
 		require.NoError(t, call.MoveExternal(ctx, (i+1)%2))
@@ -95,7 +102,11 @@ func TestDialOutProcessMoveRestartAndSIGKILL(t *testing.T) {
 	// SIGKILL control while the same worker processes retain their media/leases.
 	restartedAt := time.Now()
 	require.NoError(t, control.Child.SignalGroup(syscall.SIGKILL))
-	<-control.Child.Done()
+	select {
+	case <-control.Child.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("control did not exit")
+	}
 	control = startControl()
 	_ = control
 	status, err := topology.waitControl(ctx, 8*time.Second, "restarted control with original links", func(s controlplane.Status) bool {
@@ -119,7 +130,11 @@ func TestDialOutProcessMoveRestartAndSIGKILL(t *testing.T) {
 	killed := time.Now()
 	h.RecordProcessKill("0", killed)
 	require.NoError(t, topology.workers[0].Child.SignalGroup(syscall.SIGKILL))
-	<-topology.workers[0].Child.Done()
+	select {
+	case <-topology.workers[0].Child.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not exit")
+	}
 	status, err = topology.waitControl(ctx, 2*time.Second, "SIGKILL takeover", func(s controlplane.Status) bool { return len(s.Takeovers) == 1 })
 	require.NoError(t, err)
 	takeoverElapsed := time.Since(killed)

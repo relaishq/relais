@@ -47,6 +47,7 @@ type moveTransfer struct {
 	sourceChecked           time.Time
 	sourceNeedsHeartbeat    bool
 	unrequested             bool
+	rebuilding              bool
 	deathCycle              uint64
 	transientResume         bool
 	budgetRollback          bool // Retained after rollback itself refused move memory.
@@ -114,7 +115,8 @@ func (m *moveRecovery) recover(ctx context.Context, source *registration, listed
 
 // takeoverLocked also recovers an ambiguous final export while Move holds c.mu.
 // A non-nil outcome has completed terminal accounting, independent of the
-// bounded status history. Nil means recovery is pending or ownership changed.
+// bounded status history. Nil means recovery is pending, ownership changed, or
+// the call was already terminal (its pending work is then cleared).
 func (m *moveRecovery) continueLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) (outcome *MoveResult) {
 	p := m.plane
 	if err := p.beginIntent(ctx, c, "takeover", listed); err != nil {
@@ -122,6 +124,7 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 	}
 	defer p.finishIntent(c)
 	if c.terminal {
+		m.finishPending(source, c.id)
 		return nil
 	}
 	p.mu.Lock()
@@ -346,6 +349,30 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 				return
 			}
 			if !pending.unrequested {
+				// Bootstrap observes the command link and heartbeat separately.
+				// Wait for either missing observation within the existing adoption
+				// budget, without changing ordinary planned/no-target recovery.
+				if pending.rebuilding && m.observationTime().Before(pending.targetDeadline) {
+					p.mu.Lock()
+					returning := false
+					for _, w := range p.workers {
+						o := &w.observation
+						// Before the first heartbeat, lastHeartbeat dates registration,
+						// not liveness. Only the rebuild deadline bounds that wait.
+						if p.links != nil && p.links.entries[w.name] != nil && !excluded[w.addr] &&
+							(o.linkDown || o.livenessUnknown) && !o.dead && !o.draining && !o.recovering &&
+							(o.livenessUnknown || m.observationTime().Sub(o.lastHeartbeat) < p.config.DeadAfter) {
+							returning = true
+						}
+					}
+					p.mu.Unlock()
+					if returning {
+						if waitErr := m.waitForTarget(ctx, pending); waitErr != nil && !errors.Is(waitErr, ErrTargetWaitExpired) {
+							return
+						}
+						continue
+					}
+				}
 				noTargetAttempts++
 				if noTargetAttempts == maxResumeAttempts {
 					cause := pickErr
@@ -426,6 +453,10 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			pending.lease = transferred
 			p.mu.Unlock()
 		}
+		if err = p.settleDeadRelayChange(ctx, transferred); err != nil {
+			p.unreserve(target)
+			return
+		}
 		// A planned hold may already have flushed to this target after its
 		// resume reply was lost. Confirmation must never replay its live input
 		// against the old export checkpoint. A different target can still replay.
@@ -435,7 +466,9 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			// as checkpoint preparation, including after a planned hold expires.
 			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, nil)
 			if gateErr == nil {
+				p.mu.Lock()
 				pending.replayPlan, pending.held = &plan, true
+				p.mu.Unlock()
 			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) && (!pending.held || !errors.Is(gateErr, relay.ErrHeld)) {
 				p.unreserve(target)
 				return
@@ -531,7 +564,9 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			pending.replayAnchors = anchors
 			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, inbound)
 			if gateErr == nil {
+				p.mu.Lock()
 				pending.replayPlan, pending.held = &plan, true
+				p.mu.Unlock()
 				pending.replayDuplicationWindow = max(pending.replayDuplicationWindow, pending.snapshotAge)
 			} else {
 				p.unreserve(target)
@@ -629,7 +664,9 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 					}
 					res.Result.RelayReplayRecoveryPLI = true
 				}
+				p.mu.Lock()
 				pending.held = false
+				p.mu.Unlock()
 			}
 			if pending.replayPlan == nil && (pending.planned || pending.held) {
 				// A margin-zero resume of the retained export is exact (ADR 0009).
@@ -693,6 +730,13 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		}
 		if agentFailure {
 			pending.agentFailure = err
+		}
+		if pending.unrequested && !pending.transientResume && errors.Is(err, agentv2.ErrIncompatibleAgent) {
+			// A definite incompatible refusal precedes any adjusted-state write and
+			// adoption, so uses no sequence/SRTCP/DTLS range. This includes
+			// v2 Restore refusals: Restore cannot send output. Each target is excluded
+			// below; targetDeadline bounds the search.
+			pending.attempts--
 		}
 		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, mediaworker.ErrDTLSSequenceExhausted) {
 			complete(true, err)
@@ -819,11 +863,30 @@ func (m *moveRecovery) complete(source *registration, c *call, lease sessionstor
 func (m *moveRecovery) finishPending(source *registration, id string) {
 	p := m.plane
 	p.mu.Lock()
+	if pending := m.pending[source][id]; pending != nil && pending.call.terminal {
+		m.retainCleanupLocked(pending.call, pending)
+	}
 	delete(m.pending[source], id)
 	if len(m.pending[source]) == 0 {
 		delete(m.pending, source)
 	}
 	p.mu.Unlock()
+}
+
+// retainCleanupLocked runs under the call and registry locks, before pending
+// removal or cleanup consumes the retained route and hold.
+func (m *moveRecovery) retainCleanupLocked(c *call, pending *moveTransfer) {
+	c.cleanupPlanned = c.cleanupPlanned || pending.held || pending.planned
+	routed := pending.routedLease
+	if routed.Epoch == 0 || sameTenure(routed, c.lossLease) {
+		return
+	}
+	for _, lease := range c.cleanupLeases {
+		if sameTenure(lease, routed) {
+			return
+		}
+	}
+	c.cleanupLeases = append(c.cleanupLeases, routed)
 }
 
 // Storage disappearance, no target, and unrelated resume errors are losses,
@@ -929,6 +992,14 @@ func (m *moveRecovery) rebuild(ctx context.Context, intent sessionstore.ControlI
 			if err := p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); err != nil {
 				return err
 			}
+			p.mu.Lock()
+			for source := range m.pending {
+				delete(m.pending[source], c.id)
+				if len(m.pending[source]) == 0 {
+					delete(m.pending, source)
+				}
+			}
+			p.mu.Unlock()
 			c.intent = nil
 			p.restartOutcome(intent.Kind, intent.ID, "live", "interrupted")
 			return nil
@@ -943,7 +1014,11 @@ func (m *moveRecovery) rebuild(ctx context.Context, intent sessionstore.ControlI
 			return fmt.Errorf("controlplane: unknown persisted owner %s", current.Worker)
 		}
 		p.mu.Lock()
+		var linkDeadline time.Time
 		for _, worker := range p.workers {
+			if prior := m.pending[worker][c.id]; prior != nil && prior.rebuilding {
+				linkDeadline = prior.targetDeadline
+			}
 			delete(m.pending[worker], c.id)
 			if len(m.pending[worker]) == 0 {
 				delete(m.pending, worker)
@@ -952,7 +1027,10 @@ func (m *moveRecovery) rebuild(ctx context.Context, intent sessionstore.ControlI
 		if m.pending[source] == nil {
 			m.pending[source] = map[string]*moveTransfer{}
 		}
-		m.pending[source][c.id] = &moveTransfer{call: c, lease: current, routed: current.Worker, routedLease: current, excluded: map[netip.AddrPort]bool{current.Worker: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: intent.Started}
+		if linkDeadline.IsZero() {
+			linkDeadline = m.observationTime().Add(takeoverBudget)
+		}
+		m.pending[source][c.id] = &moveTransfer{call: c, lease: current, routed: current.Worker, routedLease: current, excluded: map[netip.AddrPort]bool{current.Worker: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: intent.Started, rebuilding: true, targetDeadline: linkDeadline}
 		p.mu.Unlock()
 		bounded, stop := context.WithTimeout(ctx, takeoverBudget)
 		result := m.continueLocked(bounded, source, c, current, time.Now())

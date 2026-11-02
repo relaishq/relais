@@ -30,6 +30,7 @@ const (
 
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
+	RelayChange bool // advertise relay-change support and open the event stream
 	// Freshness configures the caller's bounded recovery evaluation.
 	// Defaults stay strict (2s recovery + 3s stability), including under race.
 	// Acceptance callers such as #27 can set RecoveryLimit: 2*time.Second
@@ -95,11 +96,20 @@ const (
 // Call is one call made by the caller: a Pion PeerConnection that sends
 // pre-encoded Opus audio (and VP8 video) and records everything it observes.
 type Call struct {
-	harness *Harness
-	pc      *webrtc.PeerConnection
-	audio   *webrtc.TrackLocalStaticSample
-	video   *webrtc.TrackLocalStaticSample // nil for an audio-only call
-	rec     *recorder
+	relayRestartMu    sync.Mutex
+	relayGeneration   uint64
+	relayAttemptUntil time.Time
+	inboundMedia      atomic.Pointer[time.Time]
+	liveMedia         atomic.Bool
+	iceStalled        atomic.Bool
+
+	eventsCancel context.CancelFunc
+	restartErr   error
+	harness      *Harness
+	pc           *webrtc.PeerConnection
+	audio        *webrtc.TrackLocalStaticSample
+	video        *webrtc.TrackLocalStaticSample // nil for an audio-only call
+	rec          *recorder
 
 	audioSSRC   uint32
 	videoSSRC   uint32
@@ -230,7 +240,11 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 		default:
 		}
 	})
-	pc.OnICEConnectionStateChange(rec.iceConnectionState)
+	iceStalled := &call.iceStalled
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		rec.iceConnectionState(state)
+		iceStalled.Store(state == webrtc.ICEConnectionStateDisconnected || state == webrtc.ICEConnectionStateFailed)
+	})
 	pc.OnSignalingStateChange(rec.signalingState)
 	pc.OnNegotiationNeeded(rec.negotiationNeeded)
 	pc.OnTrack(call.onTrack)
@@ -251,7 +265,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 	call.offer = pc.LocalDescription().SDP
 	rec.offerAnswerExchange()
-	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer)
+	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer, opts.RelayChange)
 	if err != nil {
 		return call, err
 	}
@@ -265,6 +279,9 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	rec.markNegotiated()
 	call.localUfrag = iceUfrag(pc.LocalDescription())
 	call.remoteUfrag = iceUfrag(pc.RemoteDescription())
+	if opts.RelayChange {
+		call.startRelayEvents()
+	}
 
 	select {
 	case <-connected:
@@ -324,6 +341,7 @@ func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*web
 			if err != nil {
 				return
 			}
+			c.inboundMedia.Store(timePointer(time.Now()))
 			for range keyframeRequests(packets, ssrc) {
 				requestedAt := c.rec.keyframeRequestReceived(kind)
 				if kind == kindVideo && requestedAt != nil {
@@ -411,6 +429,7 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 				}
 				return
 			}
+			c.inboundMedia.Store(timePointer(arrived))
 			c.rec.packet(record, pkt, arrived)
 			if assembler != nil {
 				frames, n := assembler.pushAll(pkt, arrived)
@@ -437,6 +456,9 @@ func (c *Call) startReader(fn func()) {
 // SendMedia plays the pre-encoded media in real time, looping it, for the
 // given duration: Opus audio, and VP8 video when the call has video.
 func (c *Call) SendMedia(ctx context.Context, duration time.Duration) error {
+	c.inboundMedia.Store(timePointer(time.Now()))
+	c.liveMedia.Store(true)
+	defer c.liveMedia.Store(false)
 	end := time.Now().Add(duration)
 
 	var wg sync.WaitGroup
@@ -641,9 +663,12 @@ func (c *Call) close() error {
 		if c.recordingCancel != nil {
 			c.recordingCancel()
 		}
+		if c.eventsCancel != nil {
+			c.eventsCancel()
+		}
 		err := c.pc.Close()
 		c.readers.Wait()
-		c.closeErr = errors.Join(err, c.socket.close())
+		c.closeErr = errors.Join(err, c.socket.close(), c.restartErr)
 		c.harness.removeCall(c)
 	})
 

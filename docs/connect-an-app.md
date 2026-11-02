@@ -24,7 +24,7 @@ with mode 0700; `-state DIR` or `STATE_DIR` selects another directory. For a
 checkout using the defaults, set these in your backend shell:
 
 ```sh
-app_signal_url=https://127.0.0.1:34743
+app_signal_url=https://127.0.0.1:25743
 app_signal_cert=deploy/local/.relais-local/secrets/signal.pem
 app_signal_token_file=deploy/local/.relais-local/secrets/signal.token
 ```
@@ -38,7 +38,7 @@ If you followed the manual deployment recipe instead, keep its existing token
 and certificate. In that recipe's shell, use:
 
 ```sh
-app_signal_url=https://127.0.0.1:34743
+app_signal_url=https://127.0.0.1:25743
 app_signal_cert="$run_dir/frontend.pem"
 app_signal_token_file="$run_dir/app-signal.token"
 (umask 077; printf '%s\n' "$RELAIS_SIGNAL_TOKEN" > "$app_signal_token_file")
@@ -120,7 +120,7 @@ certificate handling, sanitization, and failure cases, and
 
 ## Start signal yourself
 
-Only use this section for your own topology with control at `127.0.0.1:34710`
+Only use this section for your own topology with control at `127.0.0.1:25710`
 and no signaling frontend already running. From the repository root:
 
 ```sh
@@ -128,7 +128,7 @@ signal_manual_dir="$(mktemp -d)"
 (umask 077; openssl rand -hex 32 > "$signal_manual_dir/token")
 ./bin/relais-signal \
   -listen=127.0.0.1:9443 \
-  -control=http://127.0.0.1:34710 \
+  -control=http://127.0.0.1:25710 \
   -advertise-ips=127.0.0.1 \
   -token-file="$signal_manual_dir/token" \
   -cert-out="$signal_manual_dir/frontend.pem"

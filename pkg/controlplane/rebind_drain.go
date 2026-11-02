@@ -20,6 +20,15 @@ func (p *Plane) saveRebindTarget(ctx context.Context, name string, target netip.
 	return p.controlRecord(ctx, "worker:"+name, saved)
 }
 func (p *Plane) beginRebind(ctx context.Context, w *registration, target netip.AddrPort) error {
+	p.mu.Lock()
+	current, unchanged := p.workers[w.name] == w, w.rebindTarget == target
+	p.mu.Unlock()
+	if !current {
+		return ErrWorkerLinkUnavailable
+	}
+	if unchanged {
+		return nil
+	}
 	if err := p.saveRebindTarget(ctx, w.name, target); err != nil {
 		return err
 	}
@@ -132,13 +141,13 @@ func (l *WorkerLinks) startRebindDrain(e *linkEntry, w *registration, target net
 func (l *WorkerLinks) cleanupReplacedRebind(ctx context.Context, w *registration, to netip.AddrPort) error {
 	p := l.plane
 	p.mu.Lock()
-	previous, from := w.previousAddr, w.addr
+	previous, from, target := w.previousAddr, w.addr, w.rebindTarget
 	p.mu.Unlock()
-	if !previous.IsValid() {
+	if !previous.IsValid() && !target.IsValid() {
 		return nil
 	}
 	for _, address := range []netip.AddrPort{previous, from} {
-		if address == to {
+		if !address.IsValid() || address == to {
 			continue
 		}
 		leases, err := p.store.ListByWorker(ctx, address)

@@ -238,15 +238,14 @@ func (p *Plane) AuthorityChanges() <-chan struct{} {
 // BeginShutdown pauses work while the lease keeper protects handlers that are
 // still draining. The caller cancels RunManaged only after handlers stop.
 func (p *Plane) BeginShutdown() {
+	if p.restart != nil {
+		p.restart.stopping.Store(true)
+		p.restart.ready.Store(false)
+		p.rebuildPhase("stopping", nil)
+	}
 	if p.links != nil {
 		p.links.Close()
 	}
-	if p.restart == nil {
-		return
-	}
-	p.restart.stopping.Store(true)
-	p.restart.ready.Store(false)
-	p.rebuildPhase("stopping", nil)
 }
 
 // A tenure owns its pending requests so a definitive loss can cancel them
@@ -749,6 +748,25 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		return err
 	}
 	for _, intent := range intents {
+		if strings.HasPrefix(intent.Kind, "relay-recovery") {
+			current, e := p.store.Get(ctx, intent.Lease.SessionID)
+			if errors.Is(e, sessionstore.ErrEnded) || errors.Is(e, sessionstore.ErrNotFound) || intent.Kind == "relay-recovery-complete" {
+				if e = p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); e != nil {
+					return e
+				}
+			} else if e != nil {
+				return e
+			} else {
+				c := p.rebuildCall(current)
+				c.stateMu.Lock()
+				c.relayCapable = intent.Kind == "relay-recovery"
+				c.stateMu.Unlock()
+				if _, e = p.relayRecoveryEpisode(ctx, c, intent.Started); e != nil {
+					return e
+				}
+			}
+			continue
+		}
 		if intent.Kind != "end" {
 			if err := p.recovery.rebuild(ctx, intent, observations); err != nil {
 				return err

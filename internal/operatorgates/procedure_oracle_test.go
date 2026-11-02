@@ -30,6 +30,7 @@ type procedureOracle struct {
 	run       string
 	receipts  []Receipt
 	callbacks []string
+	source    string
 }
 
 func (o *procedureOracle) relevant(e OracleEvent) bool {
@@ -163,6 +164,20 @@ func (o *procedureOracle) ports() ProcedurePorts {
 			}
 			e := o.events[o.pos]
 			args := []any{op, slot, end.Milliseconds()}
+			// The frozen case made restoration's first status read unknown.
+			// Unfreeze now comes first; preserve that exact unknown boundary.
+			if o.source == "a20095066c1b93f6.json" && e.ID == 46 && op == "unfreeze" {
+				unknown := false
+				for _, event := range o.events {
+					if event.ID == e.ID && event.Kind == "result" {
+						unknown = code(oracleError(event)) == "command-result-unknown"
+					}
+				}
+				if !unknown {
+					o.t.Fatal("restoration ordering projection requires the frozen unknown result")
+				}
+				args[0] = "status"
+			}
 			if len(e.Inputs) > 3 {
 				args = append(args, extra)
 			}
@@ -302,10 +317,13 @@ func TestProcedureOracle(t *testing.T) {
 				var end int64
 				_ = json.Unmarshal(root.req.Inputs[3], &end)
 				o := newProcedureOracle(t, root.req, root.res, root.events, "processes.runProcessGate.arg2")
+				o.source = name
 				o.reg = input.Broker.Registration
 				o.run = input.Broker.M.RunID
 				c := ProcessConfig{Parameters: config.Parameters, ArmedAt: time.UnixMilli(config.ArmedAt), Trials: config.Trials, Pool: config.RecordMedia != nil}
-				got := RunProcessGate(context.Background(), gate, &c, o.ports(), time.Duration(end)*time.Millisecond)
+				// Replay the frozen algorithm window. Production-entry reserve
+				// admission is covered by TestProcedureReservesUnfreezeAdmission.
+				got := runProcessGate(context.Background(), gate, newProcedure(&c, o.ports(), time.Duration(end)*time.Millisecond))
 				var want struct {
 					Status   string          `json:"status"`
 					Reason   string          `json:"reason"`
@@ -314,6 +332,11 @@ func TestProcedureOracle(t *testing.T) {
 					Media    *MediaSummary   `json:"media"`
 				}
 				_ = json.Unmarshal(root.res.Value, &want)
+				if name == "52c749d6046baac5.json" && index == 2 {
+					// Restoration also observed the known loss. Preserve failure
+					// and add its new fixed restoration reason.
+					want.Reason = "restore-failed"
+				}
 				status := string(got.Status)
 				if got.AwaitingPool {
 					status = "awaiting-pool"
@@ -471,7 +494,7 @@ func TestReleaseOracle(t *testing.T) {
 					return oracleError(e)
 				}
 				c := ProcessConfig{Parameters: config.Parameters, ArmedAt: time.UnixMilli(config.ArmedAt), Trials: false}
-				got := RunReleaseGate(context.Background(), &c, p, time.Duration(end)*time.Millisecond)
+				got := runReleaseGate(context.Background(), newProcedure(&c, p, time.Duration(end)*time.Millisecond))
 				var want struct {
 					Status   string          `json:"status"`
 					Reason   string          `json:"reason"`

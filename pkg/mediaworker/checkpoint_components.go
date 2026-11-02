@@ -54,38 +54,38 @@ func sameComponentMetadata(a, b *sessionstore.ComponentMetadata) bool {
 	}
 	return *a == *b
 }
-func (c *sessionCheckpoint) settleComponentWrite(ctx context.Context) error {
+func (c *sessionCheckpoint) settleComponentWrite(ctx context.Context) (func(), error) {
 	s := c.session
 	pending := c.componentPending
 	if pending == nil {
-		return nil
+		return nil, nil
 	}
 	store, ok := s.worker.cfg.Relay.Owners.(sessionstore.ComponentStore)
 	if !ok {
-		return sessionstore.ErrCheckpointLayout
+		return nil, sessionstore.ErrCheckpointLayout
 	}
 	tuple, err := store.ReadComponents(ctx, s.id)
 	if errors.Is(err, sessionstore.ErrCheckpointLayout) && pending.expected == nil {
 		c.failComponentPending()
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lease := c.currentComponentLease()
 	if tuple.Lease.Worker != lease.Worker || tuple.Lease.Epoch != lease.Epoch {
 		c.failComponentPending()
-		return sessionstore.ErrLeaseLost
+		return nil, sessionstore.ErrLeaseLost
 	}
 	if equalComponentBytes(tuple.Components, pending.components) {
 		c.componentMetadata = &tuple.Metadata
-		c.ackSnapshot(pending.pair, pending.next, pending.captured, pending.bytes, pending.intent)
+		notify := c.ackSnapshot(pending.pair, pending.next, pending.captured, pending.bytes, pending.intent)
 		c.componentPending = nil
-		return nil
+		return notify, nil
 	}
 	if sameComponentMetadata(&tuple.Metadata, pending.expected) {
 		c.failComponentPending()
-		return nil
+		return nil, nil
 	}
 	// An earlier command can land after its settlement read. Rebase only onto
 	// our own tenure. This is ordering evidence, not an acknowledgment of the
@@ -93,9 +93,9 @@ func (c *sessionCheckpoint) settleComponentWrite(ctx context.Context) error {
 	if tuple.Metadata.Owner == lease.Worker.String() && tuple.Metadata.OwnerEpoch == lease.Epoch {
 		c.componentMetadata = &tuple.Metadata
 		c.failComponentPending()
-		return nil
+		return nil, nil
 	}
-	return sessionstore.ErrStateSuperseded
+	return nil, sessionstore.ErrStateSuperseded
 }
 
 func (c *sessionCheckpoint) failComponentPending() {

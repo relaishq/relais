@@ -64,7 +64,7 @@ func TestV2SixteenConcurrentExports(t *testing.T) {
 		reg := agenthost.Registration{Name: "exports/v1", Factory: func(agent.FactoryArgs) agent.Agent {
 			return &exportAgent{entered: entered, release: release, resumed: &resumed, unknown: &unknown}
 		}}
-		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
+		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, callbackBudget: time.Second})
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		calls := make([]*Call, 0, 16)
@@ -82,8 +82,9 @@ func TestV2SixteenConcurrentExports(t *testing.T) {
 		}
 		done := make(chan error, 1)
 		go func() { _, err := sys.plane.Drain(ctx, "0"); done <- err }()
-		// Release callbacks before their 100 ms deadline even if a broken host only
-		// admits seven. The count is the exact concurrency regression assertion.
+		// Stop collecting well before the 1 s callback budget: admitted exports
+		// block until release, so a host that admits only seven stays at seven.
+		// The count is the exact concurrency regression assertion.
 		n := 0
 		timer := time.NewTimer(60 * time.Millisecond)
 	collect:

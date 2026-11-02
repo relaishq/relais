@@ -91,8 +91,11 @@ func run() error {
 	})
 	served := make(chan struct{})
 	serveErr := make(chan error, 1)
-	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, tracked) }()
-	defer func() { cancel(); <-served }()
+	// Keep command links and heartbeats available while BeginShutdown joins
+	// applied moves. The signal requests shutdown; it must not close their IO.
+	serveCtx, stopServe := context.WithCancel(context.WithoutCancel(ctx))
+	go func() { defer close(served); serveErr <- processrun.Serve(serveCtx, listener, tracked) }()
+	defer func() { stopServe(); cancel(); <-served }()
 	managed := make([]controlplane.FixedWorker, 0, len(fixed))
 	for _, worker := range fixed {
 		managed = append(managed, controlplane.FixedWorker{Name: worker.name, URL: worker.endpoint})
@@ -103,6 +106,7 @@ func run() error {
 	go func() { defer close(done); managedErr <- plane.RunManaged(managedCtx, managed) }()
 	defer func() {
 		plane.BeginShutdown()
+		stopServe()
 		cancel()
 		<-served
 		handlers.Wait()
@@ -144,6 +148,7 @@ awaitReady:
 	case err = <-managedErr:
 	}
 	plane.BeginShutdown()
+	stopServe()
 	cancel()
 	<-served
 	handlers.Wait()
