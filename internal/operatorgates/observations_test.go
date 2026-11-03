@@ -285,7 +285,8 @@ func TestRuntimeClockCacheOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, clock := fixtureSession(t)
-	runtime := &ProcessRuntime{Session: session}
+	var observed []clocks.Evidence
+	runtime := &ProcessRuntime{Session: session, ClockObserved: func(e clocks.Evidence) { observed = append(observed, e) }}
 	roots := procedureRoots(fixture, "processes.ProcessRuntime.verifyClocks")
 	if len(roots) != 4 {
 		t.Fatal("clock cache invocations changed")
@@ -362,7 +363,7 @@ func TestRuntimeClockCacheOracle(t *testing.T) {
 			}
 		}
 	}
-	if len(runtime.ClockSamples) != 2 {
-		t.Fatal("MUTATION: clock-cache refresh")
+	if len(runtime.ClockSamples) != 2 || len(observed) != 2 || observed[0].At != runtime.ClockSamples[0].At || observed[1].At != runtime.ClockSamples[1].At {
+		t.Fatal("MUTATION: clock-cache refresh and numeric retention")
 	}
 }

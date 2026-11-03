@@ -1,0 +1,85 @@
+package operatorgates
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/pkg/operator"
+)
+
+type numericFixtureJudge struct{ err error }
+
+func (j numericFixtureJudge) Judge(context.Context, operatorevidence.Pool) (operatorevidence.Summary, error) {
+	return operatorevidence.Summary{Status: operator.Inconclusive, UndecidedMetrics: []operatorevidence.UndecidedMetric{{Metric: "first_content", Causes: []string{"duration-bounds-uncertain"}}}}, j.err
+}
+
+type numericFailureWriter struct{}
+
+func (numericFailureWriter) Write([]byte) (int, error) { return 0, errors.New("write-failed") }
+
+func TestNumericTimingRecordingCannotChangeJudgeVerdictsOrReasons(t *testing.T) {
+	for _, err := range []error{nil, errors.New("judge-incomplete")} {
+		judge := numericFixtureJudge{err: err}
+		want, wantErr := judge.Judge(context.Background(), operatorevidence.Pool{})
+		recorder := &TimingRecorder{Writer: numericFailureWriter{}}
+		got, gotErr := (timingJudge{MediaJudge: judge, recorder: recorder}).Judge(context.Background(), operatorevidence.Pool{})
+		if got.Status != want.Status || got.UndecidedMetrics[0].Causes[0] != want.UndecidedMetrics[0].Causes[0] || gotErr != wantErr || recorder.Err() == nil {
+			t.Fatal("diagnostic I/O altered judgment", got, gotErr, recorder.Err())
+		}
+	}
+}
+
+func TestNumericTimingRecorderCapsSnapshotsAndClockRefreshes(t *testing.T) {
+	var output bytes.Buffer
+	r := &TimingRecorder{Writer: &output}
+	for i := range 20 {
+		// A later snapshot has a different numeric witness, so retaining the
+		// first sixteen snapshots cannot satisfy the final-state assertion.
+		phases := make([]operatorevidence.MediaInput, i+1)
+		for j := range phases {
+			phases[j].CallerJSONL = "{"
+		}
+		r.RecordPool(operatorevidence.Pool{Phases: phases})
+	}
+	for range 260 {
+		r.RecordClocks(clocks.Evidence{At: time.Unix(1, 0), Clocks: map[string]clocks.Sample{
+			"relay":         {Tracking: "private-label", MeasuredUnixNS: "1767225600000000000", ErrorBoundNS: 1234, RateErrorPPM: 0.25},
+			"private-label": {},
+		}})
+	}
+	r.Finish()
+	text := output.String()
+	var finalSnapshot struct {
+		Type     string                         `json:"type"`
+		Snapshot int                            `json:"snapshot"`
+		Final    bool                           `json:"final"`
+		Evidence operatorevidence.NumericTiming `json:"evidence"`
+	}
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		var row struct {
+			Type     string                         `json:"type"`
+			Snapshot int                            `json:"snapshot"`
+			Final    bool                           `json:"final"`
+			Evidence operatorevidence.NumericTiming `json:"evidence"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Type == "numeric-timing" {
+			finalSnapshot = row
+		}
+	}
+	if !finalSnapshot.Final || finalSnapshot.Snapshot != 20 || finalSnapshot.Evidence.UnavailableStreams != 20 {
+		t.Fatal("final cumulative snapshot was dropped", finalSnapshot)
+	}
+	if r.Err() != nil || strings.Count(text, `"type":"numeric-timing"`) != 16 || strings.Count(text, `"type":"host-clocks"`) != 256 || !strings.Contains(text, `"omitted_snapshots":4,"omitted_refreshes":4`) || strings.Contains(text, "private-label") || !strings.Contains(text, `"errorBoundNs":1234,"rateErrorPpm":0.25`) {
+		t.Fatal("numeric retention or redaction failed", r.Err())
+	}
+}

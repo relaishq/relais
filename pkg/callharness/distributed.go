@@ -56,6 +56,8 @@ type DurationInterval struct {
 // Union windows prove passes; intersection windows can prove failures. A
 // failure seen only in the uncertainty margin is inconclusive.
 type DistributedMeasurement struct {
+	// Timing is optional diagnostic evidence and never an input to a verdict.
+	Timing    *TimingEvidence             `json:"timing_evidence,omitempty"`
 	Durations map[string]DurationInterval `json:"durations,omitempty"`
 	// Evaluations counts start/end/floor cells, each checked against all first baselines.
 	Evaluations    int              `json:"evaluations"`
@@ -160,7 +162,7 @@ func distributedEventOrderingValid(move moveRecord, start, end TimeInterval) boo
 
 func (r *recorder) distributedMeasurement(move moveRecord, until time.Duration) *DistributedMeasurement {
 	e := move.event
-	d := &DistributedMeasurement{Outcome: "pass"}
+	d := &DistributedMeasurement{Outcome: "pass", Timing: &TimingEvidence{Version: 1, Start: ClockMappingEvidence{Probes: []MappingProbe{}, LowerProbe: -1, UpperProbe: -1}, End: ClockMappingEvidence{Probes: []MappingProbe{}, LowerProbe: -1, UpperProbe: -1}, Candidates: []ClassificationCandidate{}}}
 	defer func() {
 		if d.WindowOutcome == "" {
 			d.WindowOutcome = d.Outcome
@@ -184,12 +186,12 @@ func (r *recorder) distributedMeasurement(move moveRecord, until time.Duration) 
 		host = r.distributed.WorkerOffset
 	}
 	var err error
-	d.Start, err = r.distributed.Clock.Map(e.Start, host)
+	d.Start, err = r.distributed.Clock.mapEvent(e.Start, host, &d.Timing.Start)
 	if err != nil {
 		unknown(err.Error())
 		return d
 	}
-	d.End, err = r.distributed.Clock.Map(e.End, r.distributed.ControlOffset)
+	d.End, err = r.distributed.Clock.mapEvent(e.End, r.distributed.ControlOffset, &d.Timing.End)
 	if err != nil {
 		unknown(err.Error())
 		return d

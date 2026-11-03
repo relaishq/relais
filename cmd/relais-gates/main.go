@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -141,7 +142,11 @@ func runWithAdapter(startAdapter func(context.Context, string, []string) (*opera
 		flags.SetOutput(io.Discard)
 		directory := flags.String("spool", "", "agreed local blob spool")
 		configuration := flags.String("config", "", "private resource configuration JSON")
+		evidence := flags.String("timing-evidence", "", "new local numeric evidence JSONL file (default stderr)")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 {
+			return 2
+		}
+		if *evidence != "" && !filepath.IsAbs(*evidence) {
 			return 2
 		}
 		raw, err := os.ReadFile(*configuration)
@@ -163,13 +168,33 @@ func runWithAdapter(startAdapter func(context.Context, string, []string) (*opera
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		if operatorgates.ServeSequence(ctx, operatortransport.NewPipe(os.Stdin, os.Stdout), hello, (operatorgates.ResourceRunner{Config: config}).Run, root) != nil {
-			fmt.Fprintln(os.Stderr, "operator-session-incomplete")
-			return 1
+		var timingOutput io.Writer = os.Stderr
+		if *evidence != "" {
+			file, err := os.OpenFile(*evidence, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "operator-timing-evidence-unavailable")
+				return 1
+			}
+			defer file.Close()
+			timingOutput = file
 		}
-		return 0
+		timing := &operatorgates.TimingRecorder{Writer: timingOutput}
+		err = operatorgates.ServeSequence(ctx, operatortransport.NewPipe(os.Stdin, os.Stdout), hello, (operatorgates.ResourceRunner{Config: config, Timing: timing}).Run, root)
+		return sessionExitCode(err, timing.Err(), os.Stderr)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command")
 		return 2
 	}
+}
+
+// Diagnostic failures must not make the launcher discard a completed result.
+func sessionExitCode(sessionErr, timingErr error, stderr io.Writer) int {
+	if timingErr != nil {
+		fmt.Fprintln(stderr, "operator-timing-evidence-incomplete")
+	}
+	if sessionErr != nil {
+		fmt.Fprintln(stderr, "operator-session-incomplete")
+		return 1
+	}
+	return 0
 }

@@ -619,6 +619,12 @@ func TestDistributedReportEvidenceEquivalent(t *testing.T) {
 				newView := r.measurementSnapshot(r.hungUpAt, len(r.moves))
 				expected := oldView.legacyMeasureMoves(r.hungUpAt, len(r.moves))
 				actual := newView.measureMoves(r.hungUpAt, len(r.moves))
+				// The reference predates optional diagnostics. Compare its complete
+				// policy evidence unchanged; numeric retention has its own proof.
+				for i := range expected {
+					expected[i].Distributed.Timing = nil
+					actual[i].Distributed.Timing = nil
+				}
 				require.Equal(t, expected, actual)
 				a, ca := JudgeDistributedTrials(expected)
 				b, cb := JudgeDistributedTrials(actual)
@@ -643,6 +649,10 @@ func TestDistributedReportBudgetEvidenceEquivalent(t *testing.T) {
 	newView := r.measurementSnapshot(r.hungUpAt, len(r.moves))
 	expected := oldView.legacyMeasureMoves(r.hungUpAt, len(r.moves))
 	actual := newView.measureMoves(r.hungUpAt, len(r.moves))
+	for i := range expected {
+		expected[i].Distributed.Timing = nil
+		actual[i].Distributed.Timing = nil
+	}
 	require.Equal(t, expected, actual)
 	capped := 0
 	for _, m := range actual {

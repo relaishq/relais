@@ -174,7 +174,7 @@ func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init)
 	adapter := &Adapter{Topology: r.topology, Containers: r.deployment.ContainerIDs(), Runner: r.runner, Diagnostics: r.diagnostics, Caller: &callerResources{r: r}, Mailbox: mailboxResources{store: r.store, spool: root}}
 	init.Capabilities = adapter.Capabilities()
 	config := operatorgates.ResourceConfig{Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: r.judge.pinned.Binary, CallerIDBase: uint64(len(r.units) + 1), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
-	runner := operatorgates.ResourceRunner{Config: config, Judge: r.judge, Started: func(s *operatorgates.Session) {
+	runner := operatorgates.ResourceRunner{Config: config, Judge: r.judge, Timing: &operatorgates.TimingRecorder{Writer: r.diagnostics}, Started: func(s *operatorgates.Session) {
 		r.session = s
 		r.judge.note = s.RecordUncertainty
 		s.SetObservationFailureSink(r.preconditionDiagnostic)

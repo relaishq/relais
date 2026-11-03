@@ -79,7 +79,8 @@ func TestSessionBinaryUsesResourceSequence(t *testing.T) {
 			if err := os.WriteFile(config, raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			peer, err := operatortransport.Start(ctx, binary, []string{"session", "-config", config})
+			timingEvidence := filepath.Join(t.TempDir(), "timing.jsonl")
+			peer, err := operatortransport.Start(ctx, binary, []string{"session", "-config", config, "-timing-evidence", timingEvidence})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -187,6 +188,12 @@ func TestSessionBinaryUsesResourceSequence(t *testing.T) {
 			_ = peer.Close()
 			if err = peer.Wait(); err != nil {
 				t.Fatal(err)
+			}
+			// The explicit evidence file is separate from protocol stdout, even
+			// when the fixture stops before a media pool can be judged.
+			timingRaw, err := os.ReadFile(timingEvidence)
+			if err != nil || !bytes.Contains(timingRaw, []byte(`"type":"numeric-timing-end"`)) {
+				t.Fatal("numeric evidence file was not retained", err)
 			}
 			expected := append([]string{}, fixture.ExpectedUnknownStart...)
 			if mode == "unknown-create" {

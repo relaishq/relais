@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 )
@@ -213,8 +214,16 @@ func (c *ClockTracker) Add(p ClockProbe) error {
 // can provide a tighter bound than the nearest probe; repeated measurements
 // never assume symmetric one-way latency or divide the full bound by two.
 func (c *ClockTracker) Map(server time.Time, host OffsetInterval) (TimeInterval, error) {
+	return c.mapEvent(server, host, nil)
+}
+
+func (c *ClockTracker) mapEvent(server time.Time, host OffsetInterval, evidence *ClockMappingEvidence) (TimeInterval, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if evidence != nil {
+		*evidence = ClockMappingEvidence{Server: server, Host: host, DriftPPM: c.ppm, Probes: []MappingProbe{}, LowerProbe: -1, UpperProbe: -1}
+		defer func() { evidence.OmittedProbes = len(c.probes) - len(evidence.Probes) }()
+	}
 	if c.invalid != nil {
 		return TimeInterval{}, c.invalid
 	}
@@ -222,7 +231,8 @@ func (c *ClockTracker) Map(server time.Time, host OffsetInterval) (TimeInterval,
 		return TimeInterval{}, errors.New("clock mapping unavailable")
 	}
 	var mapped TimeInterval
-	for _, p := range c.probes {
+	var lowerProbe, upperProbe MappingProbe
+	for index, p := range c.probes {
 		probe, _ := p.Offset()
 		combined, err := probe.Compose(host)
 		if err != nil {
@@ -234,20 +244,40 @@ func (c *ClockTracker) Map(server time.Time, host OffsetInterval) (TimeInterval,
 		if distance >= float64(math.MaxInt64) {
 			return TimeInterval{}, errors.New("clock anchor distance overflow")
 		}
+		before := combined
 		combined, err = combined.Widen(time.Duration(distance), c.ppm)
 		if err != nil {
 			return TimeInterval{}, err
 		}
 		sample := combined.Map(server)
+		var row MappingProbe
+		if evidence != nil {
+			row = MappingProbe{Index: index, Probe: p, Residual: probe, ResidualWidth: probe.Upper - probe.Lower, AnchorDistance: time.Duration(distance), Drift: before.Lower - combined.Lower, Age: OffsetInterval{Lower: sample.Earliest.Sub(p.CallerSend), Upper: sample.Latest.Sub(p.CallerSend)}}
+			if index < MaxTimingProbesPerEndpoint-2 {
+				evidence.Probes = append(evidence.Probes, row)
+			}
+		}
 		if mapped.Earliest.IsZero() || sample.Earliest.After(mapped.Earliest) {
 			mapped.Earliest = sample.Earliest
+			lowerProbe = row
 		}
 		if mapped.Latest.IsZero() || sample.Latest.Before(mapped.Latest) {
 			mapped.Latest = sample.Latest
+			upperProbe = row
 		}
 	}
 	if mapped.Latest.Before(mapped.Earliest) {
 		return TimeInterval{}, errors.New("clock probes disagree after drift widening")
+	}
+	if evidence != nil {
+		for _, row := range []MappingProbe{lowerProbe, upperProbe} {
+			if !slices.ContainsFunc(evidence.Probes, func(p MappingProbe) bool { return p.Index == row.Index }) {
+				evidence.Probes = append(evidence.Probes, row)
+			}
+		}
+		evidence.LowerProbe, evidence.UpperProbe = lowerProbe.Index, upperProbe.Index
+		evidence.OmittedProbes = len(c.probes) - len(evidence.Probes)
+		evidence.Mapped = mapped
 	}
 	return mapped, nil
 }

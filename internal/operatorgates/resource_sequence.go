@@ -43,6 +43,7 @@ type ResourceResult struct {
 }
 type ResourceRunner struct {
 	Config ResourceConfig
+	Timing *TimingRecorder
 	// Sleep supplies procedure and mailbox waits; nil uses real elapsed time.
 	Sleep func(context.Context, time.Duration) error
 	// These hooks retain local diagnostics and evidence for the rehearsal. They
@@ -108,6 +109,9 @@ func resourcePause(ctx context.Context, d time.Duration) error {
 	}
 }
 func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operator.GateResult {
+	if r.Timing != nil {
+		defer r.Timing.Finish()
+	}
 	if r.Started != nil {
 		r.Started(s)
 	}
@@ -132,8 +136,14 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	if judge == nil {
 		judge = operatorevidence.PinnedJudge{Commit: s.scenario.Judge.SourceCommit, SHA256: s.scenario.Judge.SHA256, Binary: c.JudgeBinary}
 	}
+	if r.Timing != nil {
+		judge = timingJudge{MediaJudge: judge, recorder: r.Timing}
+	}
 	process := &ProcessConfig{Parameters: c.Parameters, ArmedAt: time.UnixMilli(s.Budget.armed), Trials: true, Pool: true}
 	runtime := &ProcessRuntime{Session: s, Peer: peer, Config: process, Architecture: c.Architecture, Pins: c.Pins, Bounds: &c.Bounds}
+	if r.Timing != nil {
+		runtime.ClockObserved = r.Timing.RecordClocks
+	}
 	pool := &EvidenceRuntime{RunID: c.Endpoints.RunID, Judge: judge}
 	var launchers resourceCallers
 	var boundary *operatorcaller.Broker

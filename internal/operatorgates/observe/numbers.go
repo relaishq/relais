@@ -125,6 +125,11 @@ func Numbers(value any) error {
 			}
 			for i := 0; i < v.NumField(); i++ {
 				field := typ.Field(i)
+				// Numeric timing diagnostics include signed ages and mapping inputs.
+				// They never enter policy arithmetic or its representability budget.
+				if product && typ.Name() == "DistributedMeasurement" && field.Name == "Timing" {
+					continue
+				}
 				if field.PkgPath != "" {
 					continue
 				}
