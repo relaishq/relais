@@ -17,6 +17,7 @@ type relayEpisode struct {
 	done                          chan struct{}
 	once                          sync.Once
 	running, loaded, cleanupReady bool // guarded by relayEpisodeMu
+	persisted                     bool // guarded by relayEpisodeMu
 	completed                     atomic.Bool
 }
 
@@ -81,7 +82,11 @@ func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time
 		}
 		e.loaded = true
 	}
-	return e, journal.PutControlIntent(ctx, e.intent)
+	err := journal.PutControlIntent(ctx, e.intent)
+	if err == nil {
+		e.persisted = true
+	}
+	return e, err
 }
 
 func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {

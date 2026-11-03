@@ -81,6 +81,15 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 	if binding.lostAt.IsZero() {
 		binding.lostAt = time.Now()
 	}
+	if binding.lossUnaffected == nil {
+		binding.lossUnaffected = make(map[string]bool)
+	}
+	// Keep the retry cache bounded by calls still tracked by this plane.
+	for id := range binding.lossUnaffected {
+		if p.calls[id] == nil {
+			delete(binding.lossUnaffected, id)
+		}
+	}
 	binding.lost = true
 	p.relaySet[slot] = binding
 	var slots []mediaworker.RelaySlot
@@ -119,34 +128,70 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 	}
 	wg.Wait()
 	close(out)
-	var err error
+	var cutoffErr error
 	for e := range out {
-		err = errors.Join(err, e)
+		cutoffErr = errors.Join(cutoffErr, e)
 	}
-	if err != nil {
-		return err
+	if cutoffErr != nil {
+		// Unsupported calls cannot recover through another relay. Arm their
+		// detection-based watchdog even while an unfenced worker blocks cut-off.
+		pending := calls[:0]
+		for _, c := range calls {
+			c.stateMu.Lock()
+			capable := c.relayCapable
+			c.stateMu.Unlock()
+			c.relayEpisodeMu.Lock()
+			armed := c.relayEpisode != nil && c.relayEpisode.persisted && !c.relayEpisode.completed.Load()
+			c.relayEpisodeMu.Unlock()
+			p.mu.Lock()
+			terminal := c.terminal || c.hungUp.Load()
+			unaffected := binding.lossUnaffected[c.id]
+			p.mu.Unlock()
+			if !capable && !terminal && !armed && !unaffected {
+				pending = append(pending, c)
+			}
+		}
+		calls = pending
+		if len(calls) == 0 {
+			return cutoffErr
+		}
+	} else {
+		p.mu.Lock()
+		binding := p.relaySet[slot]
+		binding.lossUnaffected = nil
+		p.relaySet[slot] = binding
+		p.mu.Unlock()
 	}
-	// Cut-off needs no call/store lookups. Once acknowledged, share one journal
-	// snapshot and bound initialization I/O; recovery drivers still start together.
-	records, err := p.store.(sessionstore.ControlStore).ControlIntents(ctx)
-	if err != nil {
-		return err
+	// Share one journal snapshot and bound initialization I/O. Recovery drivers
+	// start together only after cut-off; unsupported watchdogs need no cut-off.
+	records, listErr := p.store.(sessionstore.ControlStore).ControlIntents(ctx)
+	if listErr != nil {
+		return errors.Join(cutoffErr, listErr)
 	}
 	journal := make(map[string]sessionstore.ControlIntent, len(records))
 	for _, record := range records {
 		journal[record.ID] = record
 	}
+	err := cutoffErr
 	jobs := make(chan *call)
 	callErrors := make(chan error, len(calls))
 	for range min(len(calls), p.config.TakeoverParallelism) {
 		wg.Go(func() {
 			for c := range jobs {
 				_, assignment, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id)
+				// NotFound can be an expired owner waiting for takeover; retry that lookup.
+				if cutoffErr != nil && (errors.Is(e, sessionstore.ErrEnded) || e == nil && assignment.Slot != slot && assignment.Pending != slot) {
+					// No placement or planned change can assign a call to a lost slot.
+					p.mu.Lock()
+					binding.lossUnaffected[c.id] = true
+					p.mu.Unlock()
+					continue
+				}
 				if errors.Is(e, sessionstore.ErrNotFound) || errors.Is(e, sessionstore.ErrEnded) {
 					continue
 				}
 				if e == nil && (assignment.Slot == slot || assignment.Pending == slot) {
-					if _, e = p.relayRecoveryEpisode(ctx, c, binding.lostAt, journal); e == nil {
+					if _, e = p.relayRecoveryEpisode(ctx, c, binding.lostAt, journal); e == nil && cutoffErr == nil {
 						c.controlMu.Lock()
 						if c.relayCancel != nil && (!c.relayUnplanned || c.relayTarget == slot) {
 							c.relayCancel()
