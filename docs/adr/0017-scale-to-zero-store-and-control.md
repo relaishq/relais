@@ -1,6 +1,6 @@
 # ADR 0017: Scale-to-zero control and the store seam
 
-Status: **Proposed** 2026-10-29. Revised 2026-11-02 (owner decision: store outside scale to zero; store seam with two guarantee levels).
+Status: **Accepted** 2026-11-02 by the project lead (proposed 2026-10-29; revised 2026-11-02 (owner decision: store outside scale to zero; store seam with two guarantee levels)).
 Part of [#279](https://github.com/relaishq/relais/issues/279) and the
 [#275](https://github.com/relaishq/relais/issues/275) scale-to-zero profile.
 Code baseline: `9496c10`. This is a design draft. This ADR implements no new
