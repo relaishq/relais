@@ -22,11 +22,12 @@ import (
 var ErrRelayRolledBack = errors.New("controlplane: relay_change_rolled_back")
 
 type RelayBinding struct {
-	Slot     mediaworker.RelaySlot
-	Relay    Relay
-	draining bool
-	lost     bool
-	lostAt   time.Time
+	Slot           mediaworker.RelaySlot
+	Relay          Relay
+	draining       bool
+	lost           bool
+	lostAt         time.Time
+	lossUnaffected map[string]bool // guarded by Plane.mu
 }
 type relayChangeWorker interface {
 	ConfigureRelays(context.Context, []mediaworker.RelaySlot) error
