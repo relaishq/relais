@@ -334,8 +334,21 @@ func TestOwnerChangeMovesTheCallOnlyOnceTheNewOwnerAnswers(t *testing.T) {
 
 	transferTestLease(t, sys.cfg.Owners, sessionA, newOwner.addr())
 	consent := bindingRequest(t, sessionA)
+	oldOwner.onReceiveTimeout = func() {
+		t.Logf("owner-change receive timeout: relay stats: %+v", sys.relay.Stats())
+		t.Logf("test-side packets: caller sent=%d received=%d; old owner sent=%d received=%d; new owner sent=%d received=%d",
+			caller.sent, caller.received, oldOwner.sent, oldOwner.received, newOwner.sent, newOwner.received)
+		datagram, ok := receive(t, newOwner.conn, quietPeriod)
+		t.Logf("new owner diagnostic receive: datagram arrived=%t", ok)
+		if ok {
+			gotCaller, gotPkt, err := ParseHeader(datagram)
+			t.Logf("new owner diagnostic datagram: parse error=%v; caller matches=%t; consent matches=%t",
+				err, err == nil && gotCaller == caller.addr(), err == nil && bytes.Equal(gotPkt, consent))
+		}
+	}
 	caller.send(t, consent, sys.relay.PublicAddr())
 	oldOwner.expect(t, caller.addr(), consent, "the check that finds the new owner")
+	oldOwner.onReceiveTimeout = nil
 	require.Eventually(t, func() bool { return sys.relay.Stats().PendingFlows == 1 }, receiveTimeout, time.Millisecond,
 		"new owner proposed")
 
@@ -709,7 +722,9 @@ func (s *testSystem) confirm(t *testing.T, w *testWorker, c *testCaller, request
 
 // testWorker plays a media worker on the relay leg.
 type testWorker struct {
-	conn *net.UDPConn
+	conn             *net.UDPConn
+	sent, received   int
+	onReceiveTimeout func()
 }
 
 func (w *testWorker) addr() netip.AddrPort {
@@ -730,7 +745,11 @@ func (w *testWorker) expectAny(t *testing.T, caller netip.AddrPort, msgAndArgs .
 	t.Helper()
 
 	datagram, ok := receive(t, w.conn, receiveTimeout)
+	if !ok && w.onReceiveTimeout != nil {
+		w.onReceiveTimeout()
+	}
 	require.True(t, ok, msgAndArgs...)
+	w.received++
 	gotCaller, gotPkt, err := ParseHeader(datagram)
 	require.NoError(t, err, msgAndArgs...)
 	require.Equal(t, caller, gotCaller, msgAndArgs...)
@@ -742,6 +761,9 @@ func (w *testWorker) expectNothing(t *testing.T) {
 	t.Helper()
 
 	datagram, ok := receive(t, w.conn, quietPeriod)
+	if ok {
+		w.received++
+	}
 	require.False(t, ok, "worker received %d bytes", len(datagram))
 }
 
@@ -750,11 +772,13 @@ func (w *testWorker) sendTo(t *testing.T, caller netip.AddrPort, pkt []byte, rel
 
 	_, err := w.conn.WriteToUDPAddrPort(append(AppendHeader(nil, caller), pkt...), relay)
 	require.NoError(t, err)
+	w.sent++
 }
 
 // testCaller plays a caller on the public side.
 type testCaller struct {
-	conn *net.UDPConn
+	conn           *net.UDPConn
+	sent, received int
 }
 
 func newTestCaller(t *testing.T) *testCaller {
@@ -772,6 +796,7 @@ func (c *testCaller) send(t *testing.T, pkt []byte, to netip.AddrPort) {
 
 	_, err := c.conn.WriteToUDPAddrPort(pkt, to)
 	require.NoError(t, err)
+	c.sent++
 }
 
 func (c *testCaller) expect(t *testing.T, from netip.AddrPort, pkt []byte) {
@@ -781,6 +806,7 @@ func (c *testCaller) expect(t *testing.T, from netip.AddrPort, pkt []byte) {
 	buf := make([]byte, maxDatagram)
 	n, gotFrom, err := c.conn.ReadFromUDPAddrPort(buf)
 	require.NoError(t, err)
+	c.received++
 	require.Equal(t, from, unmap(gotFrom), "packet source")
 	require.Equal(t, pkt, buf[:n])
 }
@@ -789,6 +815,9 @@ func (c *testCaller) expectNothing(t *testing.T) {
 	t.Helper()
 
 	datagram, ok := receive(t, c.conn, quietPeriod)
+	if ok {
+		c.received++
+	}
 	require.False(t, ok, "caller received %d bytes", len(datagram))
 }
 
