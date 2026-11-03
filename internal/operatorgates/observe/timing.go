@@ -5,6 +5,13 @@ import "strings"
 // TimingCause projects a diagnostic reason to its fixed public code. It never
 // participates in the product judge's verdict or threshold comparisons.
 func TimingCause(reason string) string {
+	// EventMeasurement.updateJudgment adds exactly these metric names.
+	for _, prefix := range []string{"audio loss: ", "video loss: ", "audio freshness: ", "video freshness: ", "resume: ", "first content: ", "first new content: ", "first live: "} {
+		if rest, ok := strings.CutPrefix(reason, prefix); ok {
+			reason = rest
+			break
+		}
+	}
 	switch {
 	case strings.Contains(reason, "classification changes within event-time interval;"):
 		return "classification-varies-with-clock-interval"
@@ -29,7 +36,7 @@ func TimingCause(reason string) string {
 	case strings.Contains(reason, "content loss not proven across clock interval"):
 		return "content-loss-unproven"
 	}
-	// The product emits an inconclusive row when trusted coverage is below 80%.
+	// Preserve the existing rehearsal fallback for all other reasons.
 	return "trusted-coverage-below-80-percent"
 }
 
