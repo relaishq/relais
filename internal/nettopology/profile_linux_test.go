@@ -4,6 +4,7 @@ package nettopology
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -51,46 +52,56 @@ func TestLinuxProfilesApplyMeasureAndCleanUp(t *testing.T) {
 	require.NoError(t, err)
 	defer caller.Close()
 	for _, name := range []string{"region", "far-caller", "lossy-dc", "lan"} {
-		settings, err := topology.ApplyProfile(ctx, name)
-		require.NoError(t, err)
-		for _, s := range settings {
-			if s.Delay > 0 {
-				require.Contains(t, s.Qdisc, "netem")
-			} else {
-				require.NotContains(t, s.Qdisc, "netem")
-			}
-		}
-		// Loss is stochastic; use eight attempts and test the mean of actual
-		// replies. Bounds detect doubled RTT or a shaping path that was bypassed.
-		var samples []time.Duration
-		for i := 0; i < 8; i++ {
-			require.NoError(t, caller.SetDeadline(time.Now().Add(350*time.Millisecond)))
-			start := time.Now()
-			_, err := caller.WriteTo([]byte{byte(i)}, net.UDPAddrFromAddrPort(endpoint))
+		t.Run(name, func(t *testing.T) {
+			var samples []time.Duration
+			defer func() {
+				if !t.Failed() {
+					return
+				}
+				t.Logf("profile=%s raw_rtt_samples=%v", name, samples)
+				diagnosticCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				for _, ns := range []string{topology.Plan.FabricNamespace, topology.Plan.Roles["caller"].Namespace, topology.Plan.Roles["relay"].Namespace} {
+					output, err := runCommand(diagnosticCtx, Command{"ip", "netns", "exec", ns, "tc", "-s", "qdisc", "show"})
+					t.Logf("namespace=%s qdisc:\n%s\nerror=%v", ns, output, err)
+				}
+			}()
+			settings, err := topology.ApplyProfile(ctx, name)
 			require.NoError(t, err)
-			var b [100]byte
-			_, _, err = caller.ReadFrom(b[:])
-			if err == nil {
-				samples = append(samples, time.Since(start))
+			for _, s := range settings {
+				if s.Delay > 0 {
+					require.Contains(t, s.Qdisc, "netem")
+				} else {
+					require.NotContains(t, s.Qdisc, "netem")
+				}
 			}
-		}
-		require.GreaterOrEqual(t, len(samples), 4)
-		// Fixed region delay is 10ms in each direction. Far caller has ±10ms
-		// in each direction; allow Linux timer granularity without hiding 2x RTT.
-		var sum time.Duration
-		for _, sample := range samples {
-			sum += sample
-		}
-		mean := sum / time.Duration(len(samples))
-		if name == "region" {
-			require.Greater(t, mean, 17*time.Millisecond)
-			require.Less(t, mean, 45*time.Millisecond)
-		}
-		if name == "far-caller" {
-			require.Greater(t, mean, 110*time.Millisecond)
-			require.Less(t, mean, 230*time.Millisecond)
-		}
-		t.Logf("profile=%s measured_rtt=%s replies=%d/8", name, mean, len(samples))
+			// Loss is stochastic; use eight attempts and test the median of matched
+			// replies. Bounds detect doubled RTT or a shaping path that was bypassed.
+			for i := 0; i < 8; i++ {
+				probe := []byte(fmt.Sprintf("%s/%d", name, i))
+				rtt, err := profileProbeRTT(caller, net.UDPAddrFromAddrPort(endpoint), probe)
+				if err == nil {
+					samples = append(samples, rtt)
+				} else {
+					var networkError net.Error
+					require.ErrorAs(t, err, &networkError)
+					require.True(t, networkError.Timeout(), "probe failed: %v", err)
+				}
+			}
+			require.GreaterOrEqual(t, len(samples), 4)
+			// Fixed region delay is 10ms in each direction. Far caller has ±10ms
+			// in each direction; allow Linux timer granularity without hiding 2x RTT.
+			median := profileMedianRTT(samples)
+			if name == "region" {
+				require.Greater(t, median, 17*time.Millisecond)
+				require.Less(t, median, 45*time.Millisecond)
+			}
+			if name == "far-caller" {
+				require.Greater(t, median, 110*time.Millisecond)
+				require.Less(t, median, 230*time.Millisecond)
+			}
+			t.Logf("profile=%s median_rtt=%s replies=%d/8", name, median, len(samples))
+		})
 	}
 	rootAfter, err := runCommand(ctx, Command{"tc", "qdisc", "show"})
 	require.NoError(t, err)
