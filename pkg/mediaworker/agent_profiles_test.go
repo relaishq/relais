@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pion/logging"
 	"github.com/relaishq/relais/internal/agenthost"
@@ -101,6 +102,11 @@ func TestLegacyRestoreMeasuresActualSizeOnlyOnSplitWorkers(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, source.Close()) })
 	call, peer := dialDTLSCaller(t, source)
 	defer func() { _ = peer.Close() }()
+	// Export only after the source handled Started. Otherwise the target would
+	// handle it, grow past the small cap, roll back with a second Restore and close.
+	sess := source.session(call.id)
+	require.NotNil(t, sess)
+	require.Eventually(t, func() bool { sess.mu.Lock(); defer sess.mu.Unlock(); return sess.state.Agent.V2.Started }, 5*time.Second, time.Millisecond)
 	data, err := source.ExportSession(call.id)
 	require.NoError(t, err)
 	snap, err := decodeSnapshot(data)
