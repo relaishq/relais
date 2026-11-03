@@ -234,9 +234,22 @@ func TestDistributedEndAxisInteriorClassification(t *testing.T) {
 	for _, end := range []time.Duration{1750 * time.Millisecond, 1850 * time.Millisecond} {
 		require.True(t, point(end).FirstContentVerdict.Trusted)
 	}
-	report := MoveReport{Kind: "move", Start: 1500 * time.Millisecond, End: 1800 * time.Millisecond, Receipt: r.moves[0].event, Measurement: point(1800 * time.Millisecond), Distributed: &DistributedMeasurement{Mapped: true, WindowOutcome: "pass", Start: TimeInterval{Earliest: t0.Add(1500 * time.Millisecond), Latest: t0.Add(1500 * time.Millisecond)}, End: TimeInterval{Earliest: t0.Add(1750 * time.Millisecond), Latest: t0.Add(1850 * time.Millisecond)}, AudioLoss: MetricVerdict{Trusted: true}, VideoLoss: MetricVerdict{Trusted: true}}}
+	report := MoveReport{Kind: "move", Start: 1500 * time.Millisecond, End: 1800 * time.Millisecond, Receipt: r.moves[0].event, Measurement: point(1800 * time.Millisecond), Distributed: &DistributedMeasurement{Timing: &TimingEvidence{Version: 1}, Mapped: true, WindowOutcome: "pass", Start: TimeInterval{Earliest: t0.Add(1500 * time.Millisecond), Latest: t0.Add(1500 * time.Millisecond)}, End: TimeInterval{Earliest: t0.Add(1750 * time.Millisecond), Latest: t0.Add(1850 * time.Millisecond)}, AudioLoss: MetricVerdict{Trusted: true}, VideoLoss: MetricVerdict{Trusted: true}}}
 	r.prepareMeasurementIndex()
 	r.classifyDistributedEvent(&report, r.hungUpAt, DurationInterval{}, nil, true)
 	require.False(t, report.Measurement.FirstContentVerdict.Trusted)
 	require.Contains(t, strings.Join(report.Measurement.FirstContentVerdict.Reasons, ";"), "classification changes")
+	// The same interior cell that changes the verdict must retain the packet
+	// and decoded-frame witnesses, rather than only its passing class label.
+	found := false
+	for _, row := range report.Distributed.Timing.Candidates {
+		if row.Metric == "first_content" && row.Label == "keyframe" {
+			found = true
+			require.True(t, row.Changed.PacketResume)
+			require.True(t, row.Changed.DecodedFrame)
+			require.Equal(t, 1820*time.Millisecond, row.FrameDecoded)
+		}
+	}
+	require.True(t, found)
+	requireCandidateLabelsMatchFrames(t, r, report)
 }

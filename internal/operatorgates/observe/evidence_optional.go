@@ -46,6 +46,10 @@ func EvidenceOptionalLedger() map[string]string {
 }
 
 var evidenceOptional = map[string]string{
+	"callharness.ClassificationCandidate.StartRange":   "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
+	"callharness.ClassificationCandidate.EndRange":     "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
+	"callharness.TimingEvidence.PlannedSpan":           "Only planned moves apply the shared control-clock span allowance.",
+	"callharness.DistributedMeasurement.Timing":        "Optional numeric timing diagnostics do not qualify events or change verdicts. TimingEvidence.Version owns the inner schema: freeze version 1 fields; future additions require version-aware optionality so older evidence remains complete.",
 	"main.previewMediaInput.Gate":                      "Legacy inputs require trial collections; only an explicit relay-deploy gate can contribute a call without trials.",
 	"operatorevidence.MediaInput.Gate":                 "Legacy inputs require trial collections; only an explicit relay-deploy gate can contribute a call without trials.",
 	"loadgen.Message.CallID":                           "The product omits call index zero; inventory joins validate the decoded index.",

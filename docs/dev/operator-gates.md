@@ -1,6 +1,6 @@
 # Operator session core
 
-`relais-gates session -config FILE [-spool DIR]` accepts one init and runs the
+`relais-gates session -config FILE [-spool DIR] [-timing-evidence FILE]` accepts one init and runs the
 public `RunSequence` over JSON Lines on stdin/stdout. Stdout contains protocol
 frames only. The private JSON configuration supplies `parameters` (the existing
 process endpoints), two release `pins`, clock `bounds`, `architecture`,
@@ -11,6 +11,58 @@ release pins are bound to Init's scenario. No release build or download occurs
 inside a gate. `-spool` binds an agreed local blob directory without putting its
 path in artifacts. Configuration and the spool are local inputs, not public
 reports. `relais-gates version` emits the unchanged protocol-v1 hello.
+
+Numeric timing diagnostics are written as JSON Lines to stderr by default.
+`-timing-evidence FILE` requires an absolute path and writes a new local file
+with mode 0600; an existing file is never overwritten. Place this file outside
+any temporary state directory that the launcher deletes. The operator owns
+persistence of this output. Rehearsal uses the same recorder in its diagnostic
+log. A write error prints `operator-timing-evidence-incomplete` to stderr after
+the session. It does not change the session exit code or final result.
+
+Each `numeric-timing` record is a **cumulative** pool snapshot with a sequence
+number. Use the final snapshot (`final: true`) for totals. Phase, call and move
+are zero-based indexes in that snapshot. Event is the scheduled event index;
+-1 means that no unique join exists. These are never deployment identities. Every event
+retains mapped start/end lower/upper/width in nanoseconds since caller start,
+available metric duration bounds, and audio/video gap and baseline bounds.
+The optional version-1 `timing_evidence` caller section records the original
+mapping before planned-move correlation, host offset bounds, drift ppm, probe
+residual intervals, four probe timestamps, signed event-age intervals and the
+anchor distance and per-side drift allowance used for each mapping. The probes
+that set the intersection endpoints are identified by their numeric indexes.
+Both binding-probe indexes are -1 when mapping fails.
+The planned-move section records raw span, host allowance per side, rate input
+and the resulting span bounds, including the existing zero clamp.
+
+Content candidate rows retain each distinct label/trust/failure state for
+`first_content` and `first_new_content`. Each state also retains its minimum
+and maximum evaluated start and end. These optional ranges are absent in earlier
+version-1 records. Representative start/end, packet-resume,
+source-send, prior-receipt, keyframe-request and decoded-frame times, plus branch
+membership flags and explicit witness-change flags show which boundary changed
+when labels disagree. Change flags compare with the first row for that metric.
+They are representative cells, not a full replay history. `host-clocks` records retain
+error/rate measurements and measurement times for each actual four-host refresh;
+raw tracking text is removed. Only fixed host slots and content labels survive
+this projection. No deployment identities or addresses are included.
+
+Each event retains at most two gap rows and eight probes per endpoint (the
+first six plus the binding probes) and 16 candidate states shared across `first_content` and
+`first_new_content`. Each snapshot retains the latest rows in pool traversal
+order, up to 128 events and 1 MiB of event JSON payload. Earlier rows are evicted
+when either limit is reached. A session writes at most 15 intermediate snapshots
+plus the latest final snapshot, and 256 clock refreshes. The final snapshot is
+always written on completion, even after the intermediate snapshot cap is
+reached; omitted earlier snapshots are counted. Omitted gap rows, probes,
+candidate observations, events, snapshots and refreshes have explicit counters. A malformed caller stream has
+an `unavailable_streams` count. Older caller evidence can omit the optional
+section; mapping/duration fields already present are still projected. No
+protocol, result or existing evidence schema version changes. The optional
+section is not used by classifier agreement, thresholds or pooled policy.
+`TimingEvidence.Version` owns its inner schema. Version 1 fields stay fixed;
+future additions must use version-aware optionality so older evidence does not
+become incomplete.
 
 The optional result `diagnostics` array retains each gate's procedure completion
 and fixed reason code, media counters, pooled counters, pending qualification

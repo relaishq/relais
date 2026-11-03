@@ -32,6 +32,7 @@ type ProcessRuntime struct {
 	Architecture   string
 	Pins           []inventory.Pin
 	Bounds         *clocks.Bounds
+	ClockObserved  func(clocks.Evidence)
 	ClockSamples   []clocks.Evidence
 	BeforeMutation func(context.Context) error
 }
@@ -64,6 +65,9 @@ func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) er
 		return nil
 	}
 	e, err := r.Session.FreshClocks(ctx, r.Peer, *r.Bounds, end)
+	if r.ClockObserved != nil && !e.At.IsZero() {
+		r.ClockObserved(e)
+	}
 	if err == nil {
 		r.ClockSamples = append(r.ClockSamples, e)
 	}

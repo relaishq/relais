@@ -51,6 +51,9 @@ func completePoolFixture(t *testing.T) previewPoolInput {
 				c.Tracks[1].Video = &callharness.VideoReport{}
 				for j := range c.Moves {
 					v := &c.Moves[j]
+					// Optional timing diagnostics are supplied here so the recursive
+					// contract sweep covers their additive section deliberately.
+					v.Distributed.Timing = &callharness.TimingEvidence{Version: 1, Candidates: []callharness.ClassificationCandidate{{}}, PlannedSpan: &callharness.PlannedSpanEvidence{}, Start: callharness.ClockMappingEvidence{Probes: []callharness.MappingProbe{{}}}, End: callharness.ClockMappingEvidence{Probes: []callharness.MappingProbe{{}}}}
 					r := phase.Receipts[j]
 					v.Receipt = &callharness.DistributedEvent{Identity: r.Identity, Kind: r.Kind, Start: r.Start, End: r.End, Result: r.Result, Uncertain: r.Uncertain}
 					v.Result.DuplicateWindows = []agent.DuplicateWindow{{}}

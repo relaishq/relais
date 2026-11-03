@@ -405,6 +405,13 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 // to compare complete classification evidence against the reference algorithm.
 func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit time.Duration, floor DurationInterval, first []FirstBaselines, self bool, budget int) {
 	d := report.Distributed
+	if d.Timing != nil {
+		d.Timing.Candidates = []ClassificationCandidate{}
+		d.Timing.OmittedCandidates = 0
+		if report.Kind == "move" {
+			d.Timing.PlannedSpan = &PlannedSpanEvidence{Raw: report.Receipt.End.Sub(report.Receipt.Start), HostAllowance: r.distributed.ControlOffset.Upper - r.distributed.ControlOffset.Lower, DriftPPM: r.distributed.Clock.DriftPPM(), Bounds: r.plannedMoveSpan(report.Receipt)}
+		}
+	}
 	if r.prepared != nil {
 		clear(r.prepared.audioWork.cache)
 		clear(r.prepared.videoWork.cache)
@@ -489,6 +496,9 @@ func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit 
 					}
 				}
 				agreements[i].add(*v, label)
+				if i == 5 || i == 6 {
+					r.retainClassificationCandidate(d.Timing, contentMetricNames[i], *v, candidate, p, baselineFloor, limit)
+				}
 			}
 			measurementDurations(d.Durations, p, candidate, r, limit)
 			next := nextBaselineFloor(p, candidate, baselineFloor)
@@ -505,6 +515,8 @@ func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit 
 		if self {
 			d.FirstBaselines = []FirstBaselines{firstBaselinesOf(m)}
 		}
+		r.retainClassificationCandidate(d.Timing, "first_content", m.FirstContentVerdict, m, *report, floor.Lower, limit)
+		r.retainClassificationCandidate(d.Timing, "first_new_content", m.FirstNewContentVerdict, m, *report, floor.Lower, limit)
 		measurementDurations(d.Durations, *report, m, r, limit)
 		next := nextBaselineFloor(*report, m, floor.Lower)
 		d.BaselineFloor = DurationInterval{Lower: next, Upper: next}
