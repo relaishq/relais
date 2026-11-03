@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -38,12 +39,22 @@ func (h *Harness) RestartWorker(worker int) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	old := h.workers.list[worker]
-	fresh, err := mediaworker.New(mediaworker.Config{CheckpointEnvelope: t.checkpointEnvelope, LoggerFactory: t.loggerFactory, SnapshotInterval: t.snapshotInterval, SnapshotLimits: harnessSnapshotLimits(t.snapshotInterval),
+	cfg := mediaworker.Config{CheckpointEnvelope: t.checkpointEnvelope, LoggerFactory: t.loggerFactory, SnapshotInterval: t.snapshotInterval, SnapshotLimits: harnessSnapshotLimits(t.snapshotInterval),
 		Agent:      mediaworker.AgentConfig{CallbackTimeout: t.agentCallbackTimeout},
 		FrameCache: t.frames, DisableFrameCache: t.disableFrameCache, DisableResumePLI: t.disableResumePLI,
-		Relay: &mediaworker.RelayConfig{Addr: t.relay.WorkerAddr(), PublicAddr: t.relay.PublicAddr(), Owners: t.owners}})
+		Relay: &mediaworker.RelayConfig{Addr: t.relay.WorkerAddr(), PublicAddr: t.relay.PublicAddr(), Owners: t.owners}}
+	fresh, err := t.newWorker(cfg)
 	if err != nil {
 		return err
+	}
+	for slices.ContainsFunc(h.workers.list, func(w *mediaworker.Worker) bool { return w.LocalAddr() == fresh.LocalAddr() }) {
+		// Dead registrations outlive their sockets. Hold each rejected socket
+		// until return so the allocator cannot keep choosing the same port.
+		defer func(rejected *mediaworker.Worker) { _ = rejected.Close() }(fresh)
+		fresh, err = t.newWorker(cfg)
+		if err != nil {
+			return err
+		}
 	}
 	t.relay.AddWorker(fresh.LocalAddr())
 	if err := t.plane.Replace(strconv.Itoa(worker), fresh.LocalAddr(), fresh); err != nil {
