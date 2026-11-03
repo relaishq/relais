@@ -50,6 +50,7 @@ type relayTopology struct {
 	snapshotInterval     time.Duration
 	agentCallbackTimeout time.Duration
 	checkpointEnvelope   mediaworker.CheckpointEnvelope
+	newWorker            func(mediaworker.Config) (*mediaworker.Worker, error)
 
 	frames                              framecache.Store
 	disableFrameCache, disableResumePLI bool
@@ -62,7 +63,7 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 	if store == nil {
 		store = sessionstore.NewMemory()
 	}
-	topology := &relayTopology{owners: store, loggerFactory: opts.WorkerLoggerFactory}
+	topology := &relayTopology{owners: store, loggerFactory: opts.WorkerLoggerFactory, newWorker: mediaworker.New}
 	topology.frames = opts.FrameCache
 	if topology.frames == nil {
 		topology.frames = framecache.NewMemory(framecache.Limits{})
