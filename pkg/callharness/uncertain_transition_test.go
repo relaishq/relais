@@ -99,8 +99,9 @@ func TestRelayUncertainTransferSurvives(t *testing.T) {
 						require.NoError(t, moveErr)
 					}
 				} else {
+					killed := time.Now()
 					require.NoError(t, h.Kill(0))
-					waitTakeovers(t, ctx, h, 1)
+					waitTakeovers(t, ctx, h, 1, killed)
 				}
 				require.NoError(t, <-sent)
 				status, err := h.Status(ctx)

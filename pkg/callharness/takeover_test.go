@@ -2,8 +2,10 @@ package callharness_test
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,13 +17,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func waitTakeovers(t *testing.T, ctx context.Context, h *callharness.Harness, count int) controlplane.Status {
+func waitTakeovers(t *testing.T, ctx context.Context, h *callharness.Harness, count int, killed time.Time, detection ...time.Duration) controlplane.Status {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	var last controlplane.Status
+	var observations strings.Builder
+	var polls int
+	var lastPoll time.Duration
+	workers := map[string]controlplane.WorkerStatus{}
 	for time.Now().Before(deadline) {
 		status, err := h.Status(ctx)
 		require.NoError(t, err)
+		observed := time.Since(killed)
+		polls++
+		lastPoll = observed
+		if observations.Len() == 0 || len(status.Takeovers) != len(last.Takeovers) || len(status.Calls) != len(last.Calls) || (len(status.Calls) == 1 && len(last.Calls) == 1 && status.Calls[0].TakeoverCount != last.Calls[0].TakeoverCount) {
+			fmt.Fprintf(&observations, "\n  observed %s after kill: takeovers=%d calls=%d", observed, len(status.Takeovers), len(status.Calls))
+			for _, call := range status.Calls {
+				fmt.Fprintf(&observations, " call[%s].TakeoverCount=%d", call.ID, call.TakeoverCount)
+			}
+		}
+		for _, worker := range status.Workers {
+			previous, seen := workers[worker.Name]
+			if !seen || worker.Dead != previous.Dead || worker.Recovering != previous.Recovering {
+				fmt.Fprintf(&observations, "\n  observed %s after kill: worker[%s] Dead=%t Recovering=%t", observed, worker.Name, worker.Dead, worker.Recovering)
+			}
+			workers[worker.Name] = worker
+		}
 		last = status
 		if len(status.Takeovers) == count && len(status.Calls) == 1 && status.Calls[0].TakeoverCount == uint64(count) { //nolint:gosec // positive test count
 			ready := true
@@ -36,8 +58,34 @@ func waitTakeovers(t *testing.T, ctx context.Context, h *callharness.Harness, co
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("automatic takeover did not complete within 2 s; last control status: %+v", last)
+	var diagnostics strings.Builder
+	fmt.Fprintf(&diagnostics, "kill=%d elapsed=%s polls=%d last_poll=%s after kill; timestamps relative to kill (missing=unavailable)", count, time.Since(killed), polls, lastPoll)
+	if len(last.Takeovers) >= count {
+		res := last.Takeovers[count-1]
+		fmt.Fprintf(&diagnostics, "\n  takeover[%d] from=%s to=%s LastHeartbeat=%s DetectedAt=%s Start=%s End=%s Lost=%t Error=%q", count, res.From, res.To, takeoverOffset(killed, res.LastHeartbeat), takeoverOffset(killed, res.DetectedAt), takeoverOffset(killed, res.Start), takeoverOffset(killed, res.End), res.Lost, res.Error)
+		if !res.Start.IsZero() && !res.End.IsZero() {
+			fmt.Fprintf(&diagnostics, " duration=%s", res.End.Sub(res.Start))
+		}
+	} else {
+		fmt.Fprintf(&diagnostics, "\n  takeover[%d] missing; event timestamps unavailable until recorded", count)
+	}
+	countsReady := len(last.Calls) == 1 && last.Calls[0].TakeoverCount == uint64(count) //nolint:gosec // positive test count
+	workersReady := true
+	for _, worker := range last.Workers {
+		fmt.Fprintf(&diagnostics, "\n  worker[%s] LastHeartbeat=%s Dead=%t Recovering=%t", worker.Name, takeoverOffset(killed, worker.LastHeartbeat), worker.Dead, worker.Recovering)
+		workersReady = workersReady && !worker.Recovering
+	}
+	fmt.Fprintf(&diagnostics, "\n  ready conditions: len(Takeovers)==%d: %t; len(Calls)==1: %t; call.TakeoverCount==%d: %t; all !Recovering: %t", count, len(last.Takeovers) == count, len(last.Calls) == 1, count, countsReady, workersReady)
+	fmt.Fprintf(&diagnostics, "\n  earlier kills' detection durations (kill order): %v", detection)
+	t.Fatalf("automatic takeover did not complete within 2 s; %s\npoll observations (not exact transition times):%s\nlast control status: %+v", diagnostics.String(), observations.String(), last)
 	return controlplane.Status{}
+}
+
+func takeoverOffset(killed, at time.Time) string {
+	if at.IsZero() {
+		return "missing"
+	}
+	return at.Sub(killed).String()
 }
 
 // One live caller survives twenty hard kills on three distinct private legs.
@@ -67,7 +115,7 @@ func testRelayHardKillTakeover(t *testing.T, store sessionstore.Store) {
 		killedWorkers[owner] = true
 		killed := time.Now()
 		require.NoError(t, h.Kill(owner))
-		status := waitTakeovers(t, ctx, h, i+1)
+		status := waitTakeovers(t, ctx, h, i+1, killed, detection...)
 		res := status.Takeovers[i]
 		require.False(t, res.Lost)
 		require.Empty(t, res.Error)
@@ -186,7 +234,8 @@ func testTakeoverAtGate(t *testing.T, store sessionstore.Store, midKeyframe, fir
 	} else {
 		require.NoError(t, h.KillBeforeSnapshot(ctx, 0, call.SessionID()))
 	}
-	status := waitTakeovers(t, ctx, h, 1)
+	killed := time.Now()
+	status := waitTakeovers(t, ctx, h, 1, killed)
 	require.Equal(t, "1", status.Calls[0].Owner)
 	if firstKeyframe {
 		select {

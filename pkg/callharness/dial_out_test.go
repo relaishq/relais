@@ -126,7 +126,7 @@ func testDialOutCrashTakeover(t *testing.T, store sessionstore.Store) {
 			}
 			killed := time.Now()
 			require.NoError(t, h.Kill(0))
-			status := waitTakeovers(t, ctx, h, 1)
+			status := waitTakeovers(t, ctx, h, 1, killed)
 			elapsed := time.Since(killed)
 			require.Less(t, elapsed, 2*time.Second)
 			require.Zero(t, status.LostCount)
