@@ -3,6 +3,7 @@ package relay
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,6 +19,12 @@ func TestSelfFenceStopsBothPacketPathsAndCounters(t *testing.T) {
 	worker.expect(t, caller.addr(), media)
 	worker.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
 	caller.expect(t, sys.relay.PublicAddr(), dtlsReply)
+	// The relay counts a packet after forwarding it, so wait for both counts:
+	// binding and media from the caller, binding success and reply from the worker.
+	require.Eventually(t, func() bool {
+		stats := sys.relay.Stats()
+		return stats.CallerPackets == 2 && stats.WorkerPackets == 2
+	}, time.Second, time.Millisecond)
 	before := sys.relay.Stats()
 	permitted.Store(false)
 	caller.send(t, media, sys.relay.PublicAddr())
