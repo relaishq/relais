@@ -207,6 +207,8 @@ func timingSanitizationFixtures() map[string]struct{ target, reason, cause strin
 		}
 	}
 	distributed := []struct{ name, reason, cause string }{
+		{"prefixed-bounds", "first content: duration=[1ms,12ms]; event interval width=12ms", "duration-bounds-uncertain"},
+		{"prefixed-evaluation", "first new content: interval evaluation unavailable or exceeds 4096 evaluations; width=12ms", "interval-evaluation-unavailable"},
 		{"window", "event window evidence incomplete", "event-window-incomplete"},
 		{"baseline", "private-identity gap baseline has fewer than 10 guaranteed intervals", "baseline-intervals-insufficient"},
 		{"pause", "private-identity pause may reach 2s within clock interval", "pause-bound-uncertain"},

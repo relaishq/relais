@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
@@ -57,13 +59,13 @@ func TestUndecidedRowsNameEveryMetricAndCause(t *testing.T) {
 	}
 }
 
-func TestFreeRehearsalKeepsStrictJudgeTiming(t *testing.T) {
+func freeRehearsalTimingInput(reason string) previewPoolInput {
 	input := previewPoolInput{RunID: "run-fixture"}
 	for i, gate := range operatorrehearsal.CoveredGates {
 		phase := relayInput()
 		if i < 3 {
 			r := previewSample()
-			r.Processes[0].Calls[0].Call.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{"first content not proven throughout event-time interval; width=1ms"}}
+			r.Processes[0].Calls[0].Call.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{reason}}
 			phase = rawPreviewInput(r, 0)
 		}
 		phase.Gate = string(gate)
@@ -82,10 +84,106 @@ func TestFreeRehearsalKeepsStrictJudgeTiming(t *testing.T) {
 		}
 		input.Phases = append(input.Phases, phase)
 	}
+	return input
+}
+
+func TestFreeRehearsalKeepsStrictJudgeTiming(t *testing.T) {
+	input := freeRehearsalTimingInput("first content not proven throughout event-time interval; width=1ms")
 	strict := pooledPreviewMedia(&input)
 	if strict.Status != "inconclusive" || strict.InconclusiveMetrics != 3 || len(strict.UndecidedMetrics) != 3 {
 		t.Fatal(strict)
 	}
+	r := evaluateFreeRehearsalTiming(t, strict)
+	if r.Verdict != operator.Passed || strict.Status != "inconclusive" || len(r.TimingUndecided) != 3 {
+		t.Fatal("free policy changed strict media or rejected timing", r.Failures, strict)
+	}
+}
+
+func TestDistributedWindowRowsUseOnlyMatchingEventCauses(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		causes        []string
+	}{
+		{"undecided", "inconclusive", []string{"event-window-incomplete"}},
+		{"passing-with-stale-causes", "pass", []string{"metric-undecided", "trial-count-insufficient"}},
+		{"no-own-causes", "inconclusive", []string{"metric-undecided", "trial-count-insufficient"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := previewSample()
+			r.Events = r.Events[:2]
+			call := r.Processes[0].Calls[0].Call
+			call.Moves = call.Moves[:2]
+			call.Moves[0].Distributed.WindowOutcome = "inconclusive"
+			call.Moves[0].Distributed.Causes = []string{"first content: duration=[1.997s,2.003s]; event interval width=6ms"}
+			call.Moves[1].Distributed.WindowOutcome = tc.outcome
+			if tc.name != "no-own-causes" {
+				call.Moves[1].Distributed.Causes = []string{"event window evidence incomplete", "event window evidence incomplete"}
+			}
+			// The join must use event identity, not the move's position.
+			call.Moves[0], call.Moves[1] = call.Moves[1], call.Moves[0]
+			r.Judge()
+			want := []undecidedMetric{
+				{Event: 0, Metric: "distributed_window", Causes: []string{"duration-bounds-uncertain"}},
+				{Event: 1, Metric: "distributed_window", Causes: tc.causes},
+			}
+			if got := undecidedRows(&r); !reflect.DeepEqual(got, want) {
+				t.Fatalf("event causes leaked or pool causes lost: got %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestDistributedWindowRowsKeepPoolOnlyCauses(t *testing.T) {
+	r := previewSample()
+	call := r.Processes[0].Calls[0].Call
+	call.Distributed.ClockError = "first_content not proven throughout event-time interval; width=1ms"
+	call.Moves[0].Distributed.WindowOutcome = "inconclusive"
+	// The pool independently emits the same p95 reason. Removing window
+	// reasons by set membership would lose that pool-owned occurrence.
+	call.Moves[0].Distributed.Causes = []string{"audio move p95 policy not proven across clock interval", "audio move p95 policy not proven across clock interval"}
+	for i := 0; i < 20; i++ {
+		call.Moves[i].Distributed.Gaps[0].EventGap.Upper = 200 * time.Millisecond
+	}
+	call.Moves[1].Distributed.Gaps[1].BaselineCertain = nil
+	spread := make([]time.Duration, 50)
+	for i := range spread {
+		spread[i] = 20 * time.Millisecond
+		if i >= 30 {
+			spread[i] = 100 * time.Millisecond
+		}
+	}
+	call.Moves[2].Distributed.Gaps[1].BaselineCertain = spread
+	call.Moves[2].Distributed.Gaps[1].BaselinePossible = spread
+	r.Judge()
+	before, _ := json.Marshal(r)
+	rows := undecidedRows(&r)
+	if len(rows) != 30 || !reflect.DeepEqual(rows[0].Causes, []string{"move-p95-unproven"}) {
+		t.Fatal(rows)
+	}
+	want := []string{"baseline-intervals-insufficient", "baseline-spread-uncertain", "classification-unproven-within-clock-interval", "metric-undecided", "move-p95-unproven"}
+	for _, row := range rows[1:] {
+		if !reflect.DeepEqual(row.Causes, want) {
+			t.Fatalf("pool causes lost: got %+v, want %v", row, want)
+		}
+	}
+	after, _ := json.Marshal(r)
+	if string(before) != string(after) {
+		t.Fatal("diagnostic projection changed the product report")
+	}
+}
+
+func TestUndecidedRowsKeepCoverageFallbackWithoutReasons(t *testing.T) {
+	r := previewSample()
+	r.Processes[0].Calls[0].Call.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{}
+	r.Judge()
+	rows := undecidedRows(&r)
+	if len(rows) != 1 || rows[0].Event != 0 || rows[0].Metric != "first_content" || !reflect.DeepEqual(rows[0].Causes, []string{"trusted-coverage-below-80-percent"}) {
+		t.Fatal(rows)
+	}
+}
+
+func evaluateFreeRehearsalTiming(t *testing.T, strict previewMediaSummary) operatorrehearsal.Report {
+	t.Helper()
 	raw, _ := json.Marshal(strict)
 	pool, err := operatorevidence.DecodeSummary(raw)
 	if err != nil {
@@ -98,7 +196,34 @@ func TestFreeRehearsalKeepsStrictJudgeTiming(t *testing.T) {
 	zero, one := uint64(0), uint64(1)
 	r.Gates[3].Process = operatorgates.ProcessEvidence{CompletedSteps: 7, Restarts: 1, DuplicatePackets: &zero, RelayEpochDelta: &one, RoutesRestored: &one, RelayLocalTiming: "inconclusive", RelayConnectionInvariants: "inconclusive"}
 	r.Evaluate()
-	if r.Verdict != operator.Passed || pool.Status != operator.Inconclusive || len(r.TimingUndecided) != 3 {
-		t.Fatal("free policy changed strict media or rejected timing", r.Failures, pool)
+	return r
+}
+
+func TestUnknownOwnTimingCausesKeepRehearsalVerdict(t *testing.T) {
+	for _, reason := range []string{"first decoded content identity unavailable", "mapped event history or settle window unavailable", "insufficient caller window coverage"} {
+		t.Run(reason, func(t *testing.T) {
+			input := freeRehearsalTimingInput(reason)
+			for i := 0; i < 3; i++ {
+				one := previewPoolInput{Phases: []previewMediaInput{input.Phases[i]}}
+				replaceCall(t, &one, func(c *callharness.Report) {
+					c.Moves[0].Distributed.WindowOutcome = "inconclusive"
+					c.Moves[0].Distributed.Causes = []string{reason}
+				})
+				input.Phases[i] = one.Phases[0]
+			}
+			strict := pooledPreviewMedia(&input)
+			if strict.Status != "inconclusive" || strict.InconclusiveMetrics != 93 || len(strict.UndecidedMetrics) != 93 {
+				t.Fatal(strict)
+			}
+			for _, row := range strict.UndecidedMetrics {
+				if row.Event == 0 && !reflect.DeepEqual(row.Causes, []string{"trusted-coverage-below-80-percent"}) {
+					t.Fatal("unknown own reason changed its fallback", row)
+				}
+			}
+			r := evaluateFreeRehearsalTiming(t, strict)
+			if r.Verdict != operator.Passed || r.Pool.Status != operator.Inconclusive {
+				t.Fatal("diagnostic reason changed rehearsal verdict", r.Failures)
+			}
+		})
 	}
 }
