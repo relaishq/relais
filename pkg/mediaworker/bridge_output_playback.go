@@ -81,14 +81,15 @@ func (s *session) paceBridgeLocked() (time.Duration, error) {
 		v.RebaseTicks = 0
 		v.RebaseThrough = 0
 	}
-	// Preserve #265's late-wake policy. Record only this rebase's media-time
-	// increment so a subsequent gap can consume it once, never nextAt twice.
-	if now.Sub(p.nextAt) >= playbackRebaseAfter {
+	// Record only this rebase's media-time increment so a subsequent gap can
+	// consume it once, never nextAt twice.
+	if now.Sub(p.nextAt) > playbackRebaseAfter {
 		v.RebaseThrough = v.Through
 		v.RebaseTicks += uint64(rtpClockTicks(now.Sub(p.nextAt)))
 		p.rebase(now)
 		playbackChanged = true
 	}
+	sent := 0
 	for len(p.bridgeQueue) > 0 {
 		q := p.bridgeQueue[0]
 		if q.isGap() {
@@ -146,7 +147,10 @@ func (s *session) paceBridgeLocked() (time.Duration, error) {
 		v.Revision++
 		b.state = v
 		s.projectBridgeLocked(s.state.Agent.V2)
-		return max(0, p.nextAt.Sub(s.taskClockLocked())), nil
+		sent++
+		if sent == playbackCatchUpPackets || now.Before(p.nextAt) || len(p.bridgeQueue) == 0 {
+			return max(0, p.nextAt.Sub(s.taskClockLocked())), nil
+		}
 	}
 	if playbackChanged || !bridgeStateEqual(base, v) {
 		v.Revision++

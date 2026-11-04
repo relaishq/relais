@@ -285,6 +285,7 @@ func TestPacerResumeTimestamp(t *testing.T) {
 					require.NoError(t, err)
 				}
 				awaitPacerEvent(t, events[1], agent.Resumed)
+				// The old reply drained; new speech must include this idle silence.
 				pause := time.NewTimer(150 * time.Millisecond)
 				<-pause.C
 				require.NoError(t, call.SendMedia(ctx, 20*time.Millisecond))

@@ -239,14 +239,14 @@ func TestBridgeOutputStallsCoalesceRangesAndGapClock(t *testing.T) {
 		require.Equal(t, baseAt.Add(20*time.Millisecond), p.nextAt, "gaps add no wall schedule delay")
 		// A late wake already advanced the timestamp over the next gap interval.
 		beforeTS := p.nextTS
-		s.storeClock = p.nextAt.Add(100 * time.Millisecond)
+		s.storeClock = p.nextAt.Add(300 * time.Millisecond)
 		s.storeClockAt = time.Now()
 		_, err = s.paceOne()
 		require.NoError(t, err)
-		require.Equal(t, beforeTS+4800, p.nextTS, "rebase-covered gaps cannot charge RTP time twice")
+		require.Equal(t, beforeTS+14400, p.nextTS, "rebase-covered gaps cannot charge RTP time twice")
 		require.Empty(t, p.bridgeQueue)
 		// Coverage left beyond the captured sequence ceiling cannot be borrowed
-		// by a later gap when the next late wake extends that ceiling.
+		// by a later gap, even when a late wake needs no new rebase.
 		beforeTS = p.nextTS
 		later := bridgeRequest(scope, 11, time.Now().Add(-time.Second))
 		later.data = []byte{0x18, 0}

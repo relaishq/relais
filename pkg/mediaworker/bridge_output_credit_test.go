@@ -145,7 +145,7 @@ func TestBridgeOutputCreditAfterPruneKeepsQueuedHeadroom(t *testing.T) {
 	}
 	// A genuine late wake leaves active RTP rebase coverage in metadata.
 	s.mu.Lock()
-	s.agent.v2.playback.nextAt = s.taskClockLocked().Add(-100 * time.Millisecond)
+	s.agent.v2.playback.nextAt = s.taskClockLocked().Add(-300 * time.Millisecond)
 	s.mu.Unlock()
 	_, err = s.paceOne()
 	require.NoError(t, err)

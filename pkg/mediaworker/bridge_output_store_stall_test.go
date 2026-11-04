@@ -137,7 +137,7 @@ func TestBridgeOutputStoreStallRetention(t *testing.T) {
 				t.Log(diagnostic)
 			}
 			require.Zero(t, credits.SpuriousZero, "no zero credit below budget without a hold")
-			require.LessOrEqual(t, gapBeyondDebt, playbackRebaseAfter, "no backlogged starvation beyond pacer debt")
+			require.LessOrEqual(t, gapBeyondDebt, bridgeGapBeyondDebtLimit, "no backlogged starvation beyond pacer debt")
 			s.mu.Lock()
 			steadyMemory := s.agent.v2.bridge.memory.Load()
 			s.mu.Unlock()

@@ -604,9 +604,14 @@ func (s *session) admitBridgeAttempt(r bridgeOutputRequest, terminal bool) (Brid
 			v.Turns[i].Outcome = "gapped"
 		}
 	}
+	p := &s.agent.v2.playback
+	clock := *p
+	if receipt.Outcome != "canceled" && duration > 0 {
+		clock.rebaseIdle(s.taskClockLocked(), v)
+	}
 	if !terminal {
 		base, actorBase := b.state, s.state.Agent.V2
-		projected := s.agent.v2.playback
+		projected := clock
 		projected.bridgeQueue = slices.Clone(projected.bridgeQueue)
 		if receipt.Outcome != "canceled" && duration > 0 {
 			projected.bridgeQueue = appendBridgeQueued(projected.bridgeQueue, queued, v.RebaseThrough)
@@ -649,7 +654,7 @@ func (s *session) admitBridgeAttempt(r bridgeOutputRequest, terminal bool) (Brid
 	b.replaceRecordEncoding(nil, &record)
 	b.records[r.seq] = record
 	b.state = v
-	p := &s.agent.v2.playback
+	p.nextAt, p.nextTS = clock.nextAt, clock.nextTS
 	if receipt.Outcome != "canceled" && duration > 0 {
 		p.bridgeQueue = appendBridgeQueued(p.bridgeQueue, queued, v.RebaseThrough)
 	} else {

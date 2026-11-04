@@ -186,7 +186,7 @@ func testV2PacerSilentCallerAndFinished(t *testing.T, stall bool) {
 			var sent atomic.Int64
 			require.NoError(t, workerprobe.SetAfterEcho(sys.workers[0].LocalAddr(), func(ctx context.Context, _ string, _ []byte) {
 				if sent.Add(1) == 5 {
-					timer := time.NewTimer(60 * time.Millisecond)
+					timer := time.NewTimer(300 * time.Millisecond)
 					defer timer.Stop()
 					select {
 					case <-timer.C:
@@ -213,9 +213,24 @@ func testV2PacerSilentCallerAndFinished(t *testing.T, stall bool) {
 		// arrival time alone, so it must still fail this tight span comparison.
 		require.InDelta(t, float64(clockSpan), float64(all[19].at.Sub(all[0].at)), float64(380*time.Millisecond)/50+float64(5*time.Millisecond), "output RTP clock follows arrival time during caller silence")
 		assertPacerSequence(t, all, pacerFixtures(t, 20), true)
-		finished := awaitPacerEvent(t, events[0], agent.PlaybackFinished)
+		// The long stall can put the 600 ms timer before playback completion.
+		var finished, timer agent.Event
+		deadline := time.NewTimer(4 * time.Second)
+		defer deadline.Stop()
+		for finished.Kind == "" || timer.Kind == "" {
+			select {
+			case event := <-events[0]:
+				switch event.Kind {
+				case agent.PlaybackFinished:
+					finished = event
+				case agent.TimerFired:
+					timer = event
+				}
+			case <-deadline.C:
+				t.Fatal("missing playback completion or timer event")
+			}
+		}
 		require.EqualValues(t, 1, finished.Playback.Turn)
-		timer := awaitPacerEvent(t, events[0], agent.TimerFired)
 		require.EqualValues(t, 1, timer.Timer.Generation)
 		// No caller media was sent. Playback and timers cannot advance input progress.
 		_, progress, err := sys.workers[0].SessionAgent(call.SessionID())
@@ -225,9 +240,12 @@ func testV2PacerSilentCallerAndFinished(t *testing.T, stall bool) {
 		require.NoError(t, err)
 	})
 }
-func TestV2PacerNoCatchupAfterStall(t *testing.T) {
+
+// Controlled-clock mediaworker tests cover sub-200 ms catch-up and the five-packet
+// wake limit; a loaded real-time harness cannot keep wake lateness below 200 ms.
+func TestV2PacerRebasesWithoutBurstAfterLongStall(t *testing.T) {
 	if testing.Short() {
-		t.Skip("stall matrix; fast rebasing proof is in mediaworker")
+		t.Skip("long-stall rebase matrix; controlled-clock catch-up/rebase proof is in mediaworker")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		regs, _, gate, _ := pacerRegistrations(t, 20, false, false)
@@ -235,7 +253,7 @@ func TestV2PacerNoCatchupAfterStall(t *testing.T) {
 		var sent atomic.Int64
 		require.NoError(t, workerprobe.SetAfterEcho(sys.workers[0].LocalAddr(), func(ctx context.Context, _ string, _ []byte) {
 			if sent.Add(1) == 5 {
-				timer := time.NewTimer(150 * time.Millisecond)
+				timer := time.NewTimer(300 * time.Millisecond)
 				defer timer.Stop()
 				select {
 				case <-timer.C:
@@ -254,8 +272,9 @@ func TestV2PacerNoCatchupAfterStall(t *testing.T) {
 			all = append(all, nextPaced(t, received))
 		}
 		assertPacerSequence(t, all, pacerFixtures(t, 20), true)
-		require.Greater(t, all[5].at.Sub(all[4].at), 120*time.Millisecond)
-		require.GreaterOrEqual(t, all[19].at.Sub(all[5].at), 250*time.Millisecond, "overdue deadlines cannot drain as a burst")
+		require.Greater(t, all[5].at.Sub(all[4].at), 270*time.Millisecond, "the injected long stall must reach the caller")
+		require.Greater(t, uint32(all[5].packet.Timestamp-all[4].packet.Timestamp), uint32(960), "debt above 200 ms rebases RTP time")
+		require.GreaterOrEqual(t, all[19].at.Sub(all[5].at), 250*time.Millisecond, "after a long-stall rebase, the remaining packets keep their paced schedule")
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
 	})

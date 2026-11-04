@@ -210,7 +210,7 @@ An early pacer wake retains its cut when no logical state or playback changed. T
 and real-time measurement phases count zero-credit responses below the modeled
 allowance without a move/pause/fence hold and require zero such responses.
 The stall also grades backlogged wire gaps beyond RTP time and pacer debt against
-`playbackRebaseAfter` (20 ms), using the burst measurement's accounting.
+`bridgeGapBeyondDebtLimit` (20 ms), using the burst measurement's accounting.
 `TestBridgeOutputCreditSurvivesPacerWakes` reproduces concurrent credit polling;
 `TestBridgeOutputCreditCriticalSectionCost` reports the uncontended whole-call
 cost, which bounds the added metadata critical section on the test machine.
@@ -227,8 +227,12 @@ out-of-order and stale-scope reasons remain distinct.
 
 A late-packet gap advances RTP time without adding to the wall send schedule.
 The cursor records late-wake rebase coverage, consumes that coverage once, and
-preserves the existing pacer behavior tracked in #265. Queue recovery and pacer
-debt are different measurements.
+preserves it across recovery. When audio enters an empty queue after its next
+deadline, both pacers rebase to include idle silence. Late wakes with queued
+audio catch up by at most 5 packets per wake on the original schedule, and rebase
+only when debt exceeds 200 ms (#265).
+The wire-gap quality bound stays at 20 ms. Queue recovery and pacer debt are
+different measurements.
 
 A bridge turn stays busy until audio_end, settled identities through its final
 sequence, and an empty turn queue. The two non-audio bridge observer tasks do not

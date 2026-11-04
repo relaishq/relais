@@ -14,7 +14,10 @@ import (
 const (
 	playbackWindowDuration = 300 * time.Millisecond
 	playbackWindowBytes    = 4 << 10
-	playbackRebaseAfter    = 20 * time.Millisecond
+	// Bound catch-up work to five packets per wake.
+	playbackCatchUpPackets = 5
+	// Larger stalls skip ahead in wall and RTP time instead of catching up.
+	playbackRebaseAfter = 200 * time.Millisecond
 	// RTP header plus the largest negotiated SRTP tag must fit receiveMTU.
 	opusPacketMTU = receiveMTU - 12 - 16
 )
@@ -296,6 +299,19 @@ func (p *playbackRuntime) rebase(now time.Time) {
 	}
 }
 
+// Enqueueing after idle starts a new schedule; only queued audio can catch up.
+func (p *playbackRuntime) rebaseIdle(now time.Time, bridge *bridgeOutputState) {
+	if !p.initialized || len(p.queue) > 0 || len(p.bridgeQueue) > 0 || !now.After(p.nextAt) {
+		return
+	}
+	if bridge != nil {
+		// The empty queue has consumed all earlier coverage's sequence range.
+		bridge.RebaseThrough = bridge.Through
+		bridge.RebaseTicks = uint64(rtpClockTicks(now.Sub(p.nextAt)))
+	}
+	p.rebase(now)
+}
+
 // A dedicated output loop keeps DTX and slow callbacks out of the send clock.
 // The session lock is the ADR 0009 export fence, shared with encryption/cursors.
 func (s *session) playbackLoop() {
@@ -336,35 +352,35 @@ func (s *session) paceOne() (time.Duration, error) {
 	if now.Before(p.nextAt) {
 		return p.nextAt.Sub(now), nil
 	}
-	ref := p.queue[0]
-	payload, duration, ok := p.packet(ref)
-	if !ok {
-		return 0, fmt.Errorf("%w: missing paced audio payload", agent.ErrIncompatibleAgent)
+	for sent := 0; sent < playbackCatchUpPackets && len(p.queue) > 0 && !now.Before(p.nextAt); sent++ {
+		ref := p.queue[0]
+		payload, duration, ok := p.packet(ref)
+		if !ok {
+			return 0, fmt.Errorf("%w: missing paced audio payload", agent.ErrIncompatibleAgent)
+		}
+		clockAt, clockTS, clockInitialized := p.nextAt, p.nextTS, p.initialized
+		if !p.initialized {
+			p.nextTS = s.state.Audio.InitialTS
+			p.initialized = true
+			p.nextAt = now
+		}
+		if now.Sub(p.nextAt) > playbackRebaseAfter {
+			p.rebase(now)
+		}
+		header := rtp.Header{Version: 2, PayloadType: s.state.Audio.PayloadType, SSRC: s.state.Audio.SSRC, Timestamp: p.nextTS}
+		if err := s.sendAgentAudioLocked(header, payload, s.state.Agent); err != nil {
+			p.nextAt, p.nextTS, p.initialized = clockAt, clockTS, clockInitialized
+			return 0, fmt.Errorf("paced audio encryption: %w", err)
+		}
+		p.nextAt = p.nextAt.Add(duration)
+		p.nextTS += rtpClockTicks(duration)
+		p.length -= len(payload)
+		p.duration -= duration
+		p.referenceBytes -= len(ref.Source.TaskID) + 32
+		p.queue[0] = agent.Audio{}
+		p.queue = p.queue[1:]
+		s.state.Agent.V2.Playback = p.snapshot()
 	}
-	clockAt, clockTS, clockInitialized := p.nextAt, p.nextTS, p.initialized
-	if !p.initialized {
-		p.nextTS = s.state.Audio.InitialTS
-		p.initialized = true
-		p.nextAt = now
-	}
-	// Small scheduler delays are absorbed by the absolute schedule. A stall
-	// beyond 20 ms rebases once, including RTP media time.
-	if now.Sub(p.nextAt) >= playbackRebaseAfter {
-		p.rebase(now)
-	}
-	header := rtp.Header{Version: 2, PayloadType: s.state.Audio.PayloadType, SSRC: s.state.Audio.SSRC, Timestamp: p.nextTS}
-	if err := s.sendAgentAudioLocked(header, payload, s.state.Agent); err != nil {
-		p.nextAt, p.nextTS, p.initialized = clockAt, clockTS, clockInitialized
-		return 0, fmt.Errorf("paced audio encryption: %w", err)
-	}
-	p.nextAt = p.nextAt.Add(duration)
-	p.nextTS += rtpClockTicks(duration)
-	p.length -= len(payload)
-	p.duration -= duration
-	p.referenceBytes -= len(ref.Source.TaskID) + 32
-	p.queue[0] = agent.Audio{}
-	p.queue = p.queue[1:]
-	s.state.Agent.V2.Playback = p.snapshot()
 	return max(0, p.nextAt.Sub(s.taskClockLocked())), nil
 }
 
