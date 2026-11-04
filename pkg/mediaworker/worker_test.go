@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/logging"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/stun/v4"
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,21 @@ const (
 	testCallerUfrag = "callerufrag"
 	testCallerPwd   = "callerpasswordcallerpassword"
 )
+
+func TestSessionConsentExpiresDuringConstruction(t *testing.T) {
+	w := &Worker{cfg: Config{
+		LoggerFactory:  logging.NewDefaultLoggerFactory(),
+		consentTimeout: time.Nanosecond,
+	}}
+	sess := sessionFromState(w, sessionState{ID: "consent-expiry"})
+
+	select {
+	case <-sess.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("consent expiry did not close the session")
+	}
+	sess.close() // wait for the timer callback to finish closing
+}
 
 func TestConsentFreshness(t *testing.T) {
 	t.Run("checks from the nominated address keep the session", func(t *testing.T) {

@@ -17,6 +17,7 @@ func TestCheckpointRTPBurstEchoedInFull(t *testing.T) {
 	for _, count := range []int{150, 256} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			w := newTestWorker(t)
+			w.cfg.consentTimeout = 5 * time.Second
 			w.cfg.Relay = &RelayConfig{} // enable checkpoint measurement
 			sink := listenTestUDP(t)
 			sess := sessionFromState(w, sessionState{ID: "burst", ICE: iceState{RemoteAddr: sink.LocalAddr().(*net.UDPAddr).AddrPort()}, SRTP: srtpState{Inbound: make(map[uint32]uint64)}, Video: trackState{MID: "1", SSRC: 123, PayloadType: 96, InitialSeq: 1200}})
