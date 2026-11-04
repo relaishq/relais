@@ -299,6 +299,19 @@ func (p *playbackRuntime) rebase(now time.Time) {
 	}
 }
 
+// Enqueueing after idle starts a new schedule; only queued audio can catch up.
+func (p *playbackRuntime) rebaseIdle(now time.Time, bridge *bridgeOutputState) {
+	if !p.initialized || len(p.queue) > 0 || len(p.bridgeQueue) > 0 || !now.After(p.nextAt) {
+		return
+	}
+	if bridge != nil {
+		// The empty queue has consumed all earlier coverage's sequence range.
+		bridge.RebaseThrough = bridge.Through
+		bridge.RebaseTicks = uint64(rtpClockTicks(now.Sub(p.nextAt)))
+	}
+	p.rebase(now)
+}
+
 // A dedicated output loop keeps DTX and slow callbacks out of the send clock.
 // The session lock is the ADR 0009 export fence, shared with encryption/cursors.
 func (s *session) playbackLoop() {

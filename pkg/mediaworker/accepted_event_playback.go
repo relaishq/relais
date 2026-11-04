@@ -115,6 +115,9 @@ func (s *session) projectedPlaybackLocked(e agent.Effects, event agent.Event) pl
 	} else {
 		p.queue = slices.Clone(p.queue)
 	}
+	if len(e.Audio) > 0 {
+		p.rebaseIdle(s.taskClockLocked(), nil)
+	}
 	p.queue = append(p.queue, e.Audio...)
 	p.length = 0
 	p.duration = 0

@@ -311,7 +311,10 @@ outbound timing before first caller audio without inventing consumed input. The 
 next-to-send window is <=300 ms/4 KiB payload equivalent, not a cap on a full move-only reply.
 Send packet starts at most 20 ms early; an indivisible Opus packet can span up to 120 ms.
 Persist logical time/next timestamp/queue cursor with crypto counters; restore from store-clock
-age, never compared worker clocks. Rebase overdue sends; no burst catch-up or indexes when empty.
+age, never compared worker clocks. Rebase when audio enters an empty queue after its
+next deadline, including idle silence in RTP time. Late wakes with queued audio catch
+up by at most 5 packets per wake on the original schedule; rebase only when debt
+exceeds 200 ms (#265). Allocate no indexes when empty.
 Keep existing margins; validate at least the generated 400 packets/s maximum (2.5 ms packets)
 as well as caller rate (`docs/adr/0002-checkpoint-age-envelope.md:28-77`). Store-clock timers
 carry generations, fire overdue generations once in committed history, and honor cancellation.
@@ -484,7 +487,7 @@ and stock/demo/drain behavior (`cmd/relais-worker/agent_test.go:99-103,222-318`;
 | Host/Memory/Redis | Started redelivery; ignore unknown kinds; reject StartTasks from Resumed; immediate ReadOnly versus forced SideEffecting launch; uncertain writes; stable IDs; typed outcomes; never-launched Abandon export. |
 | Call harness | Move exact recordings/requests/reply/cursor; SaveMoveOnly runs only at paused export, once; checkpoints use presence/length without copying/hashing recording; crash OutcomeUnknown; delivered at least once, committed once; duplicate windows/sparse inputs/wraps. |
 | Flow/cancel | Host appends refs and backpressures Emit; first chunk immediate; optional PlaybackFinished is send-only evidence; turn-tagged clear/cancel and late-result drop; no pacer/checkpoint deadlock; >150 turns without lifetime cap. |
-| Clocks/limits | Packetless and DTX input; variable packet duration, queue/lead bounds, no catch-up; timer generation/reset; size at limit and limit+1; ciphertext/token budget including forced writes; no lock cycle or skipped required checkpoint. |
+| Clocks/limits | Packetless and DTX input; variable packet duration, queue/lead bounds, idle-gap rebase, late-wake catch-up capped at 5 packets per wake and rebase only above 200 ms debt; timer generation/reset; size at limit and limit+1; ciphertext/token budget including forced writes; no lock cycle or skipped required checkpoint. |
 | Process | Worker-local SIGTERM mark-only placement fence; unset reserve skips wait; configured reserve enables concurrent handler-only wait without call locks/drain slots; urgent full-reply move; kills/lost replies/mismatch cleanup/zombies; ADR 0009 regressions. |
 | Outage gate | Extend store-stall (`.github/workflows/ci.yml:290-315`): 5/15/29 s, no token debit/Capacity on failed forced writes, launch on later successful intent checkpoint, deadline Timeout before launch, local Emit/terminals, unknown move-only data on stale takeover and 35 s expiry. |
 | Capacity/audio | Custom-worker relais-load gate in C, Save CPU, checkpoint-age p99; known Ogg lacing/CRC/pre-skip/trim decode fixtures; real Chrome DTX capture; Demo A provider-format tests. Source inspection is not runtime proof. |

@@ -177,3 +177,102 @@ func TestBridgeOutputPacerCatchesUpAcrossGap(t *testing.T) {
 		require.Zero(t, s.agent.v2.bridge.state.RebaseThrough)
 	})
 }
+
+func TestAcceptedEventPlaybackRebasesAfterIdle(t *testing.T) {
+	for _, idle := range []time.Duration{20 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond} {
+		t.Run(idle.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				rig, _ := startAcceptedSpeech(t, agenthost.Bounds{}, [][]byte{{0xf8, 1}}, [][]byte{{0xf8, 2}, {0xf8, 3}, {0xf8, 4}})
+				s := rig.s
+				delivered, err := s.deliverTaskResult()
+				require.NoError(t, err)
+				require.True(t, delivered)
+				_, err = s.paceOne()
+				require.NoError(t, err)
+				p := &s.agent.v2.playback
+				require.Empty(t, p.queue)
+				nextTS := p.nextTS
+				s.storeClock, s.storeClockAt = p.nextAt.Add(idle), time.Now()
+				delivered, err = s.deliverTaskResult()
+				require.NoError(t, err)
+				require.True(t, delivered)
+				for sent := uint64(2); sent <= 4; sent++ {
+					delay, err := s.paceOne()
+					require.NoError(t, err)
+					require.Equal(t, sent, s.state.Audio.Packets, "new speech after idle must not burst")
+					require.Equal(t, nextTS+rtpClockTicks(idle)+uint32(sent-2)*960, s.state.Audio.LastTimestamp, "RTP time includes idle silence")
+					require.Equal(t, 20*time.Millisecond, delay)
+					_, err = s.paceOne()
+					require.NoError(t, err)
+					require.Equal(t, sent, s.state.Audio.Packets, "the successor waits for its deadline")
+					s.storeClock = s.storeClock.Add(20 * time.Millisecond)
+				}
+				require.Empty(t, p.queue)
+				require.Len(t, rig.wire.packets, 4)
+			})
+		})
+	}
+}
+
+func TestBridgeOutputPlaybackRebasesAfterIdle(t *testing.T) {
+	for _, idle := range []time.Duration{20 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond} {
+		t.Run(idle.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				rig, scope := newBridgeRig(t, false)
+				s := rig.s
+				require.Equal(t, "admitted", s.admitBridgePacket(bridgeRequest(scope, 1, time.Now())).Outcome)
+				_, err := s.paceOne()
+				require.NoError(t, err)
+				p := &s.agent.v2.playback
+				require.Empty(t, p.bridgeQueue)
+				nextTS := p.nextTS
+				s.storeClock, s.storeClockAt = p.nextAt.Add(idle), time.Now()
+				for seq := uint64(2); seq <= 4; seq++ {
+					require.Equal(t, "admitted", s.admitBridgePacket(bridgeRequest(scope, seq, time.Now())).Outcome)
+				}
+				for sent := uint64(2); sent <= 4; sent++ {
+					delay, err := s.paceOne()
+					require.NoError(t, err)
+					require.Equal(t, sent, s.state.Audio.Packets, "new speech after idle must not burst")
+					require.Equal(t, nextTS+rtpClockTicks(idle)+uint32(sent-2)*960, s.state.Audio.LastTimestamp, "RTP time includes idle silence")
+					require.Equal(t, 20*time.Millisecond, delay)
+					_, err = s.paceOne()
+					require.NoError(t, err)
+					require.Equal(t, sent, s.state.Audio.Packets, "the successor waits for its deadline")
+					s.storeClock = s.storeClock.Add(20 * time.Millisecond)
+				}
+				require.Empty(t, p.bridgeQueue)
+				require.Len(t, rig.wire.packets, 4)
+			})
+		})
+	}
+}
+
+func TestBridgeOutputIdleRebaseReplacesOldGapCoverage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rig, scope := newBridgeRig(t, false)
+		s := rig.s
+		require.Equal(t, "admitted", s.admitBridgePacket(bridgeRequest(scope, 1, time.Now())).Outcome)
+		_, err := s.paceOne()
+		require.NoError(t, err)
+		require.Equal(t, "admitted", s.admitBridgePacket(bridgeRequest(scope, 2, time.Now())).Outcome)
+		p := &s.agent.v2.playback
+		s.storeClock, s.storeClockAt = p.nextAt.Add(300*time.Millisecond), time.Now()
+		_, err = s.paceOne()
+		require.NoError(t, err)
+		require.Empty(t, p.bridgeQueue)
+		require.Positive(t, s.agent.v2.bridge.state.RebaseTicks)
+		nextTS := p.nextTS
+		s.storeClock = p.nextAt.Add(100 * time.Millisecond)
+		require.Equal(t, "output_late", s.admitBridgePacket(bridgeRequest(scope, 3, time.Now().Add(-time.Second))).Reason)
+		require.Equal(t, "admitted", s.admitBridgePacket(bridgeRequest(scope, 4, time.Now())).Outcome)
+		require.EqualValues(t, 4800, s.agent.v2.bridge.state.RebaseTicks, "idle starts fresh rebase coverage")
+		require.EqualValues(t, 3, s.agent.v2.bridge.state.RebaseThrough)
+		_, err = s.paceOne()
+		require.NoError(t, err)
+		require.Equal(t, nextTS+4800, s.state.Audio.LastTimestamp, "the idle rebase covers the gap once")
+		require.Equal(t, nextTS+5760, p.nextTS)
+		require.EqualValues(t, 3, s.state.Audio.Packets)
+		require.Empty(t, p.bridgeQueue)
+	})
+}

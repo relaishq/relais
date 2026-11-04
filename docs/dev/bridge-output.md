@@ -227,8 +227,10 @@ out-of-order and stale-scope reasons remain distinct.
 
 A late-packet gap advances RTP time without adding to the wall send schedule.
 The cursor records late-wake rebase coverage, consumes that coverage once, and
-preserves it across recovery. Both pacers send up to 5 overdue packets per wake
-on the original schedule and rebase only when debt exceeds 200 ms (#265).
+preserves it across recovery. When audio enters an empty queue after its next
+deadline, both pacers rebase to include idle silence. Late wakes with queued
+audio catch up by at most 5 packets per wake on the original schedule, and rebase
+only when debt exceeds 200 ms (#265).
 The wire-gap quality bound stays at 20 ms. Queue recovery and pacer debt are
 different measurements.
 
