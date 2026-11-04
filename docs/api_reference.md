@@ -134,6 +134,38 @@ Missing demand omits the demand metric and sets valid=0, stale=1. Cached demand
 retains its value with stale=1 on failure or age expiry; scrapes do not relabel an
 old observation with the current timestamp.
 
+## Worker read-loop metric
+
+A worker's private `/metrics` serves `relais_worker_*` counters and gauges, such
+as `relais_worker_packets_in_total` and `relais_worker_active_sessions`
+(`pkg/mediaworker/metrics.go`). They have no session labels.
+
+`relais_worker_read_burst_drain_seconds` is a histogram with no labels. It is
+a heuristic: each observation is the approximate length of one busy period of
+the worker's single UDP read loop (issue #139). A period runs from reading its
+first packet to finishing its last, while no wait for the next packet is longer
+than 100 µs. A lone packet is a period of its own.
+
+- A period is not packet waiting time. It includes the short waits between
+  packets. For example, packets 90 µs apart, each finished in 10 µs, form one
+  long period although nothing queues.
+- A stall longer than 100 µs between packets ends a period, even a stall in
+  scheduling or inside the read system call. A long burst can then appear as
+  several shorter periods.
+- A period is recorded when the next packet arrives, or when the read loop
+  stops.
+
+Long periods suggest that bursts kept the loop busy. For example, watch
+`histogram_quantile(0.99, rate(relais_worker_read_burst_drain_seconds_bucket[5m]))`.
+The ratio
+`rate(relais_worker_read_burst_drain_seconds_sum[5m]) / rate(relais_worker_packets_in_total[5m])`
+is the elapsed busy-period time per counted packet. It is not the processing
+cost per packet: it includes the short waits, and the packet counter excludes
+a few packets the loop reads and drops.
+The metric costs two clock reads per packet and one histogram update per busy
+period. It allocates nothing and takes no lock. `BenchmarkReadLoopBurst` in
+`pkg/mediaworker` is the matching burst fixture.
+
 ## Private worker placement fence
 
 ```text
