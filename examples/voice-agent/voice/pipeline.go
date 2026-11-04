@@ -31,6 +31,7 @@ func (a *Agent) canRender() bool {
 func (a *Agent) truncated() {
 	a.state.StopAfterPlayback = true
 	a.state.Outcome, a.state.Error, a.state.Notice = agent.OK, "", "Reply truncated at its speech limit. Hold to talk for more."
+	a.state.RetryRender, a.state.RenderRetryInFlight = false, false
 }
 func (a *Agent) play() agent.Effects {
 	a.state.Phase = "playing"
@@ -46,7 +47,7 @@ func (a *Agent) play() agent.Effects {
 			a.truncated()
 		}
 	}
-	return effects
+	return a.capacityRecovered(effects)
 }
 
 // A later task's error never clears audio already requested for playback.
@@ -57,23 +58,26 @@ func (a *Agent) failAfterPlayback(outcome agent.Outcome, code, notice string) ag
 	a.state.StopAfterPlayback = true
 	a.state.Outcome, a.state.Error, a.state.Notice = outcome, code, notice
 	a.state.RetryRender, a.state.RenderRetryInFlight = false, false
-	return agent.Effects{}
+	return a.capacityRecovered(agent.Effects{})
 }
 func (a *Agent) capacityExpired() agent.Effects {
-	if !a.state.RetryPlay && !a.state.RetryRender {
+	if !a.state.RetryPlay && !a.state.RetryRender && !a.state.RetryTask {
 		return agent.Effects{}
 	}
-	notice := "The reply could not continue after 30 s of task-capacity or store outage. Hold to talk again."
-	if a.state.Phase == "playing" && a.state.PlayLength == 0 {
+	notice := "The turn could not continue after 30 s of task-capacity or store outage. Hold to talk again."
+	if a.state.Phase == "playing" && !a.state.RetryPlay {
 		return a.failAfterPlayback(agent.Capacity, "capacity", notice)
 	}
 	return a.reset(agent.Capacity, "capacity", notice)
 }
-func (a *Agent) refused(play bool) agent.Effects {
-	if play {
+func (a *Agent) refused(kind string) agent.Effects {
+	switch kind {
+	case PlayKind:
 		a.state.RetryPlay, a.state.PlayRetryInFlight = true, false
-	} else {
+	case SpeechKind:
 		a.state.RetryRender, a.state.RenderRetryInFlight = true, false
+	default: // transcription and reply share the main task cursor
+		a.state.RetryTask, a.state.TaskRetryInFlight = true, false
 	}
 	if a.state.CapacityExpired {
 		return a.capacityExpired()
@@ -88,14 +92,29 @@ func (a *Agent) refused(play bool) agent.Effects {
 	}
 	return effects
 }
-func (a *Agent) clearCapacityNotice() {
-	if !a.state.RetryPlay && !a.state.RetryRender && a.state.Notice == capacityWaiting {
-		a.state.Notice = ""
+func (a *Agent) capacityRecovered(effects agent.Effects) agent.Effects {
+	if !a.state.RetryPlay && !a.state.RetryRender && !a.state.RetryTask {
+		if a.state.CapacityWindow {
+			effects.CancelTimers = append(effects.CancelTimers, retryTimer, capacityTimer)
+		}
+		a.state.CapacityWindow, a.state.CapacityExpired = false, false
+		if a.state.Notice == capacityWaiting {
+			a.state.Notice = ""
+		}
 	}
+	return effects
 }
 func (a *Agent) retryPending() agent.Effects {
 	if a.state.CapacityExpired {
 		return a.capacityExpired()
+	}
+	if a.state.RetryTask && !a.state.TaskRetryInFlight {
+		a.state.TaskRetryInFlight = true
+		if a.state.Phase == "transcribing" {
+			return a.task(TranscribeKind, "transcribing", a.buffer)
+		}
+		request, _ := json.Marshal(replyRequest{Transcript: a.state.Transcript, History: a.state.History})
+		return a.task(ReplyKind, "replying", request)
 	}
 	var effects agent.Effects
 	if a.state.RetryPlay && !a.state.PlayRetryInFlight {
@@ -126,10 +145,10 @@ func (a *Agent) speechResult(r *agent.TaskResult, at time.Time) agent.Effects {
 	if r.Final {
 		if r.Outcome == agent.Capacity {
 			if playing && a.state.PlayLength > 0 {
-				return a.refused(true)
+				return a.refused(PlayKind)
 			}
 			if rendering && !playing && a.length == 0 {
-				return a.refused(false)
+				return a.refused(SpeechKind)
 			}
 			// Speech's sole Data result is already a complete accepted segment.
 			// A refused terminal must not trigger another synthesis of those bytes.
@@ -142,7 +161,7 @@ func (a *Agent) speechResult(r *agent.TaskResult, at time.Time) agent.Effects {
 				if a.state.Phase != "playing" {
 					return a.reset(agent.OK, "", a.state.Notice)
 				}
-				return agent.Effects{}
+				return a.capacityRecovered(agent.Effects{})
 			}
 			if playing && a.state.PlayLength > 0 {
 				return a.reset(r.Outcome, safeCode(r.Detail), "Playback did not complete. Hold to talk again.")
@@ -154,17 +173,16 @@ func (a *Agent) speechResult(r *agent.TaskResult, at time.Time) agent.Effects {
 				return a.failAfterPlayback(agent.Failed, "empty_speech", "The speech provider returned no audio. Hold to talk again.")
 			}
 			a.state.RetryRender, a.state.RenderRetryInFlight = false, false
-			a.clearCapacityNotice()
 			a.state.RenderReady = true
 			if a.state.Phase == "synthesizing" {
 				return a.play()
 			}
+			return a.capacityRecovered(agent.Effects{})
 		}
 		return agent.Effects{}
 	}
 	if playing {
 		a.state.RetryPlay, a.state.PlayRetryInFlight = false, false
-		a.clearCapacityNotice()
 		a.state.PlayLength = 0 // the host owns the complete accepted Play request now
 		effects := agent.Effects{NotifyPlaybackFinished: &r.Turn}
 		if r.Chunk.Audio != nil {
@@ -175,7 +193,7 @@ func (a *Agent) speechResult(r *agent.TaskResult, at time.Time) agent.Effects {
 				effects.Audio = append(effects.Audio, agent.Audio{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}})
 			}
 		}
-		return effects
+		return a.capacityRecovered(effects)
 	}
 	packets, err := decodePackets(r.Chunk.Data, MaxSegmentBytes)
 	var span time.Duration
@@ -187,7 +205,6 @@ func (a *Agent) speechResult(r *agent.TaskResult, at time.Time) agent.Effects {
 		return a.failAfterPlayback(agent.Failed, "invalid_speech", "The speech provider exceeded the turn's audio limit. Hold to talk again.")
 	}
 	a.state.RetryRender, a.state.RenderRetryInFlight = false, false
-	a.clearCapacityNotice()
 	a.state.SpeechBytes += len(r.Chunk.Data)
 	a.state.SpeechNanos += span
 	if index == 0 {
@@ -196,5 +213,5 @@ func (a *Agent) speechResult(r *agent.TaskResult, at time.Time) agent.Effects {
 	}
 	a.buffer = append([]byte(nil), r.Chunk.Data...)
 	a.length = len(a.buffer)
-	return agent.Effects{}
+	return a.capacityRecovered(agent.Effects{})
 }

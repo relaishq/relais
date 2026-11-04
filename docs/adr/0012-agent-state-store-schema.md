@@ -193,8 +193,8 @@ history uses empty History and the working allowance; larger working blobs remai
 proposed choices, informed by the size inspection and arithmetic here.
 
 Demo A should move History out of its working JSON, bump its app schema, and use zero/default limits in a new compatible
-pool. Its current four exchanges use **4,205 B** of the history allocation and leave derived **2,871 B** working state
-under 3,072 B. History alone could hold **seven** exchanges of that exact shape: exact JSON is `7 * 1,051 + 1 = 7,358
+pool. Its current four exchanges use **4,205 B** of the history allocation and **2,917 B** working state
+under 3,072 B (**7,133 B** inline). History alone could hold **seven** exchanges of that exact shape: exact JSON is `7 * 1,051 + 1 = 7,358
 B`, while eight use **8,409 B**. Keep Demo A at four; these are byte examples, not a promise about tokens, language,
 minutes or an unbounded call. Recheck its actual worst case through Save after the app schema change, including escaping
 and non-ASCII text.

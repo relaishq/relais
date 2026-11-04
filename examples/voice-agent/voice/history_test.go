@@ -36,14 +36,14 @@ func TestHistoryLayoutsAndDefaultBudgets(t *testing.T) {
 			require.EqualValues(t, 4, inline.Version)
 			require.Equal(t, expected, inline.Bytes, "legacy bytes retain exactly the v4 JSON layout")
 			require.Empty(t, inline.History)
-			require.Equal(t, 7087, len(inline.Bytes))
+			require.Equal(t, 7133, len(inline.Bytes))
 			split := Registration(nil, true).Factory(agent.FactoryArgs{MaxStateBytes: 3072, MaxHistoryBytes: 8192}).(*Agent)
 			split.state = legacy.state
 			split.length = legacy.length
 			saved, err := split.Save(ctx)
 			require.NoError(t, err)
 			require.EqualValues(t, 5, saved.Version)
-			require.Equal(t, 2871, len(saved.Bytes))
+			require.Equal(t, 2917, len(saved.Bytes))
 			workingBytes := len(saved.Bytes)
 			require.Equal(t, 4205, len(saved.History))
 			require.LessOrEqual(t, len(saved.Bytes), 3072)
