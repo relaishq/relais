@@ -135,7 +135,8 @@ func TestV2BudgetRefusalBeforeLeaseRenew(t *testing.T) {
 				target, err := New(Config{Agent: AgentConfig{Factory: agenthost.Factory(reg)}, Relay: &RelayConfig{Owners: owners, Addr: netip.MustParseAddrPort("127.0.0.1:12345"), PublicAddr: netip.MustParseAddrPort("127.0.0.1:12346")}})
 				require.NoError(t, err)
 				defer target.Close()
-				lease, err := store.Claim(context.Background(), call.id, target.LocalAddr(), 200*time.Millisecond)
+				// Outlast five refused resumes under -race; the expiry check below still runs.
+				lease, err := store.Claim(context.Background(), call.id, target.LocalAddr(), 2*time.Second)
 				require.NoError(t, err)
 				pressure := int64(v2MoveWorkerBytes)
 				if growing {
@@ -151,7 +152,7 @@ func TestV2BudgetRefusalBeforeLeaseRenew(t *testing.T) {
 				current, err := store.Get(context.Background(), call.id)
 				require.NoError(t, err, "failed target retains the transferred lease for control-plane cleanup")
 				require.True(t, lease.ExpiresAt.Equal(current.ExpiresAt), "refused restores leave the original expiry unchanged")
-				require.Eventually(t, func() bool { _, err := store.Get(context.Background(), call.id); return err != nil }, time.Second, 10*time.Millisecond)
+				require.Eventually(t, func() bool { _, err := store.Get(context.Background(), call.id); return err != nil }, 5*time.Second, 10*time.Millisecond)
 				require.EqualValues(t, pressure, target.moveBytes.Load(), "failed preflight cannot leak partial reservations")
 			})
 		})
