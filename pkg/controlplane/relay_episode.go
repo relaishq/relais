@@ -21,6 +21,35 @@ type relayEpisode struct {
 	running, loaded, cleanupReady bool // guarded by relayEpisodeMu
 	persisted                     bool // guarded by relayEpisodeMu
 	completed                     atomic.Bool
+	// decision orders a driver's completion against the watchdog's terminal
+	// decision: exactly one of them wins, before anything is published.
+	decision sync.Mutex
+	ending   bool // guarded by decision
+}
+
+// decideEnd makes the watchdog's terminal decision. It fails if a driver
+// already completed the episode; afterwards no completion can be recorded.
+func (e *relayEpisode) decideEnd() bool {
+	e.decision.Lock()
+	defer e.decision.Unlock()
+	if e.completed.Load() {
+		return false
+	}
+	e.ending = true
+	return true
+}
+
+// markCompleted records a driver's completion unless the watchdog already
+// decided to end the call.
+func (e *relayEpisode) markCompleted() bool {
+	e.decision.Lock()
+	defer e.decision.Unlock()
+	if e.ending {
+		return false
+	}
+	e.completed.Store(true)
+	e.once.Do(func() { close(e.done) })
+	return true
 }
 
 // The existing journal stores the first detection time, independently of the
@@ -109,14 +138,14 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 		// as expiry: retry until the outcome is definite.
 		var detail RelayEvent
 		for backoff := 50 * time.Millisecond; ; backoff = min(2*backoff, time.Second) {
-			if !p.awaitRelayAuthority(e) || e.completed.Load() {
+			if !p.awaitRelayAuthority(c, e) || e.completed.Load() {
 				return
 			}
 			p.mu.Lock()
 			gone := c.terminal || c.hungUp.Load()
 			p.mu.Unlock()
 			if gone {
-				p.completeRelayEpisode(context.Background(), c, e)
+				_ = p.completeRelayEpisode(context.Background(), c, e) // before any decision
 				return
 			}
 			expiry, cancelExpiry := context.WithTimeout(context.Background(), time.Second)
@@ -124,7 +153,7 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 			cancelExpiry()
 			switch outcome {
 			case relayExpiryConfirmed, relayExpiryGone:
-				p.completeRelayEpisode(context.Background(), c, e)
+				_ = p.completeRelayEpisode(context.Background(), c, e) // before any decision
 				return
 			case relayExpiryEnded:
 				if p.controlAuthority() {
@@ -140,8 +169,16 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 			case <-time.After(backoff):
 			}
 		}
-		// Publish the terminal event at the deadline even while a cancelled
-		// operation is unwinding; ownership cleanup still uses the call lock.
+		// The terminal decision is irreversible against completion: a driver
+		// that completed first wins and nothing is published; after it, no
+		// completion is recorded. Only then is ended published, at the
+		// deadline, even while a cancelled operation still holds the call.
+		relayWatchEvent(c, "deciding")
+		if !e.decideEnd() {
+			relayWatchEvent(c, "completed-before-decision")
+			return
+		}
+		relayWatchEvent(c, "decided")
 		c.stateMu.Lock()
 		if c.relayEndDetail.Detail == "" {
 			c.relayEndDetail = detail
@@ -161,20 +198,14 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 		}
 		c.controlMu.Unlock()
 		for {
+			relayWatchEvent(c, "awaiting-call-lock")
 			c.mu.Lock()
-			if e.completed.Load() {
-				// A driver completed the episode while this watcher waited for
-				// the call lock: its confirmation wins; never end the call.
-				c.mu.Unlock()
-				relayWatchEvent(c, "completed-under-lock")
-				return
-			}
 			if p.controlAuthority() {
 				c.stateMu.Lock()
 				lease := c.lease
 				c.stateMu.Unlock()
 				p.endRelayFailure(c, lease, "relay_change_failed")
-				p.completeRelayEpisode(context.Background(), c, e)
+				p.finishRelayEpisode(context.Background(), c, e)
 				c.mu.Unlock()
 				return
 			}
@@ -183,7 +214,7 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 			// returns, so the episode is never left without one.
 			c.mu.Unlock()
 			relayWatchEvent(c, "suspended")
-			if !p.awaitRelayAuthority(e) {
+			if !p.awaitRelayAuthority(c, e) {
 				return
 			}
 		}
@@ -202,9 +233,19 @@ func relayWatchEvent(c *call, name string) {
 
 // awaitRelayAuthority waits until this control holds authority. It reports
 // false when the episode finished or control is stopping.
-func (p *Plane) awaitRelayAuthority(e *relayEpisode) bool {
+func (p *Plane) awaitRelayAuthority(c *call, e *relayEpisode) bool {
 	for !p.controlAuthority() {
 		if p.restart != nil && p.restart.stopping.Load() {
+			return false
+		}
+		// A call that ended (for example a hangup admitted before authority
+		// lapsed) needs no watcher: close the episode instead of waiting.
+		p.mu.Lock()
+		gone := c.terminal || c.hungUp.Load()
+		p.mu.Unlock()
+		if gone {
+			p.finishRelayEpisode(context.Background(), c, e)
+			relayWatchEvent(c, "gone-while-suspended")
 			return false
 		}
 		select {
@@ -216,9 +257,27 @@ func (p *Plane) awaitRelayAuthority(e *relayEpisode) bool {
 	return true
 }
 
-func (p *Plane) completeRelayEpisode(ctx context.Context, c *call, e *relayEpisode) {
+// completeRelayEpisode records a driver's success. After the watchdog's
+// terminal decision it refuses with errRelayEpisodeEnded, and the caller must
+// report failure: the call is ending at its deadline.
+func (p *Plane) completeRelayEpisode(ctx context.Context, c *call, e *relayEpisode) error {
+	if !e.markCompleted() {
+		relayWatchEvent(c, "completion-refused")
+		return errRelayEpisodeEnded
+	}
+	p.cleanupRelayEpisode(ctx, c, e)
+	return nil
+}
+
+// finishRelayEpisode closes an episode that the watchdog ended, or whose call
+// is gone, regardless of the terminal decision.
+func (p *Plane) finishRelayEpisode(ctx context.Context, c *call, e *relayEpisode) {
 	e.completed.Store(true)
 	e.once.Do(func() { close(e.done) })
+	p.cleanupRelayEpisode(ctx, c, e)
+}
+
+func (p *Plane) cleanupRelayEpisode(ctx context.Context, c *call, e *relayEpisode) {
 	c.relayEpisodeMu.Lock()
 	defer c.relayEpisodeMu.Unlock()
 	e.cleanupReady = true
@@ -274,7 +333,7 @@ func (p *Plane) startRelayRecoveryFrom(ctx context.Context, c *call, sameSlot bo
 		for recovery.Err() == nil {
 			err = p.recoverRelay(recovery, c, sameSlot, tried, e.deadline, e.intent.Started)
 			if err == nil || errors.Is(err, sessionstore.ErrEnded) || errors.Is(err, sessionstore.ErrNotFound) {
-				p.completeRelayEpisode(recovery, c, e)
+				_ = p.completeRelayEpisode(recovery, c, e) // a refusal: the watchdog ends the call
 				return
 			}
 			select {

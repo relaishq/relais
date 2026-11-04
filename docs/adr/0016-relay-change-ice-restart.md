@@ -663,9 +663,11 @@ These record choices the accepted text left open while building sections 5,
   hosts are never compared. *Assumption:* the saved store-clock values are
   authoritative; local times only trigger earlier local decisions. Store-clock
   continuity across a Redis failover is not guaranteed, so a failover that
-  steps the store clock can shorten or lengthen a saved bound by that step.
-- **Commit time (owner decision).** The 3 s A bound starts when control first
-  observes the commit, not at the store's commit time. It is saved once and
+  steps the store clock can shorten or lengthen a saved bound by that step
+  (accepted by the owner 2026-11-04).
+- **Commit time (accepted by the owner 2026-11-04).** The 3 s A bound
+  starts when control first observes the commit, not at the store's commit
+  time. It is saved once and
   never restarted.
 - **C transport.** After the commit, control polls the owner's private
   `GET /sessions/{id}/relay-delivery?generation=g` every 100 ms and retains
@@ -673,18 +675,18 @@ These record choices the accepted text left open while building sections 5,
   treated as lacking C (`confirmation_unsupported`).
 - **C test.** Only SRTCP from the current path (leg and caller address) counts.
   A report block must name a required track's SSRC, and its highest sequence
-  must be after the last sequence sent before the switch (16-bit serial
-  arithmetic). A resumed worker starts fresh boundaries.
-- **Required MIDs (owner decision).** Control asks the owner before the event.
-  The set is the negotiated tracks on which the worker has sent; a negotiated
+  must be after the last sequence sent before the switch (32-bit extended
+  sequence, serial arithmetic). A resumed worker starts fresh boundaries.
+- **Required MIDs (accepted by the owner 2026-11-04).** Control asks the
+  owner before the event. The set is the negotiated tracks on which the worker has sent; a negotiated
   track that never sent is left out. It travels in the restart request.
   Worker-injected confirmation media (encoded silence, still frames) is not
   built; a source that pauses during an attempt fails that attempt.
 - **Deadlines.** The event and reply deadline is the planned deadline or the
   episode deadline, never a per-attempt bound. A caller stall request after the
   commit fails the current attempt at once, in both modes.
-- **Planned failures (owner decision on the fresh window).** A failure before
-  the switch consumes the generation. One restart on the old slot follows in a
+- **Planned failures (fresh window accepted by the owner 2026-11-04).** A
+  failure before the switch consumes the generation. One restart on the old slot follows in a
   fresh 10 s planned window, for callers that dropped the old pair; if that
   also fails before switching, the caller keeps its old pair. A committed but
   unconfirmed attempt rolls back within the remaining window. As soon as a
@@ -692,7 +694,8 @@ These record choices the accepted text left open while building sections 5,
   detection at the first planned deadline, before any wait for a switch
   commit; such waits are clipped to the episode's remaining time. An attempt
   that already exists is durably bound to the armed episode before any wait,
-  keeping or shortening its bounds. A call not
+  keeping or shortening its bounds; a record without store-clock fields first
+  gets them from its own original deadlines, never from the episode. A call not
   confirmed back (rollback unconfirmed, failed before switching, or out of
   time) continues in that episode. The fresh window can stretch the planned
   phase to 20 s, but an episode deadline is at most 10 s + 15 s = 25 s after
@@ -705,8 +708,14 @@ These record choices the accepted text left open while building sections 5,
   deadline is retried, never treated as expiry. The watcher rechecks control
   authority on every retry and before any terminal effect, and stops when the
   call has ended or its session is gone. If authority ends while it waits for
-  the call lock, it releases the lock and keeps watching; under the lock it
-  first checks whether a driver already completed the episode.
+  the call lock, it releases the lock and keeps watching, and a call that
+  ends meanwhile closes the episode. The terminal decision and every success
+  are ordered on the episode: if a driver completed first, nothing is
+  published; otherwise `ended` is published at the deadline (without waiting
+  for the call lock) and afterwards no `confirmed` write, A acknowledgement
+  or driver success is accepted; `ChangeRelay` reports the ended episode. At
+  the deadline an unconfirmed attempt that is not the episode's own is also
+  expired durably. A caller told ended always sees the call end.
 - **One-slot sets.** An explicitly configured set of one slot accepts the
   confirmation contracts and supports same-slot recovery. Changing to another
   address needs a second slot.

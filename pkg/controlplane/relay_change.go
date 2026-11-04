@@ -209,7 +209,10 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 				}
 				planned.episode = e.deadline
 				if err = p.waitRelayChange(recovery, c, pending, min(sessionstore.StoreOutageBudget(0), time.Until(e.deadline)), planned); err == nil {
-					p.completeRelayEpisode(recovery, c, e)
+					relayWatchEvent(c, "settlement-confirmed")
+					if err = p.completeRelayEpisode(recovery, c, e); err != nil {
+						return err // the episode ended at its deadline
+					}
 					ctx = recovery
 					break
 				}
@@ -337,7 +340,10 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 	}
 	if confirmed {
 		if episode != nil {
-			p.completeRelayEpisode(ctx, c, episode)
+			relayWatchEvent(c, "rollback-confirmed")
+			if e := p.completeRelayEpisode(ctx, c, episode); e != nil {
+				return e // the episode ended at its deadline
+			}
 		}
 		return nil
 	}

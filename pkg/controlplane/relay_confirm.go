@@ -27,6 +27,29 @@ const (
 
 var errRelayUnconfirmed = errors.New("controlplane: relay change unconfirmed")
 
+// errRelayEpisodeEnded: the call's episode already decided to end the call;
+// no confirmation is saved and no success is reported after that decision.
+var errRelayEpisodeEnded = errors.New("controlplane: relay_change_failed: episode ended")
+
+// relayDecisionGate runs a success write while the call's active episode
+// cannot make its terminal decision, and refuses it after that decision. The
+// gate holds only the episode's decision lock, never the call lock, so
+// publication at the deadline stays independent of a busy operation.
+func (p *Plane) relayDecisionGate(c *call, write func(episode time.Time) error) error {
+	c.relayEpisodeMu.Lock()
+	e := c.relayEpisode
+	c.relayEpisodeMu.Unlock()
+	if e == nil {
+		return write(time.Time{})
+	}
+	e.decision.Lock()
+	defer e.decision.Unlock()
+	if e.ending {
+		return errRelayEpisodeEnded
+	}
+	return write(e.deadline)
+}
+
 // errRelayRetired: the attempt's generation was consumed without a switch.
 var errRelayRetired = errors.New("controlplane: relay generation retired without a switch")
 
@@ -236,13 +259,23 @@ func (p *Plane) casRelayConfirmation(ctx context.Context, id string, at sessions
 // still remaining, minus the read's round trip (a conservative bound). A
 // deadline that has already passed locally is refused here.
 func (p *Plane) storeTime(ctx context.Context, id string, local time.Time) (time.Time, error) {
+	if !local.After(time.Now()) {
+		return time.Time{}, sessionstore.ErrRelayAttemptExpired
+	}
+	converted, err := p.storeClockOf(ctx, id, local)
+	if err == nil && !local.After(time.Now()) {
+		return time.Time{}, sessionstore.ErrRelayAttemptExpired
+	}
+	return converted, err
+}
+
+// storeClockOf converts any local time, past or future, to the store clock
+// with the same conservative round-trip bound as storeTime.
+func (p *Plane) storeClockOf(ctx context.Context, id string, local time.Time) (time.Time, error) {
 	clock, ok := p.store.(interface {
 		Clock(context.Context, string) (time.Time, error)
 	})
 	start := time.Now()
-	if !local.After(start) {
-		return time.Time{}, sessionstore.ErrRelayAttemptExpired
-	}
 	if !ok {
 		return local, nil
 	}
@@ -251,11 +284,46 @@ func (p *Plane) storeTime(ctx context.Context, id string, local time.Time) (time
 		return time.Time{}, err
 	}
 	end := time.Now()
-	remaining := local.Sub(end)
-	if remaining <= 0 {
-		return time.Time{}, sessionstore.ErrRelayAttemptExpired
+	return now.Add(local.Sub(end) - end.Sub(start)), nil
+}
+
+// bindEpisode stamps an episode on an attempt without extending any bound.
+// A record without store-clock fields first gets them from its own original
+// Outer and Bound; then every value is clamped to the episode deadline.
+func (p *Plane) bindEpisode(ctx context.Context, id string, t sessionstore.RelayAttempt, episode, detected time.Time) (sessionstore.RelayAttempt, error) {
+	bound := t
+	if bound.StoreDeadline.IsZero() && !t.Outer().IsZero() {
+		storeOuter, err := p.storeClockOf(ctx, id, t.Outer())
+		if err != nil {
+			return t, err
+		}
+		bound.StoreDeadline = storeOuter
 	}
-	return now.Add(remaining - end.Sub(start)), nil
+	if bound.StoreBound.IsZero() && !t.AttemptBound.IsZero() {
+		storeBound, err := p.storeClockOf(ctx, id, t.Bound())
+		if err != nil {
+			return t, err
+		}
+		bound.StoreBound = storeBound
+	}
+	bound.EpisodeDeadline = episode
+	if !detected.IsZero() {
+		bound.Detected = detected
+	}
+	if !bound.AttemptBound.IsZero() && episode.Before(bound.AttemptBound) {
+		bound.AttemptBound = episode
+	}
+	storeEpisode, err := p.storeClockOf(ctx, id, episode)
+	if err != nil {
+		return t, err
+	}
+	if bound.StoreDeadline.IsZero() || storeEpisode.Before(bound.StoreDeadline) {
+		bound.StoreDeadline = storeEpisode
+	}
+	if !bound.StoreBound.IsZero() && storeEpisode.Before(bound.StoreBound) {
+		bound.StoreBound = storeEpisode
+	}
+	return bound, nil
 }
 
 // evidenceBound is the store-clock bound for A and C writes. The saved store
@@ -375,20 +443,9 @@ func (p *Plane) bindRelayAttempt(ctx context.Context, id string, a sessionstore.
 	if episode.IsZero() || !t.EpisodeDeadline.IsZero() {
 		return t, nil
 	}
-	bound := *t
-	bound.EpisodeDeadline = episode
-	storeEpisode, err := p.storeTime(ctx, id, episode)
+	bound, err := p.bindEpisode(ctx, id, *t, episode, time.Time{})
 	if err != nil {
 		return nil, err
-	}
-	if bound.StoreDeadline.IsZero() || storeEpisode.Before(bound.StoreDeadline) {
-		bound.StoreDeadline = storeEpisode
-	}
-	if !bound.StoreBound.IsZero() && storeEpisode.Before(bound.StoreBound) {
-		bound.StoreBound = storeEpisode
-	}
-	if !bound.AttemptBound.IsZero() && episode.Before(bound.AttemptBound) {
-		bound.AttemptBound = episode
 	}
 	if err = p.casRelayConfirmation(ctx, id, a, rec, sessionstore.RelayConfirmation{Mode: rec.Mode, Attempt: &bound, Commit: rec.Commit}, time.Time{}); err != nil {
 		return nil, err
@@ -472,11 +529,25 @@ func (p *Plane) confirmStep(ctx context.Context, c *call, a sessionstore.RelayAs
 		return sessionstore.RelayConfirmation{Mode: mode, Attempt: &t, Commit: rec.Commit}
 	}
 	if rec.Confirmed(a) {
-		if t.Phase != sessionstore.RelayPhaseConfirmed {
-			t.Phase = sessionstore.RelayPhaseConfirmed
-			if p.casRelayConfirmation(ctx, c.id, a, rec, next(t), time.Time{}) != nil {
-				return false, nil
+		// Success is gated by the episode's terminal decision: after it, no
+		// confirmation is saved and no success is returned. Before it, the
+		// confirmed attempt is bound to the episode, so its watchdog sees it.
+		err := p.relayDecisionGate(c, func(episode time.Time) error {
+			bound := t.Phase != sessionstore.RelayPhaseConfirmed || !episode.IsZero() && t.EpisodeDeadline.IsZero()
+			if !bound {
+				return nil
 			}
+			t.Phase = sessionstore.RelayPhaseConfirmed
+			if !episode.IsZero() && t.EpisodeDeadline.IsZero() {
+				t.EpisodeDeadline = episode
+			}
+			return p.casRelayConfirmation(ctx, c.id, a, rec, next(t), time.Time{})
+		})
+		if errors.Is(err, errRelayEpisodeEnded) {
+			return true, err
+		}
+		if err != nil {
+			return false, nil
 		}
 		log.Printf("controlplane: relay change confirmed call=%s generation=%d slot=%s mode=%s delivered=%v decoded=%v", c.id, t.Generation, t.Slot, mode, t.Delivered, t.Decoded)
 		c.stateMu.Lock()
@@ -597,6 +668,19 @@ func (p *Plane) expireRelayAttempt(ctx context.Context, c *call, deadline time.T
 		}
 		t := rec.Attempt
 		if t == nil || !t.EpisodeDeadline.Equal(deadline) {
+			// Not this episode's attempt. An unconfirmed one still in flight is
+			// expired durably too, so no later commit or report revives it.
+			if t != nil && !rec.Confirmed(a) && !rec.Aborted() && (t.Phase == sessionstore.RelayPhasePending || t.Phase == sessionstore.RelayPhaseSwitched) {
+				next := *t
+				next.Phase = sessionstore.RelayPhaseExpired
+				err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: rec.Mode, Attempt: &next, Commit: rec.Commit}, time.Time{})
+				if errors.Is(err, sessionstore.ErrRelayConflict) {
+					continue
+				}
+				if err != nil {
+					return relayExpiryUncertain, RelayEvent{}
+				}
+			}
 			return relayExpiryEnded, RelayEvent{Detail: "delivery_unconfirmed", Confirmation: rec.Mode}
 		}
 		if rec.Confirmed(a) {
@@ -744,7 +828,14 @@ func (p *Plane) handleMediaProgress(w http.ResponseWriter, r *http.Request) {
 		}
 		storeBound, err := p.evidenceBound(r.Context(), c.id, *t)
 		if err == nil {
-			err = p.casRelayConfirmation(r.Context(), c.id, a, rec, updated, storeBound)
+			// A is never acknowledged after the episode's terminal decision.
+			err = p.relayDecisionGate(c, func(time.Time) error {
+				return p.casRelayConfirmation(r.Context(), c.id, a, rec, updated, storeBound)
+			})
+		}
+		if errors.Is(err, errRelayEpisodeEnded) {
+			http.Error(w, "call ended", http.StatusGone)
+			return
 		}
 		if errors.Is(err, sessionstore.ErrRelayConflict) {
 			continue
@@ -852,21 +943,11 @@ func (p *Plane) adoptRelayAttempt(ctx context.Context, c *call, from sessionstor
 		if !t.EpisodeDeadline.IsZero() {
 			return false, nil // owned by another episode; never extend it
 		}
-		bound := *t
-		bound.EpisodeDeadline, bound.Detected = opt.outer, opt.detected
-		if bound.AttemptBound.After(opt.outer) {
-			bound.AttemptBound = opt.outer
-		}
 		// Adoption keeps or shortens every saved deadline, never extends
-		// one: Outer is the earlier of the planned and episode deadlines, and
-		// the store-clock deadline and evidence bound only move earlier.
-		if storeOuter, e := p.storeTime(ctx, c.id, opt.outer); e == nil {
-			if bound.StoreDeadline.IsZero() || storeOuter.Before(bound.StoreDeadline) {
-				bound.StoreDeadline = storeOuter
-			}
-			if !bound.StoreBound.IsZero() && storeOuter.Before(bound.StoreBound) {
-				bound.StoreBound = storeOuter
-			}
+		// one (bindEpisode).
+		bound, err := p.bindEpisode(ctx, c.id, *t, opt.outer, opt.detected)
+		if err != nil {
+			return false, err
 		}
 		if err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: rec.Mode, Attempt: &bound, Commit: rec.Commit}, time.Time{}); err != nil {
 			return false, err

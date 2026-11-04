@@ -48,7 +48,7 @@ func TestPlannedRelayChangeLive(t *testing.T) {
 		if testing.Short() {
 			changes = 4
 		}
-		go func() { sent <- call.SendMedia(ctx, time.Duration(changes+3)*time.Second) }()
+		go func() { sent <- call.SendMedia(ctx, time.Duration(2*changes+5)*time.Second) }() // C confirms each change from live media
 		time.Sleep(time.Second)
 		baseline := call.rec.report()
 		pauses := map[string][]time.Duration{}
