@@ -67,6 +67,7 @@ type processStaleLeg struct {
 	mu        sync.Mutex
 	worker    netip.AddrPort
 	withhold  bool
+	pt        uint8 // withheld worker-output payload type; the #312 diagnostic selects VP8
 	packets   [][]byte
 	forwarded []byte
 	done      chan struct{}
@@ -76,7 +77,7 @@ func newProcessStaleLeg(t *testing.T, target string) *processStaleLeg {
 	t.Helper()
 	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	require.NoError(t, err)
-	p := &processStaleLeg{conn: c, relay: netip.MustParseAddrPort(target), done: make(chan struct{})}
+	p := &processStaleLeg{conn: c, relay: netip.MustParseAddrPort(target), pt: 111, done: make(chan struct{})}
 	go func() {
 		defer close(p.done)
 		b := make([]byte, 65536)
@@ -94,7 +95,7 @@ func newProcessStaleLeg(t *testing.T, target string) *processStaleLeg {
 				p.worker = from
 				_, payload, err := relay.ParseHeader(b[:n])
 				if err == nil && len(payload) >= 12 && payload[0]>>6 == 2 && (payload[1] < 192 || payload[1] > 223) {
-					if p.withhold && payload[1]&0x7f == 111 && len(p.packets) < 40 {
+					if p.withhold && payload[1]&0x7f == p.pt && len(p.packets) < 40 {
 						p.packets = append(p.packets, append([]byte(nil), b[:n]...))
 						drop = true
 					} else if !p.withhold {
