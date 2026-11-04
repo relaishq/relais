@@ -626,6 +626,97 @@ Preflight rules:
    A-capable call exists. Drain or end such calls first; commit-only completion
    cannot substitute for either confirmation mode.
 
+### Implementation note (2026-11-04): confirmation choices left open
+
+These record choices the accepted text left open while building sections 5,
+7 and 10. They do not change an accepted decision.
+
+- **Capability.** The create request uses the header `Relais-Media-Progress:
+  true` next to `Relais-Relay-Change: true`, as slice 1 did for `relay_change`.
+  Control echoes each accepted capability as the same response header, after
+  it has durably saved the mode. Without a relay set nothing is accepted,
+  echoed or written, so default profiles keep writing store contract 1. A
+  requested A also needs the selected worker's C contract; otherwise create
+  is refused as `relay_unsupported`.
+- **Durable record.** `relay_confirmation` and `relay_confirmation_state` live
+  in the session hash. One script reads both with the assignment. Every write
+  compares the full assignment and the full record (store contract 3).
+- **Switch versus retirement.** The worker's switch commit is a distinct store
+  write that records `relay_switched` (generation and store time) atomically
+  with the assignment. Clearing a pending slot any other way records
+  `relay_retired`, so an aborted generation is retired atomically and never
+  looks like a switch, even on the same slot.
+- **Completion order.** Completion is one predicate over durable state: a
+  recorded switch for the attempt, at or before its deadline, plus full
+  evidence for the mode. An A write that supplies the last prerequisite
+  records `confirmed` in the same write. When the commit is last, the durable
+  state already satisfies the predicate. Expiry and abort writes compare the
+  same assignment, record and switch fields, so they cannot land after
+  completion.
+- **Deadlines in one clock.** Control converts each deadline to the store
+  clock (a store clock read minus the local time still remaining) and the store
+  enforces it inside the atomic write. Each attempt saves its deadline and,
+  once switched, its evidence bound in store-clock terms; every A and C write
+  is clamped to the saved bound, never to a reconverted local time. Evidence
+  after its bound, A after the control's authority ends, and a switch commit
+  after the attempt's deadline never complete an attempt. Clocks of different
+  hosts are never compared. *Assumption:* the saved store-clock values are
+  authoritative; local times only trigger earlier local decisions. Store-clock
+  continuity across a Redis failover is not guaranteed, so a failover that
+  steps the store clock can shorten or lengthen a saved bound by that step.
+- **Commit time (owner decision).** The 3 s A bound starts when control first
+  observes the commit, not at the store's commit time. It is saved once and
+  never restarted.
+- **C transport.** After the commit, control polls the owner's private
+  `GET /sessions/{id}/relay-delivery?generation=g` every 100 ms and retains
+  matching epoch, slot and generation reports. A worker without this route is
+  treated as lacking C (`confirmation_unsupported`).
+- **C test.** Only SRTCP from the current path (leg and caller address) counts.
+  A report block must name a required track's SSRC, and its highest sequence
+  must be after the last sequence sent before the switch (16-bit serial
+  arithmetic). A resumed worker starts fresh boundaries.
+- **Required MIDs (owner decision).** Control asks the owner before the event.
+  The set is the negotiated tracks on which the worker has sent; a negotiated
+  track that never sent is left out. It travels in the restart request.
+  Worker-injected confirmation media (encoded silence, still frames) is not
+  built; a source that pauses during an attempt fails that attempt.
+- **Deadlines.** The event and reply deadline is the planned deadline or the
+  episode deadline, never a per-attempt bound. A caller stall request after the
+  commit fails the current attempt at once, in both modes.
+- **Planned failures (owner decision on the fresh window).** A failure before
+  the switch consumes the generation. One restart on the old slot follows in a
+  fresh 10 s planned window, for callers that dropped the old pair; if that
+  also fails before switching, the caller keeps its old pair. A committed but
+  unconfirmed attempt rolls back within the remaining window. As soon as a
+  call leaves its original path, control arms the stall episode with
+  detection at the first planned deadline, before any wait for a switch
+  commit; such waits are clipped to the episode's remaining time. An attempt
+  that already exists is durably bound to the armed episode before any wait,
+  keeping or shortening its bounds. A call not
+  confirmed back (rollback unconfirmed, failed before switching, or out of
+  time) continues in that episode. The fresh window can stretch the planned
+  phase to 20 s, but an episode deadline is at most 10 s + 15 s = 25 s after
+  the original event.
+- **Episodes.** An episode completes only on its own attempt: an attempt it
+  issued, or one it adopted (adoption stamps the episode deadline and may
+  only shorten the attempt's deadlines). An earlier confirmation never ends a
+  later episode. After a control restart, a recorded switch with saved full A
+  completes the same attempt. Unreadable or contended store state at the
+  deadline is retried, never treated as expiry. The watcher rechecks control
+  authority on every retry and before any terminal effect, and stops when the
+  call has ended or its session is gone. If authority ends while it waits for
+  the call lock, it releases the lock and keeps watching; under the lock it
+  first checks whether a driver already completed the episode.
+- **One-slot sets.** An explicitly configured set of one slot accepts the
+  confirmation contracts and supports same-slot recovery. Changing to another
+  address needs a second slot.
+- **Tried slots.** An episode never clears its tried set. This replaces the
+  slice-2 retry of the only surviving slot.
+- **Ended calls.** `media-progress` returns `410` for a call this control still
+  knows as ended; an unknown call returns `404`.
+- **Fence for #323.** A store-side control-epoch fence adds one compared field
+  to the confirmation write, the same way the attempt fields are compared.
+
 ## Measurement
 
 Evidence comes from the in-process harness (Pion caller), `crash-run` and a new

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -126,6 +127,7 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 	if event.Generation == 0 {
 		c.relayAttemptUntil = time.Now().Add(2 * time.Second)
 	}
+	parent := ctx
 	ctx, cancel := context.WithDeadline(ctx, event.Deadline)
 	defer cancel()
 	if relaytrace.Enabled() {
@@ -191,6 +193,12 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 	if err == nil {
 		_, generation, _ := iceufrag.Parse(iceUfrag(c.pc.RemoteDescription()))
 		c.relayGeneration = generation
+		if c.mediaProgress == 1 && resp.Header.Get("Relais-Relay-Confirmation") == "decode" {
+			var required []string
+			if json.Unmarshal([]byte(resp.Header.Get("Relais-Required-Mids")), &required) == nil && len(required) > 0 {
+				go c.reportMediaProgress(parent, generation, required, answerCandidate(string(data)))
+			}
+		}
 		// The event stream carries the actual server attempt bound. Spontaneous
 		// requests have no event; permit another stall observation after two seconds.
 		if event.Generation == 0 {
@@ -206,4 +214,100 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 func (c *Call) relayStalled() bool {
 	last := c.inboundMedia.Load()
 	return c.iceStalled.Load() || c.liveMedia.Load() && last != nil && time.Since(*last) >= 2*time.Second
+}
+
+// answerCandidate returns the answer's only candidate as host:port.
+func answerCandidate(answer string) string {
+	for _, line := range strings.Split(answer, "\r\n") {
+		if fields := strings.Fields(strings.TrimPrefix(line, "a=candidate:")); strings.HasPrefix(line, "a=candidate:") && len(fields) >= 6 {
+			return net.JoinHostPort(fields[4], fields[5])
+		}
+	}
+	return ""
+}
+
+// midPackets maps each negotiated MID to the caller's decrypted packet count.
+func (c *Call) midPackets() map[string]int {
+	kinds := map[string]string{}
+	for _, t := range c.pc.GetTransceivers() {
+		kinds[t.Kind().String()] = t.Mid()
+	}
+	counts := map[string]int{}
+	for _, track := range c.rec.report().Tracks {
+		if mid, ok := kinds[track.Kind]; ok && mid != "" {
+			counts[mid] = track.Packets
+		}
+	}
+	return counts
+}
+
+// reportMediaProgress follows ADR 0016 section 5's freshness gate with packet
+// progress in place of decode (the Pion caller has no audio decoder): after
+// the new pair is selected, discard 500 ms, then require progress in both
+// halves of a 500 ms window on every required MID. It reports the qualifying
+// set once per second until control acknowledges the full set or refuses it.
+func (c *Call) reportMediaProgress(ctx context.Context, generation uint64, required []string, candidate string) {
+	sleep := func(d time.Duration) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(d):
+			return true
+		}
+	}
+	current := func() bool {
+		c.relayRestartMu.Lock()
+		defer c.relayRestartMu.Unlock()
+		return c.relayGeneration == generation
+	}
+	for current() {
+		for c.selectedRemoteAddr() != candidate {
+			if !current() || !sleep(10*time.Millisecond) {
+				return
+			}
+		}
+		if !sleep(500 * time.Millisecond) {
+			return
+		}
+		base := c.midPackets()
+		if !sleep(250 * time.Millisecond) {
+			return
+		}
+		middle := c.midPackets()
+		if !sleep(250 * time.Millisecond) {
+			return
+		}
+		end := c.midPackets()
+		if c.selectedRemoteAddr() != candidate {
+			continue // the pair changed: reset every baseline
+		}
+		var fresh []string
+		for _, mid := range required {
+			if middle[mid] > base[mid] && end[mid] > middle[mid] {
+				fresh = append(fresh, mid)
+			}
+		}
+		if len(fresh) > 0 {
+			body, _ := json.Marshal(map[string]any{"generation": generation, "decoded_mids": fresh})
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.resourceURL+"/media-progress", strings.NewReader(string(body)))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := c.harness.httpClient.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+				c.progressReports.Add(1)
+				switch {
+				case resp.StatusCode == http.StatusNoContent && len(fresh) == len(required):
+					return
+				case resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusBadRequest:
+					return // never success; follow the next event or restart reply
+				}
+			}
+		}
+		if !sleep(time.Second) {
+			return
+		}
+	}
 }

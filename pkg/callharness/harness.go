@@ -245,6 +245,10 @@ func (h *Harness) postOffer(ctx context.Context, worker int, offer string, relay
 	if len(relayChange) > 0 && relayChange[0] {
 		req.Header.Set("Relais-Relay-Change", "true")
 	}
+	mediaProgress := len(relayChange) > 1 && relayChange[1]
+	if mediaProgress {
+		req.Header.Set("Relais-Media-Progress", "true")
+	}
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
@@ -273,6 +277,12 @@ func (h *Harness) postOffer(ctx context.Context, worker int, offer string, relay
 			return "", "", fmt.Errorf("callharness: bad Location %q: %w", location, err)
 		}
 		resourceURL = base.ResolveReference(ref).String()
+	}
+	// ADR 0016 section 5: a caller requesting A needs both echoes. A
+	// relay-change echo without media progress identifies a control that
+	// cannot accept A; delete the call and report relay_unsupported.
+	if mediaProgress && resp.Header.Get("Relais-Relay-Change") == "true" && resp.Header.Get("Relais-Media-Progress") != "true" {
+		return "", "", errors.Join(ErrRelayUnsupported, h.deleteCall(ctx, resourceURL))
 	}
 
 	return string(body), resourceURL, nil

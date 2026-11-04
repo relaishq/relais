@@ -847,6 +847,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			p.restartOutcome("drain", worker.name, "partial", "interrupted")
 		}
 	}
+	p.resumeRelayAttempts(ctx)
 	return nil
 }
 func (p *Plane) rebuildCall(lease sessionstore.Lease) *call {

@@ -64,7 +64,8 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // atomic with the counters (see export).
 type session struct {
 	pendingRestart *pendingRestart
-	relayAborted   uint64 // fences an in-flight offer racing with rollback
+	relayDelivery  *relayDelivery // C for the live generation; never exported
+	relayAborted   uint64         // fences an in-flight offer racing with rollback
 	previousRelay  relayPath
 	previousUntil  time.Time
 	checkpoint     sessionCheckpoint
@@ -619,7 +620,7 @@ func (s *session) handleRTCP(pkt []byte) {
 	s.handleSRTPPacket(earlyPacket{data: pkt, rtcp: true})
 }
 
-func (s *session) handleRTCPLocked(pkt []byte) (failure uint64, decryptErr error) {
+func (s *session) handleRTCPLocked(pkt []byte, path relayPath) (failure uint64, decryptErr error) {
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
 		if s.rejectedReplay(err) {
@@ -630,13 +631,17 @@ func (s *session) handleRTCPLocked(pkt []byte) (failure uint64, decryptErr error
 
 		return
 	}
-	if !s.state.Video.negotiated() {
+	if !s.state.Video.negotiated() && s.relayDelivery == nil {
 		return
 	}
 	packets, err := rtcp.Unmarshal(plain)
 	if err != nil {
 		s.log.Debugf("session %s: drop RTCP packet: %v", s.id, err)
 
+		return
+	}
+	s.noteDeliveryLocked(packets, path)
+	if !s.state.Video.negotiated() {
 		return
 	}
 	if trigger := keyframeRequest(packets, s.state.Video.SSRC); trigger != "" {

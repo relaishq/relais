@@ -3,6 +3,8 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,22 +102,50 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 		}
 		// A delayed renewal of the same tenure does not rebuild calls. Retain
 		// the expired deadline and enforce it as soon as authority returns.
-		for !p.controlAuthority() {
-			if p.restart != nil && p.restart.stopping.Load() {
+		// Authority is rechecked on every retry and before every terminal side
+		// effect; a call that already ended stops the watcher. The expiry
+		// write is ordered against durable completion: this episode's
+		// confirmation saved first wins. Unavailable store state is never read
+		// as expiry: retry until the outcome is definite.
+		var detail RelayEvent
+		for backoff := 50 * time.Millisecond; ; backoff = min(2*backoff, time.Second) {
+			if !p.awaitRelayAuthority(e) || e.completed.Load() {
 				return
+			}
+			p.mu.Lock()
+			gone := c.terminal || c.hungUp.Load()
+			p.mu.Unlock()
+			if gone {
+				p.completeRelayEpisode(context.Background(), c, e)
+				return
+			}
+			expiry, cancelExpiry := context.WithTimeout(context.Background(), time.Second)
+			outcome, d := p.expireRelayAttempt(expiry, c, e.deadline)
+			cancelExpiry()
+			switch outcome {
+			case relayExpiryConfirmed, relayExpiryGone:
+				p.completeRelayEpisode(context.Background(), c, e)
+				return
+			case relayExpiryEnded:
+				if p.controlAuthority() {
+					detail = d
+				}
+			}
+			if detail.Detail != "" {
+				break
 			}
 			select {
 			case <-e.done:
 				return
-			case <-time.After(50 * time.Millisecond):
+			case <-time.After(backoff):
 			}
-		}
-		if e.completed.Load() {
-			return
 		}
 		// Publish the terminal event at the deadline even while a cancelled
 		// operation is unwinding; ownership cleanup still uses the call lock.
 		c.stateMu.Lock()
+		if c.relayEndDetail.Detail == "" {
+			c.relayEndDetail = detail
+		}
 		c.relayEndReason = "relay_change_failed"
 		select {
 		case c.relayWake <- struct{}{}:
@@ -130,14 +160,60 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 			c.controlCancel()
 		}
 		c.controlMu.Unlock()
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.stateMu.Lock()
-		lease := c.lease
-		c.stateMu.Unlock()
-		p.endRelayFailure(c, lease, "relay_change_failed")
-		p.completeRelayEpisode(context.Background(), c, e)
+		for {
+			c.mu.Lock()
+			if e.completed.Load() {
+				// A driver completed the episode while this watcher waited for
+				// the call lock: its confirmation wins; never end the call.
+				c.mu.Unlock()
+				relayWatchEvent(c, "completed-under-lock")
+				return
+			}
+			if p.controlAuthority() {
+				c.stateMu.Lock()
+				lease := c.lease
+				c.stateMu.Unlock()
+				p.endRelayFailure(c, lease, "relay_change_failed")
+				p.completeRelayEpisode(context.Background(), c, e)
+				c.mu.Unlock()
+				return
+			}
+			// Authority ended while the operation unwound. Release the call
+			// and keep watching: the same watcher ends the call once authority
+			// returns, so the episode is never left without one.
+			c.mu.Unlock()
+			relayWatchEvent(c, "suspended")
+			if !p.awaitRelayAuthority(e) {
+				return
+			}
+		}
 	}()
+}
+
+// relayWatchHooks is a test barrier for watcher transitions; unset in
+// production.
+var relayWatchHooks atomic.Pointer[func(*call, string)]
+
+func relayWatchEvent(c *call, name string) {
+	if hook := relayWatchHooks.Load(); hook != nil {
+		(*hook)(c, name)
+	}
+}
+
+// awaitRelayAuthority waits until this control holds authority. It reports
+// false when the episode finished or control is stopping.
+func (p *Plane) awaitRelayAuthority(e *relayEpisode) bool {
+	for !p.controlAuthority() {
+		if p.restart != nil && p.restart.stopping.Load() {
+			return false
+		}
+		select {
+		case <-e.done:
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return true
 }
 
 func (p *Plane) completeRelayEpisode(ctx context.Context, c *call, e *relayEpisode) {
@@ -156,6 +232,14 @@ func (p *Plane) completeRelayEpisode(ctx context.Context, c *call, e *relayEpiso
 }
 
 func (p *Plane) startRelayRecovery(ctx context.Context, c *call, sameSlot bool) error {
+	return p.startRelayRecoveryFrom(ctx, c, sameSlot, time.Now(), nil)
+}
+
+// startRelayRecoveryFrom starts or joins the call's loss episode. seed names
+// slots already tried in it, such as an adopted unconfirmed attempt's slot.
+// The tried set is never cleared: an exhausted episode waits for an untried
+// live slot or its fixed deadline (ADR 0016 section 7).
+func (p *Plane) startRelayRecoveryFrom(ctx context.Context, c *call, sameSlot bool, detected time.Time, seed []string) error {
 	p.mu.Lock()
 	terminal := c.terminal || c.hungUp.Load()
 	p.mu.Unlock()
@@ -165,7 +249,7 @@ func (p *Plane) startRelayRecovery(ctx context.Context, c *call, sameSlot bool) 
 	if terminal || reason != "" {
 		return sessionstore.ErrEnded
 	}
-	e, err := p.relayRecoveryEpisode(ctx, c, time.Now())
+	e, err := p.relayRecoveryEpisode(ctx, c, detected)
 	if err != nil {
 		return err
 	}
@@ -184,11 +268,11 @@ func (p *Plane) startRelayRecovery(ctx context.Context, c *call, sameSlot bool) 
 		recovery, cancel := context.WithDeadline(context.WithoutCancel(ctx), e.deadline)
 		defer cancel()
 		tried := map[string]bool{}
+		for _, slot := range seed {
+			tried[slot] = true
+		}
 		for recovery.Err() == nil {
-			err = p.recoverRelay(recovery, c, sameSlot, tried)
-			if errors.Is(err, ErrNoTarget) {
-				clear(tried)
-			}
+			err = p.recoverRelay(recovery, c, sameSlot, tried, e.deadline, e.intent.Started)
 			if err == nil || errors.Is(err, sessionstore.ErrEnded) || errors.Is(err, sessionstore.ErrNotFound) {
 				p.completeRelayEpisode(recovery, c, e)
 				return
@@ -213,11 +297,30 @@ func (p *Plane) callerRelayRestart(ctx context.Context, c *call) (RelayEvent, er
 	if err := p.requireMutationReady(); err != nil {
 		return RelayEvent{}, err
 	}
-	c.stateMu.Lock()
-	capable, event := c.relayCapable, c.relayEvent
-	c.stateMu.Unlock()
-	if !capable {
+	mode, err := p.relayMode(ctx, c)
+	if err != nil {
+		return RelayEvent{}, err
+	}
+	if mode != sessionstore.RelayConfirmDelivery && mode != sessionstore.RelayConfirmDecode {
 		return RelayEvent{}, mediaworker.ErrRelayUnsupported
+	}
+	c.stateMu.Lock()
+	event := c.relayEvent
+	c.stateMu.Unlock()
+	var stalled uint64
+	if event != nil {
+		// A stall after the switch commit fails that unconfirmed attempt at
+		// once; its operation then issues a higher generation (section 7).
+		_, got, err := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id)
+		if err != nil {
+			return RelayEvent{}, err
+		}
+		if got.Pending == "" && got.Generation >= event.Generation {
+			stalled = event.Generation
+			c.stateMu.Lock()
+			c.relayStall = stalled
+			c.stateMu.Unlock()
+		}
 	}
 	if event == nil || time.Now().After(event.Deadline) {
 		if err := p.startRelayRecovery(ctx, c, true); err != nil {
@@ -233,7 +336,7 @@ func (p *Plane) callerRelayRestart(ctx context.Context, c *call) (RelayEvent, er
 		if reason != "" {
 			return RelayEvent{}, sessionstore.ErrEnded
 		}
-		if event != nil && time.Now().Before(event.Deadline) {
+		if event != nil && time.Now().Before(event.Deadline) && event.Generation > stalled {
 			return *event, nil
 		}
 		select {
@@ -244,9 +347,9 @@ func (p *Plane) callerRelayRestart(ctx context.Context, c *call) (RelayEvent, er
 	}
 }
 
-// Completion deliberately remains the slice-1 fenced assignment commit.
-// Caller media-progress acceptance (§7 / row 6) is parked by the owner.
-func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried map[string]bool) error {
+// Completion is the mode's confirmation plus the matching fenced commit
+// (ADR 0016 section 7); a commit alone never ends the episode.
+func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried map[string]bool, deadline, detected time.Time) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := c.lockOperatorCancel(ctx, false, cancel, true); err != nil {
@@ -276,12 +379,25 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 			return err
 		}
 	}
-	c.stateMu.Lock()
-	capable := c.relayCapable
-	c.stateMu.Unlock()
-	if !capable {
+	mode, err := p.relayMode(ctx, c)
+	if err != nil {
+		return err
+	}
+	if mode != sessionstore.RelayConfirmDelivery && mode != sessionstore.RelayConfirmDecode {
 		p.endRelayFailure(c, lease, "relay_lost")
 		return nil
+	}
+	opt := relayAttemptOptions{kind: "recovery", outer: deadline, detected: detected}
+	p.mu.Lock()
+	currentLost := p.relaySet[from.Slot].lost
+	p.mu.Unlock()
+	if !currentLost {
+		// A committed attempt still awaiting confirmation (for example after a
+		// control restart) is adopted with its saved bound, not superseded.
+		if adopted, err := p.adoptRelayAttempt(ctx, c, from, opt); adopted || err != nil {
+			tried[from.Slot] = true
+			return err
+		}
 	}
 	target := ""
 	p.mu.Lock()
@@ -313,13 +429,22 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 	if sameSlot && target == from.Slot {
 		bound = time.Second
 	}
-	if err = p.waitRelayChange(ctx, c, pending, bound); err == nil {
-		return nil
+	opt.tried = slices.Sorted(maps.Keys(tried))
+	err = p.waitRelayChange(ctx, c, pending, bound, opt)
+	if err == nil || errors.Is(err, errRelayUnconfirmed) {
+		return err // an unconfirmed attempt retries on an untried slot
+	}
+	if errors.Is(err, ErrConfirmationUnsupported) {
+		_, abortErr := p.abortRelayPending(ctx, lease, pending)
+		c.stateMu.Lock()
+		c.relayEndDetail = RelayEvent{Detail: "confirmation_unsupported", Confirmation: mode}
+		c.stateMu.Unlock()
+		p.endRelayFailure(c, lease, "relay_change_failed")
+		return abortErr
 	}
 	_, abortErr := p.abortRelayPending(ctx, lease, pending)
 	if errors.Is(abortErr, mediaworker.ErrRelaySwitched) {
-		deadline, _ := ctx.Deadline()
-		return p.waitRelayChange(ctx, c, pending, time.Until(deadline))
+		return p.waitRelayChange(ctx, c, pending, time.Until(deadline), opt)
 	}
 	return errors.Join(err, abortErr)
 }

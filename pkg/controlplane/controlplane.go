@@ -116,8 +116,13 @@ type call struct {
 	relayUnplanned bool               // guarded by controlMu
 	relayCancel    context.CancelFunc // guarded by controlMu; published with c.mu ownership
 	relayCapable   bool
-	relaySlot      string // guarded by stateMu; placement hint, never authorization
-	relayEndReason string // guarded by stateMu
+	relaySlot      string     // guarded by stateMu; placement hint, never authorization
+	relayEndReason string     // guarded by stateMu
+	relayEndDetail RelayEvent // guarded by stateMu; evidence detail for relay_change_failed
+	relayMode      string     // guarded by stateMu; accepted confirmation mode, "" until loaded
+	relayStall     uint64     // guarded by stateMu; generation a caller reported stalled
+	progressTokens float64    // guarded by stateMu; media-progress rate limit
+	progressAt     time.Time  // guarded by stateMu
 	eventOpen      bool
 	relayWake      chan struct{}               // guarded by stateMu; wakes the single event stream
 	relayEvent     *RelayEvent                 // guarded by stateMu

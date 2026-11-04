@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ type relayProtocolWorker struct {
 	*fakeWorker
 	abortErr   error
 	abortBlock bool
+	noDelivery atomic.Bool // withhold C, as a caller whose reports never arrive
 }
 
 func (w *relayProtocolWorker) ConfigureRelays(context.Context, []mediaworker.RelaySlot) error {
@@ -29,6 +31,23 @@ func (w *relayProtocolWorker) AbortRelayRestart(ctx context.Context, _ string, _
 		return ctx.Err()
 	}
 	return w.abortErr
+}
+
+// RelayDelivery is a fake C contract: the committed generation's required
+// track is delivered as soon as control observes the commit.
+func (w *relayProtocolWorker) RelayDelivery(ctx context.Context, id string, generation uint64) (mediaworker.RelayDeliveryReport, error) {
+	lease, a, err := w.store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
+	if err != nil {
+		return mediaworker.RelayDeliveryReport{}, err
+	}
+	report := mediaworker.RelayDeliveryReport{Generation: generation, Epoch: lease.Epoch, Slot: a.Slot, Required: []string{"0"}}
+	if a.Pending == "" && a.Generation == generation {
+		report.Switched = true
+		if !w.noDelivery.Load() {
+			report.Delivered = []string{"0"}
+		}
+	}
+	return report, nil
 }
 func (w *relayProtocolWorker) CreateSessionAtRelay(ctx context.Context, offer, slot string) (string, string, sessionstore.Lease, error) {
 	id, answer, err := w.CreateSession(ctx, offer)
@@ -141,7 +160,8 @@ func TestCreateDuringRelayDrain(t *testing.T) {
 		go func() { drained <- p.DrainRelay(context.Background(), "r1") }()
 		lease, assignment := waitRelayPending(t, store, id)
 		defer func() {
-			require.NoError(t, store.(sessionstore.RelayAssignments).CASRelay(context.Background(), lease, assignment, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
+			// The owning worker's switch commit (not a retirement).
+			require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, assignment, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
 			require.NoError(t, <-drained)
 		}()
 		created := make(chan error, 1)

@@ -309,9 +309,10 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	platform := func() map[string]Format {
 		fs := common()
 		fs["redis_keys"] = Format{Reads: []int{m.KeyContract}, Writes: []int{m.KeyContract}, Continues: []int{m.KeyContract}}
-		// Contract 2 adds relay assignments and scoped routes. Existing profiles
-		// still run one bootstrap relay and write the unchanged contract-1 tuples.
-		// Relay-change profiles must declare contract-2 writers when introduced.
+		// Contract 2 adds relay assignments and scoped routes; contract 3 adds
+		// the ADR 0016 confirmation record. Existing profiles still run one
+		// bootstrap relay and write the unchanged contract-1 tuples. Only
+		// relay-change profiles write the current contract.
 		fs["store_contract"] = Format{Reads: []int{1, m.StoreContract}, Writes: []int{1}, Continues: []int{1}}
 		return fs
 	}

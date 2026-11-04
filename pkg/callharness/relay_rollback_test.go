@@ -22,7 +22,10 @@ import (
 )
 
 // Real private HTTP and UDP boundaries, also used by the acceptance run.
-func relayChangeTopology(t *testing.T, store sessionstore.Store, refuse, drop bool) (*controlplane.Plane, *mediaworker.Worker, *Harness, []*relay.Relay, *atomic.Uint64) {
+// stale (optional) puts a proxy in front of r2's public address that passes
+// STUN both ways but drops the worker's media toward the caller: ICE connects
+// on the new pair while the caller's media is stale.
+func relayChangeTopology(t *testing.T, store sessionstore.Store, refuse, drop bool, stale ...bool) (*controlplane.Plane, *mediaworker.Worker, *Harness, []*relay.Relay, *atomic.Uint64) {
 	t.Helper()
 	ctx := context.Background()
 	var relays []*relay.Relay
@@ -53,6 +56,9 @@ func relayChangeTopology(t *testing.T, store sessionstore.Store, refuse, drop bo
 				}
 			}()
 			t.Cleanup(func() { require.NoError(t, sock.Close()); <-done })
+		}
+		if len(stale) > 0 && stale[0] && id == "r2" {
+			public = staleReturnProxy(t, r.PublicAddr(), drops)
 		}
 		bindings = append(bindings, controlplane.RelayBinding{Slot: mediaworker.RelaySlot{ID: id, Leg: r.WorkerAddr(), Public: public}, Relay: r})
 	}

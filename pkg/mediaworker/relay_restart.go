@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/relaishq/relais/internal/relaytrace"
@@ -30,12 +31,16 @@ type RestartRequest struct {
 	Offer      string `json:"offer"`
 	Generation uint64 `json:"generation"`
 	Slot       string `json:"slot"`
+	// Required is the MID set control fixed for this attempt (ADR 0016
+	// section 5). An older control omits it; the worker then fixes its own.
+	Required []string `json:"required_mids,omitempty"`
 }
 type RelaySetRequest struct {
 	Slots []RelaySlot `json:"slots"`
 }
 type RestartReply struct {
-	Answer string `json:"answer"`
+	Answer   string   `json:"answer"`
+	Required []string `json:"required_mids,omitempty"`
 }
 type relayPath struct{ leg, caller netip.AddrPort }
 type pendingRestart struct {
@@ -43,6 +48,7 @@ type pendingRestart struct {
 	receive  netip.AddrPort // authenticated pending receive path
 	from     sessionstore.RelayAssignment
 	answer   string
+	required []string // fixed before the switch; C covers exactly these MIDs
 	switched chan struct{}
 	aborted  chan struct{}
 }
@@ -113,6 +119,8 @@ func (s *session) switchRelayLocked(path relayPath) bool {
 	s.previousUntil = time.Now().Add(500 * time.Millisecond)
 	p.ice.RemoteAddr = path.caller
 	s.state.ICE = p.ice
+	// Fix C's sequence boundaries before any media leaves on the new path.
+	s.relayDelivery = s.newRelayDeliveryLocked(p.from.Generation+1, p.required)
 	s.consent.Reset(s.worker.cfg.consentTimeout)
 	if relaytrace.Enabled() {
 		relaytrace.Emit("worker-switch", path.leg.String(), nil)
@@ -244,70 +252,86 @@ func restartIdentity(raw string) (string, error) {
 }
 
 func (w *Worker) RestartSession(ctx context.Context, id string, req RestartRequest) (string, error) {
+	reply, err := w.RestartRelaySession(ctx, id, req)
+	return reply.Answer, err
+}
+
+// RestartRelaySession answers a restart offer and names the required MIDs the
+// worker's C evidence covers for this generation.
+func (w *Worker) RestartRelaySession(ctx context.Context, id string, req RestartRequest) (RestartReply, error) {
 	if w.cfg.Relay == nil {
-		return "", ErrRelayUnsupported
+		return RestartReply{}, ErrRelayUnsupported
 	}
 	s := w.session(id)
 	if s == nil {
-		return "", ErrUnknownSession
+		return RestartReply{}, ErrUnknownSession
 	}
 	owners, ok := w.cfg.Relay.Owners.(sessionstore.RelayAssignments)
 	if !ok {
-		return "", ErrRelayUnsupported
+		return RestartReply{}, ErrRelayUnsupported
 	}
 	lease, a, err := owners.RelayOwner(ctx, id)
 	if err != nil {
-		return "", err
+		return RestartReply{}, err
 	}
 	w.mu.Lock()
 	slot, known := w.relaySlots[req.Slot]
 	w.mu.Unlock()
 	if !known || a.Pending != req.Slot || req.Generation != a.Generation+1 {
-		return "", sessionstore.ErrRelayConflict
+		return RestartReply{}, sessionstore.ErrRelayConflict
 	}
 	identity, err := restartIdentity(req.Offer)
 	if err != nil {
-		return "", err
+		return RestartReply{}, err
 	}
 	offer, err := parseOffer(req.Offer)
 	if err != nil {
-		return "", ErrRestartMismatch
+		return RestartReply{}, ErrRestartMismatch
 	}
 	params := s.answerParams()
 	pwd, err := randomString(icePwdLength)
 	if err != nil {
-		return "", err
+		return RestartReply{}, err
 	}
 	params.iceUfrag, params.icePwd, params.candidate = iceufrag.Format(id, req.Generation), pwd, slot.Public
 	answer, err := buildAnswer(offer, params)
 	if err != nil {
-		return "", err
+		return RestartReply{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if req.Generation <= s.relayAborted {
-		return "", sessionstore.ErrRelayConflict
+		return RestartReply{}, sessionstore.ErrRelayConflict
 	}
 	if s.fenced.Load() || s.lease.Epoch != lease.Epoch || s.lease.Worker != lease.Worker {
-		return "", sessionstore.ErrLeaseLost
+		return RestartReply{}, sessionstore.ErrLeaseLost
 	}
 	if s.componentMode || s.state.Agent.V2 != nil || identity != s.state.RestartIdentity || s.state.ICE.Relay == nil || s.state.ICE.Relay.ID != a.Slot {
-		return "", ErrRestartMismatch
+		return RestartReply{}, ErrRestartMismatch
 	}
 	if s.pendingRestart != nil {
 		if s.pendingRestart.from == a {
 			if s.pendingRestart.ice.RemoteUfrag != offer.iceUfrag || s.pendingRestart.ice.RemotePwd != offer.icePwd {
-				return "", ErrRestartMismatch
+				return RestartReply{}, ErrRestartMismatch
 			}
-			return s.pendingRestart.answer, nil
+			return RestartReply{Answer: s.pendingRestart.answer, Required: slices.Clone(s.pendingRestart.required)}, nil
 		}
-		return "", sessionstore.ErrRelayConflict
+		return RestartReply{}, sessionstore.ErrRelayConflict
 	}
-	p := &pendingRestart{ice: iceState{LocalUfrag: params.iceUfrag, LocalPwd: pwd, RemoteUfrag: offer.iceUfrag, RemotePwd: offer.icePwd, Relay: &slot}, from: a, answer: answer, switched: make(chan struct{}), aborted: make(chan struct{})}
+	required := s.requiredMIDsLocked()
+	if req.Required != nil {
+		for _, mid := range req.Required {
+			if mid == "" || mid != s.state.Audio.MID && mid != s.state.Video.MID {
+				return RestartReply{}, ErrRestartMismatch
+			}
+		}
+		required = slices.Clone(req.Required)
+	}
+	p := &pendingRestart{ice: iceState{LocalUfrag: params.iceUfrag, LocalPwd: pwd, RemoteUfrag: offer.iceUfrag, RemotePwd: offer.icePwd, Relay: &slot}, from: a, answer: answer, required: required, switched: make(chan struct{}), aborted: make(chan struct{})}
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
-		return "", ErrClosed
+		return RestartReply{}, ErrClosed
 	}
 	w.running.Add(1)
 	w.mu.Unlock()
@@ -327,7 +351,7 @@ func (w *Worker) RestartSession(ctx context.Context, id string, req RestartReque
 		for {
 			// The packet switch already occurred. Store uncertainty never sends
 			// media back to the old slot; readback settles an uncertain commit.
-			err := owners.CASRelay(commitCtx, lease, p.from, to)
+			err := owners.CommitRelay(commitCtx, lease, p.from, to)
 			if err != nil {
 				_, got, e := owners.RelayOwner(commitCtx, id)
 				if e == nil && got.Slot == to.Slot && got.Generation >= to.Generation {
@@ -356,7 +380,7 @@ func (w *Worker) RestartSession(ctx context.Context, id string, req RestartReque
 	if relaytrace.Enabled() {
 		relaytrace.Emit("worker-answer", slot.ID, nil)
 	}
-	return answer, nil
+	return RestartReply{Answer: answer, Required: slices.Clone(p.required)}, nil
 }
 
 func (s *session) currentLeg() netip.AddrPort {

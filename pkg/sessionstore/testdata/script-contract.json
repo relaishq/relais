@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "scripts": {
     "componentCommitLua": {
       "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
@@ -37,7 +37,10 @@
       "sha": "c1b1ca5a1ac1d42c65879c6f5de5bb0390368b5e"
     },
     "relayAssignmentLua": {
-      "sha": "e097940955cb8d3d70a608c3fa56b45293337bc8"
+      "sha": "9d91df7544746c09c88b3847c16c18db05b6ec00"
+    },
+    "relayConfirmationLua": {
+      "sha": "46c85e05542816e2567a26cd189c6e3a5e440e3c"
     },
     "relayLeaseLua": {
       "sha": "729fabf7a7b59137a645cda3ec06b0a07b5fc7e2"
