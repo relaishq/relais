@@ -115,7 +115,7 @@ type session struct {
 	dtlsEndpoint  *dtlsEndpoint
 	nominated     chan struct{} // closed when the caller first nominates an address
 	nominatedOnce sync.Once
-	consent       *time.Timer // closes the session when consent checks stop
+	consent       *time.Timer // set and stopped under mu; closes the session when consent checks stop
 
 	// Scratch buffers for packet processing; guarded by mu.
 	rtcpBuf    []byte
@@ -226,7 +226,10 @@ func sessionFromState(w *Worker, state sessionState) *session {
 	sess.videoRate.peak, sess.videoRate.peakAt = state.Checkpoint.RTPPacketRate, now
 	sess.rtcpRate.peak, sess.rtcpRate.peakAt = state.Checkpoint.SRTCPPacketRate, now
 	sess.dtlsEndpoint = newDTLSEndpoint(sess)
+	// close takes mu before reading consent, even if the timer fires now.
+	sess.mu.Lock()
 	sess.consent = time.AfterFunc(w.cfg.consentTimeout, sess.consentExpired)
+	sess.mu.Unlock()
 	w.claimSession(sess.id)
 
 	return sess
@@ -728,9 +731,9 @@ func (s *session) close() {
 			}
 		}
 		s.releaseMoveBytes()
-		s.consent.Stop()
 
 		s.mu.Lock()
+		s.consent.Stop()
 		dtlsConn := s.dtlsConn
 		s.mu.Unlock()
 		if dtlsConn != nil {
