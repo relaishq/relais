@@ -673,7 +673,7 @@ Resumed warning, and clear lost audio without producing replacement audio.
 A source-only store gate separately proves that a newer locally accepted
 history update does not survive when it never reaches the checkpoint store.
 
-The real Save size test measures **2,871 B working / 4,205 B history**, below
+The real Save size test measures **2,917 B working / 4,205 B history**, below
 **3,072 B / 8,192 B** defaults, including escaped and non-ASCII bounded text.
 This is a mock-provider proof on standalone local Redis, not a live paid-provider,
 managed-store, loaded-capacity or seamless-audio proof. A crash can lose current

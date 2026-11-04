@@ -750,10 +750,10 @@ Demo A calls with `ErrIncompatibleAgent`.
 
 `TestHistoryLayoutsAndDefaultBudgets` measures the real Save path with maximum
 numeric fields and text at its bounds, including quotes, control/HTML escapes,
-and non-ASCII text. The conservative size fixture is **2,871 working bytes**
+and non-ASCII text. The conservative size fixture is **2,917 working bytes**
 against the **3,072 B** default, plus **4,205 history bytes** against **8,192 B**.
-Legacy v4 remains byte-for-byte the inline JSON layout, **7,087 B** in that
-fixture, leaving **1,105 B** under its declaration.
+Legacy v4 remains byte-for-byte the inline JSON layout, **7,133 B** in that
+fixture, leaving **1,059 B** under its declaration.
 
 A standalone voice worker in a split-compatible pool needs
 `-agent-split-checkpoints` and its normal connection flags. It needs **no
@@ -872,11 +872,16 @@ Completed entries cannot be removed until a checkpoint acknowledges them, so
 all 19 cannot fit during a store outage. Move-memory admission separately
 charges each task request twice; the 1 MiB mailbox does not enlarge metadata.
 
-A refused Speech or Play admission preserves accepted audio. It retries on
-playback completion and a 500 ms store-clock timer, with one 30 s window from
-the first refusal. A refusal never cancels current playback. If capacity still
-fails at the deadline, current audio finishes before a visible `Capacity`
-notice ends the turn; gaps while waiting are acceptable. Later provider errors
+A refused STT, Reply, Speech or Play admission preserves its input, including
+the recording until STT returns accepted text. It retries on a 500 ms store-clock
+timer; Speech and Play also retry on playback completion. Each outage gets one
+30 s window from its first refusal. Once all pending retries recover, the agent
+clears the window and cancels its timers. A later outage, even in the same turn,
+gets a full new window. Repeated refusals within one outage do not extend it.
+A refusal never cancels admitted playback, including before its first chunk.
+If capacity still fails at the deadline, admitted audio finishes before a visible
+`Capacity` notice ends the turn; without admitted playback, the turn ends at the
+deadline. Gaps while waiting are acceptable. Later provider errors
 also let current audio finish. The agent never sends a zero-budget speech
 request: exhausted speech bounds, or a definite `speech_limit` result, end
 cleanly with an OK outcome and a “reply truncated” notice. `speech_limit` is a
@@ -885,14 +890,16 @@ a 60 s store-clock timer, matching the browser retry window.
 
 Only transcript/reply text, four bounded exchanges, phase and cursor metadata
 enter version-3 app state. Version-1 and version-2 app snapshots are refused; drain old
-voice calls before deploying this incompatible example update. Save never
-reads/copies/hashes audio. A stage whose result was already accepted skips its provider call when retried with a
+voice calls before deploying this incompatible example update.
+Earlier Demo A workers cannot restore this update's transcription-phase snapshots; use a fresh pool or drain first, and drain before rollback.
+Save never reads/copies/hashes audio. A stage whose result was already accepted skips its provider call when retried with a
 nonzero `After()`. Later stages take saved text, so STT is not repeated after
 the transcript exists, and the LLM is not repeated after the reply exists.
 Provider transport/5xx/429 uncertainty gets one same-key retry, then a typed
 `OutcomeUnknown`; definitive failures report `Failed`. Neither ReadOnly nor
 an idempotency header guarantees exactly-once billing. Moves during an
 unfinished request can repeat that request and charge again.
+Capacity retries of STT, Reply and Speech can also call the provider again and add charges.
 
 **Move / Drain:** recording, provider-task requests, accepted speech and the
 playback cursor move together; the turn continues. **Kill:** move-only input,

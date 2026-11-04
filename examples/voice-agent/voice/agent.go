@@ -74,6 +74,8 @@ type State struct {
 	PlayLength          int           `json:"play_length,omitempty"`
 	RetryPlay           bool          `json:"retry_play,omitempty"`
 	RetryRender         bool          `json:"retry_render,omitempty"`
+	RetryTask           bool          `json:"retry_task,omitempty"` // transcription or reply admission
+	TaskRetryInFlight   bool          `json:"task_retry_in_flight,omitempty"`
 	PlayRetryInFlight   bool          `json:"play_retry_in_flight,omitempty"`
 	RenderRetryInFlight bool          `json:"render_retry_in_flight,omitempty"`
 	CapacityWindow      bool          `json:"capacity_window,omitempty"`
@@ -121,13 +123,16 @@ func (a *Agent) reset(outcome agent.Outcome, code, notice string) agent.Effects 
 	a.buffer, a.length = nil, 0
 	a.playBuffer, a.state.PlayLength = nil, 0
 	a.state.RetryPlay, a.state.RetryRender, a.state.PlayRetryInFlight, a.state.RenderRetryInFlight = false, false, false, false
+	a.state.RetryTask, a.state.TaskRetryInFlight = false, false
 	a.state.CapacityWindow, a.state.CapacityExpired, a.state.StopAfterPlayback = false, false, false
 	floor := a.state.Turn + turnStride - 1
 	return agent.Effects{CancelBefore: &floor, ClearAudioBefore: &floor, CancelTimers: []string{recordTimer, retryTimer, capacityTimer}}
 }
 func (a *Agent) task(kind, phase string, request []byte) agent.Effects {
 	a.state.Phase, a.state.Cursor, a.state.Task = phase, 0, ""
-	a.length = 0
+	if kind != TranscribeKind {
+		a.length = 0
+	}
 	// Keep the immutable app buffer until acceptance. Restore can roll back a
 	// refused callback without losing the bytes of the prior recording/speech.
 	floor := a.state.Turn
@@ -275,6 +280,14 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		}
 		a.state.Task, a.state.Cursor = r.TaskID, r.Sequence
 		if r.Final {
+			if r.Outcome == agent.Capacity && r.Sequence == 1 {
+				switch a.state.Phase {
+				case "transcribing":
+					return a.refused(TranscribeKind), nil
+				case "replying":
+					return a.refused(ReplyKind), nil
+				}
+			}
 			if r.Outcome != agent.OK {
 				return a.failAfterPlayback(r.Outcome, safeCode(r.Detail), "The turn did not complete ("+string(r.Outcome)+"). Hold to talk again."), nil
 			}
@@ -303,6 +316,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		}
 		switch a.state.Phase {
 		case "transcribing":
+			a.length = 0 // the accepted transcript replaces the retained recording
 			a.state.Timings.TranscribeFinished = a.offset(e.At)
 			a.state.Transcript = boundedText(string(r.Chunk.Data), 1024)
 		case "replying":
@@ -313,6 +327,8 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 				a.state.Timings.FirstSentenceCharacters = utf8.RuneCountInString(pieces[0])
 			}
 		}
+		a.state.RetryTask, a.state.TaskRetryInFlight = false, false
+		return a.capacityRecovered(agent.Effects{}), nil
 	case agent.PlaybackFinished:
 		if e.Playback != nil && e.Playback.Turn == a.segmentTurn(a.state.Segment) && a.state.Phase == "playing" {
 			if a.state.StopAfterPlayback {
@@ -392,7 +408,7 @@ func (a *Agent) Restore(_ context.Context, s agent.State) error {
 	default:
 		return errors.New("voice: invalid phase")
 	}
-	if (state.Phase == "recording" && s.MoveOnlyLength > MaxRecordingBytes) || (s.HasMoveOnly && state.Phase != "recording" && state.Phase != "synthesizing" && state.Phase != "playing") {
+	if ((state.Phase == "recording" || state.Phase == "transcribing") && s.MoveOnlyLength > MaxRecordingBytes) || (s.HasMoveOnly && state.Phase != "recording" && state.Phase != "transcribing" && state.Phase != "synthesizing" && state.Phase != "playing") {
 		return errors.New("voice: invalid move phase/size")
 	}
 	if state.Turn >= agent.Turn(math.MaxUint64-turnStride) || len(state.History) > 4 || s.MoveOnlyLength < 0 || s.MoveOnlyLength > 2*MaxSegmentBytes+9 || s.HasMoveOnly != (s.MoveOnlyLength > 0) {
