@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"testing"
 	"time"
 
 	"github.com/relaishq/relais/internal/processidentity"
@@ -66,6 +67,10 @@ func runParentReaper(input io.Reader) {
 // Reaping is best effort: helper or identity failures never change Start's result.
 // Linux retains its Pdeathsig path.
 func prepareParentReaper() {
+	// Shipped tools must keep their exact process tree; only Go tests get a reaper.
+	if !testing.Testing() {
+		return
+	}
 	parentReaper.once.Do(func() {
 		// RELAIS_CLUSTERPROCESS_NO_REAPER=1 allows fixtures to leave intentional orphans.
 		if os.Getenv("RELAIS_CLUSTERPROCESS_NO_REAPER") == "1" {
