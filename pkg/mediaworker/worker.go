@@ -654,22 +654,27 @@ func (w *Worker) Close() error {
 // readLoop reads the worker's socket. STUN goes to the ICE-lite responder;
 // everything else goes to the session that owns the sender's address
 // (RFC 7983 demultiplexing happens in the session). Behind a relay, the
-// sender is the caller that the relay-leg header names.
+// sender is the caller that the relay-leg header names. It times its busy
+// periods for relais_worker_read_burst_drain_seconds (readBursts).
 func (w *Worker) readLoop() {
 	defer close(w.readDone)
 
 	buf := make([]byte, receiveMTU)
+	bursts := readBursts{drain: &w.metrics.readBurstDrain}
 	for {
 		n, from, err := w.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
+				bursts.end()
 				return
 			}
 			w.log.Debugf("read: %v", err)
 
 			continue
 		}
+		bursts.read(time.Now())
 		w.receivePacket(buf[:n], from)
+		bursts.processed(time.Now())
 	}
 }
 
