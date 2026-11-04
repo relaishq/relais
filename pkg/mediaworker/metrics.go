@@ -2,7 +2,9 @@ package mediaworker
 
 import (
 	"sync/atomic"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/relaishq/relais/pkg/metrics"
 )
 
@@ -23,6 +25,90 @@ type workerMetrics struct {
 	bytesIn, bytesOut                                                    atomic.Uint64
 	handovers, takeovers                                                 atomic.Uint64
 	handoverErrors, takeoverErrors                                       atomic.Uint64
+
+	readBurstDrain burstHistogram
+}
+
+// readBurstGap is the longest wait for the next packet that still counts as
+// one read burst. A queued packet is read in a few microseconds; a longer
+// wait is taken as idle, though a scheduling or syscall stall that long also
+// splits a burst. The waits it allows are part of the burst, so a burst is a
+// busy period, not a backlog.
+const readBurstGap = 100 * time.Microsecond
+
+// readBurstBuckets are the histogram's upper bounds. A lone packet takes
+// about 10 µs; issue #139 saw bursts near 80 ms.
+var readBurstBuckets = [...]time.Duration{
+	50 * time.Microsecond, 100 * time.Microsecond, 250 * time.Microsecond, 500 * time.Microsecond,
+	time.Millisecond, 2500 * time.Microsecond, 5 * time.Millisecond, 10 * time.Millisecond,
+	25 * time.Millisecond, 50 * time.Millisecond, 100 * time.Millisecond, 250 * time.Millisecond,
+}
+
+var readBurstDesc = prometheus.NewDesc("relais_worker_read_burst_drain_seconds",
+	"Approximate busy periods of the UDP read loop (a heuristic): from reading a burst's first packet to finishing its last, while no wait for the next packet exceeds 100 microseconds. Includes the short waits; not packet queueing delay. Recorded when the next packet arrives or the loop stops.",
+	nil, nil)
+
+// burstHistogram is relais_worker_read_burst_drain_seconds. Like the
+// counters above it is a lifetime observation, and its zero value is ready.
+type burstHistogram struct {
+	counts [len(readBurstBuckets) + 1]atomic.Uint64 // per bucket, not cumulative; the last is +Inf
+	sumNS  atomic.Uint64
+}
+
+func (h *burstHistogram) observe(d time.Duration) {
+	i := 0
+	for i < len(readBurstBuckets) && d > readBurstBuckets[i] {
+		i++
+	}
+	h.counts[i].Add(1)
+	h.sumNS.Add(uint64(d))
+}
+
+func (h *burstHistogram) Describe(ch chan<- *prometheus.Desc) { ch <- readBurstDesc }
+
+// Collect may see an observation in a bucket before its sum, never a count
+// that disagrees with the buckets.
+func (h *burstHistogram) Collect(ch chan<- prometheus.Metric) {
+	buckets := make(map[float64]uint64, len(readBurstBuckets))
+	var count uint64
+	for i, bound := range readBurstBuckets {
+		count += h.counts[i].Load()
+		buckets[bound.Seconds()] = count
+	}
+	count += h.counts[len(readBurstBuckets)].Load()
+	ch <- prometheus.MustNewConstHistogram(readBurstDesc, count, time.Duration(h.sumNS.Load()).Seconds(), buckets)
+}
+
+// readBursts finds the read loop's busy periods (issue #139). It costs two
+// clock reads per packet and one histogram observation per burst: no
+// allocation and no lock. The worker's single read loop owns it.
+type readBursts struct {
+	drain       *burstHistogram
+	start, done time.Time
+}
+
+// read notes that the loop read a packet at now. A wait over readBurstGap
+// since the previous packet was finished ends the burst that packet closed.
+func (b *readBursts) read(now time.Time) {
+	if now.Sub(b.done) <= readBurstGap {
+		return
+	}
+	if !b.start.IsZero() {
+		b.drain.observe(b.done.Sub(b.start))
+	}
+	b.start = now
+}
+
+// processed notes that the loop finished the packet at now.
+func (b *readBursts) processed(now time.Time) {
+	b.done = now
+}
+
+// end records the open burst when the loop stops.
+func (b *readBursts) end() {
+	if !b.start.IsZero() {
+		b.drain.observe(b.done.Sub(b.start))
+	}
 }
 
 func (w *Worker) metricSamples() []metrics.Sample {

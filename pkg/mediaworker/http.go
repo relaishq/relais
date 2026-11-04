@@ -152,7 +152,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 
-	mux.Handle("GET /metrics", metrics.ProcessHandler(w.metricSamples, metrics.CheckpointCollectors()...))
+	mux.Handle("GET /metrics", metrics.ProcessHandler(w.metricSamples, append(metrics.CheckpointCollectors(), &w.metrics.readBurstDrain)...))
 	mux.HandleFunc("POST /sessions", func(rw http.ResponseWriter, r *http.Request) {
 		var req CreateRequest
 		if !privateapi.Read(rw, r, &req) {
