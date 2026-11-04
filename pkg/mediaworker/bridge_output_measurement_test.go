@@ -31,6 +31,8 @@ const (
 	bridgePacketDuration = 20 * time.Millisecond
 	bridgeBurstRate      = 200
 	bridgeBurstDuration  = 2 * time.Second
+	// Keep the wire-gap quality bound independent of the pacer's rebase policy.
+	bridgeGapBeyondDebtLimit = 20 * time.Millisecond
 )
 
 type bridgeMeasuredStore struct {
@@ -208,11 +210,11 @@ func bridgeRawP95(values []time.Duration) time.Duration {
 func bridgeLatencyQualifies(r bridgeMeasuredResult) bool {
 	latency := r.RawP95MS <= float64(bridgeLatencyTarget)/float64(time.Millisecond)
 	if r.Burst {
-		bounded := r.GapBeyondDebtMS <= float64(playbackRebaseAfter)/float64(time.Millisecond) && r.CapViolations == 0 && r.DuplicateWireIDs == 0 && r.MissingWireIDs == 0
+		bounded := r.GapBeyondDebtMS <= float64(bridgeGapBeyondDebtLimit)/float64(time.Millisecond) && r.CapViolations == 0 && r.DuplicateWireIDs == 0 && r.MissingWireIDs == 0
 		if r.SustainedBurst {
 			latency = bounded && r.CreditWaitMS > 150 && r.ProducerBlockedMS > 0 && r.ExportCostLimit-r.ExportCostMax < 12000
 		} else {
-			latency = r.FirstWireP95MS <= float64(bridgeLatencyTarget)/float64(time.Millisecond) && r.GapBeyondDebtMS <= float64(playbackRebaseAfter)/float64(time.Millisecond) && r.ControlledMove && r.RealMove && r.MoveOverage > 0 && r.MoveProduced > 0 && r.FirstWireSamples >= 10 && r.CapViolations == 0 && r.DuplicateWireIDs == 0 && r.MissingWireIDs == 0
+			latency = r.FirstWireP95MS <= float64(bridgeLatencyTarget)/float64(time.Millisecond) && r.GapBeyondDebtMS <= float64(bridgeGapBeyondDebtLimit)/float64(time.Millisecond) && r.ControlledMove && r.RealMove && r.MoveOverage > 0 && r.MoveProduced > 0 && r.FirstWireSamples >= 10 && r.CapViolations == 0 && r.DuplicateWireIDs == 0 && r.MissingWireIDs == 0
 		}
 	}
 	return latency && r.SpuriousZeroCredit == 0 && r.Produced > 0 && r.Admitted+r.Refused == r.Produced && r.Refused == 0 && r.TaskRefusals == 0 && r.Late == 0 && r.Closures == 0 && r.RecoveryMS <= float64(bridgeRecoveryTarget)/float64(time.Millisecond) && r.Sent+r.Canceled == r.Admitted
