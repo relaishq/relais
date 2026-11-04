@@ -83,6 +83,7 @@ func TestDrainProcessWorker(t *testing.T) {
 	if os.Getenv("RELAIS_DRAIN_TEST_CHILD") != "1" {
 		return
 	}
+	t.Setenv("PION_LOG_WARN", "mediaworker,session")
 	var args []string
 	require.NoError(t, json.Unmarshal([]byte(os.Getenv("RELAIS_DRAIN_TEST_ARGS")), &args))
 	os.Args = append([]string{os.Args[0]}, args...)
@@ -275,6 +276,11 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 		t.Cleanup(child.Stop)
 		ready, err := child.Ready(ctx)
 		require.NoError(t, err)
+		t.Cleanup(func() {
+			if t.Failed() {
+				logDrainProcessMetrics(t, i, ready.HTTP)
+			}
+		})
 		address := netip.MustParseAddrPort(ready.Media)
 		r.AddWorker(address)
 		remotes[i] = &controlplane.RemoteWorker{URL: ready.HTTP}
@@ -536,6 +542,37 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 		}
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
+	}
+}
+
+func logDrainProcessMetrics(t *testing.T, worker int, url string) {
+	t.Helper()
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Get(url + "/metrics") //nolint:noctx // bounded failure-only loopback scrape
+	if err != nil {
+		t.Logf("DRAIN_PROCESS worker=%d metrics_error=%v", worker, err)
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		t.Logf("DRAIN_PROCESS worker=%d metrics_status=%s", worker, response.Status)
+		return
+	}
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Logf("DRAIN_PROCESS worker=%d metrics_error=%v", worker, err)
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, name := range []string{"relais_worker_agent_callback_deadlines_total", "relais_worker_agent_callback_failures_total"} {
+		value := "unavailable"
+		for _, line := range lines {
+			if sample, v, ok := strings.Cut(line, " "); ok && sample == name {
+				value = strings.TrimSpace(v)
+				break
+			}
+		}
+		t.Logf("DRAIN_PROCESS worker=%d %s=%s", worker, name, value)
 	}
 }
 
