@@ -37,7 +37,7 @@ func TestClusterStaleRedisServers(t *testing.T) {
 	orphanDir := filepath.Join(dir, "orphan")
 	require.NoError(t, os.Mkdir(orphanDir, 0700))
 	command := exec.Command(os.Args[0], "-test.run=^TestClusterStaleRedisServers$", "-test.count=1")
-	command.Env = append(os.Environ(), "RELAIS_STALE_SERVER_HELPER=1", "RELAIS_STALE_SERVER_DIR="+orphanDir)
+	command.Env = append(os.Environ(), "RELAIS_STALE_SERVER_HELPER=1", "RELAIS_STALE_SERVER_DIR="+orphanDir, "RELAIS_CLUSTERPROCESS_NO_REAPER=1")
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 	recordPath, err := os.ReadFile(filepath.Join(orphanDir, "record-path"))

@@ -39,7 +39,7 @@ func Start(dir, name string, env []string, args ...string) (*Child, error) {
 }
 
 // StartSupervised adds a parent-death signal on Linux for disposable test servers.
-// Other platforms rely on the harness's recorded-identity stale-child cleanup.
+// On Darwin, both Start and StartSupervised register with a shared reaper.
 func StartSupervised(dir, name string, env []string, args ...string) (*Child, error) {
 	if runtime.GOOS != "linux" {
 		return start(dir, name, env, false, args...)
@@ -81,11 +81,13 @@ func start(dir, name string, env []string, parentDeath bool, args ...string) (*C
 	if parentDeath {
 		configureParentDeath(cmd)
 	}
+	prepareParentReaper()
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()
 		return nil, err
 	}
 	c := &Child{cmd: cmd, pid: cmd.Process.Pid, done: make(chan struct{}), log: log, path: path}
+	recordParentChild(c.pid)
 	go c.wait()
 	return c, nil
 }
