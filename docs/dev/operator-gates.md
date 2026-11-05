@@ -485,8 +485,9 @@ exact template rules and repeats its positive authenticated probe even after a
 failed negative observation. All hosts are verified again before gates start.
 
 The workflow uploads `runtime/operator-report/report.json`,
-`runtime/operator-report/host-diagnostics.log` and
-`runtime/operator-report/media-evidence.json`. It records the tested commit
+`runtime/operator-report/host-diagnostics.log`,
+`runtime/operator-report/media-evidence.json` and
+`runtime/operator-report/head-caller-evidence.json`. It records the tested commit
 (the merge commit for a PR), the separate PR head, template and binary hashes,
 release pins, clock samples, CPU masks and phase evidence. Raw mailboxes,
 credentials, generated keys and unit environments are not artifacts. Cleanup
