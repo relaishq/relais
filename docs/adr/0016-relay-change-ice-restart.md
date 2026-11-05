@@ -658,8 +658,9 @@ change and makes the refusal exact:
 - A confirmation record in an unknown format is refused. It accepts no A or C
   evidence and completes no attempt. An attempt without a saved store-clock
   bound accepts no evidence.
-- At control restart, a journal entry with an unknown kind or without `seq` is
-  deleted as stale.
+- At control restart, a `relay-recovery-unsupported` watchdog entry has no
+  `seq` and is restored. A journal entry with an unknown kind, or a
+  `relay-recovery` entry without `seq`, is deleted as stale.
 
 Rules 5 and 6 do not change. They refuse to move a call to, or roll back to, a
 version that cannot read its state. They are refusals, not migration paths.
