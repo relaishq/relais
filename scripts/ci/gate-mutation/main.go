@@ -92,6 +92,14 @@ func loadCases(path string) ([]mutation, error) {
 		if m.ID == "" || m.Test == "" || m.Marker == "" || m.Package == "" || (m.Patch == "") == (m.File == "" && len(m.Edits) == 0) {
 			return nil, fmt.Errorf("INVALID case %d %q: needs ID, Test, Marker, Package and either Patch or edits", i, m.ID)
 		}
+		if m.Patch != "" && (m.Old != "" || m.New != "" || m.Function != "" || m.Receiver != nil) {
+			return nil, fmt.Errorf("INVALID case %d %q: Patch cannot be combined with Old, New, Function or Receiver", i, m.ID)
+		}
+		for _, e := range m.Edits {
+			if e.File == "" || e.Old == "" {
+				return nil, fmt.Errorf("INVALID case %d %q: every edit needs File and Old", i, m.ID)
+			}
+		}
 		if m.Patch != "" && !filepath.IsAbs(m.Patch) {
 			cases[i].Patch = filepath.Join(dir, m.Patch)
 		}
@@ -318,7 +326,7 @@ func patch(tree, diff string, originals map[string][]byte) error {
 		cmd := exec.Command("git", append(append([]string{"apply"}, args...), diff)...)
 		cmd.Dir = tree
 		// The source copy has no .git; never resolve paths against a parent repository.
-		cmd.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(tree))
+		cmd.Env = append(allowedEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(tree))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return nil, fmt.Errorf("git apply %s: %w\n%s", strings.Join(args, " "), err, out)
@@ -336,11 +344,12 @@ func patch(tree, diff string, originals map[string][]byte) error {
 	if err != nil {
 		return err
 	}
-	for _, row := range strings.Split(string(stat), "\x00") {
-		if row == "" {
-			continue
-		}
-		path := filepath.Join(tree, strings.SplitN(row, "\t", 3)[2])
+	files, err := numstatFiles(string(stat))
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		path := filepath.Join(tree, file)
 		original, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -349,6 +358,22 @@ func patch(tree, diff string, originals map[string][]byte) error {
 	}
 	_, err = git()
 	return err
+}
+
+// numstatFiles reads the paths from git apply --numstat -z output.
+func numstatFiles(stat string) ([]string, error) {
+	files := []string{}
+	for _, row := range strings.Split(stat, "\x00") {
+		if row == "" {
+			continue
+		}
+		fields := strings.SplitN(row, "\t", 3)
+		if len(fields) != 3 || fields[2] == "" {
+			return nil, fmt.Errorf("unexpected git apply --numstat row %q", row)
+		}
+		files = append(files, fields[2])
+	}
+	return files, nil
 }
 
 // restore writes the original bytes back, then rereads every touched file and
@@ -459,14 +484,7 @@ func test(tree, cache, name string, packages []string) ([]event, error) {
 	args = append(args, packages...)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = tree
-	for _, e := range os.Environ() {
-		key := strings.SplitN(e, "=", 2)[0]
-		switch key {
-		case "PATH", "HOME", "TMPDIR", "GOMODCACHE", "GOROOT":
-			cmd.Env = append(cmd.Env, e)
-		}
-	}
-	cmd.Env = append(cmd.Env, "GOCACHE="+cache, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false -trimpath")
+	cmd.Env = append(allowedEnv(), "GOCACHE="+cache, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false -trimpath")
 	out, err := cmd.CombinedOutput()
 	events := []event{}
 	scan := bufio.NewScanner(bytes.NewReader(out))
@@ -485,6 +503,19 @@ func test(tree, cache, name string, packages []string) ([]event, error) {
 		return events, ctx.Err()
 	}
 	return events, err
+}
+
+// allowedEnv keeps only the variables child go and git commands need, so an
+// exported GOFLAGS, GIT_DIR or GIT_WORK_TREE cannot change their behaviour.
+func allowedEnv() []string {
+	env := []string{}
+	for _, e := range os.Environ() {
+		switch strings.SplitN(e, "=", 2)[0] {
+		case "PATH", "HOME", "TMPDIR", "GOMODCACHE", "GOROOT":
+			env = append(env, e)
+		}
+	}
+	return env
 }
 
 func assertionFailure(events []event, name, marker string) bool {

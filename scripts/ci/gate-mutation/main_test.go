@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -79,8 +80,17 @@ func TestExampleCasesKillOutsideOperator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	source := filepath.Join(root, "internal/iceufrag/ufrag.go")
+	before, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := runCases(root, cases, "", 2); err != nil {
 		t.Fatal(err)
+	}
+	after, err := os.ReadFile(source)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("mutation run changed the checkout", err)
 	}
 }
 func TestRestoreDetectsChangedFile(t *testing.T) {
@@ -114,6 +124,17 @@ func TestPatchModifiesExistingFilesOnly(t *testing.T) {
 		t.Fatal("refused patch changed the tree", err)
 	}
 }
+func TestNumstatRowsFailCleanly(t *testing.T) {
+	files, err := numstatFiles("1\t1\ta.go\x00-\t-\tb/c.bin\x00")
+	if err != nil || len(files) != 2 || files[0] != "a.go" || files[1] != "b/c.bin" {
+		t.Fatal("numstat paths", files, err)
+	}
+	for _, stat := range []string{"1\t1\x00", "a.go\x00", "1\t1\t\x00old.go\x00new.go\x00"} {
+		if _, err := numstatFiles(stat); err == nil {
+			t.Errorf("accepted %q", stat)
+		}
+	}
+}
 func TestCaseFileShape(t *testing.T) {
 	dir := t.TempDir()
 	for name, body := range map[string]string{
@@ -121,6 +142,11 @@ func TestCaseFileShape(t *testing.T) {
 		"no-change":      `[{"ID":"a","Test":"TestA","Marker":"m","Package":"./a"}]`,
 		"no-marker":      `[{"ID":"a","File":"a.go","Old":"x","New":"y","Test":"TestA","Package":"./a"}]`,
 		"unknown-field":  `[{"ID":"a","File":"a.go","Old":"x","New":"y","Test":"TestA","Marker":"m","Package":"./a","Func":"F"}]`,
+		"patch-and-old":  `[{"ID":"a","Patch":"a.patch","Old":"x","Test":"TestA","Marker":"m","Package":"./a"}]`,
+		"patch-and-func": `[{"ID":"a","Patch":"a.patch","Function":"F","Test":"TestA","Marker":"m","Package":"./a"}]`,
+		"patch-and-recv": `[{"ID":"a","Patch":"a.patch","Receiver":"T","Test":"TestA","Marker":"m","Package":"./a"}]`,
+		"edit-no-file":   `[{"ID":"a","Edits":[{"Old":"x","New":"y"}],"Test":"TestA","Marker":"m","Package":"./a"}]`,
+		"edit-no-old":    `[{"ID":"a","Edits":[{"File":"a.go","New":"y"}],"Test":"TestA","Marker":"m","Package":"./a"}]`,
 	} {
 		path := filepath.Join(dir, name+".json")
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
