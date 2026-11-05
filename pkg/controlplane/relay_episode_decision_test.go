@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -681,4 +682,193 @@ func TestShutdownReleasesEpisodeDriver(t *testing.T) {
 		defer c.relayEpisodeMu.Unlock()
 		return !e.running
 	}, 5*time.Second, 5*time.Millisecond, "the driver exits with its watcher")
+}
+
+// Code review 2: a watcher whose begin commits after its episode was closed
+// hands the open token to a new owner instead of leaving it unwatched.
+func TestClosedWatcherHandsOffCommittedBegin(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, _, _, id := relayFailurePlane(t, store)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		events := make(chan string, 64)
+		closed := make(chan *relayEpisode, 1)
+		var once atomic.Bool
+		hook := func(from *call, name string) {
+			if from != c {
+				return
+			}
+			if name == "begun" && once.CompareAndSwap(false, true) {
+				// The begin CAS committed; the episode is replaced before the
+				// watcher checks it.
+				c.relayEpisodeMu.Lock()
+				e := c.relayEpisode
+				c.relayEpisode = nil
+				c.relayEpisodeMu.Unlock()
+				e.close()
+				closed <- e
+			}
+			select {
+			case events <- name:
+			default:
+			}
+		}
+		relayWatchHooks.Store(&hook)
+		t.Cleanup(func() { relayWatchHooks.Store(nil) })
+		_, err = p.relayRecoveryEpisode(context.Background(), c, time.Now().Add(time.Second-relayRecoveryLimit))
+		require.NoError(t, err)
+		var orphan *relayEpisode
+		select {
+		case orphan = <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("begin never committed")
+		}
+		ep := episodeOf(t, store, id)
+		require.True(t, ep.Open())
+		require.Equal(t, orphan.proposal().Token, ep.Token, "the closed watcher's begin committed")
+		awaitEvent(t, events, "adopted")
+		c.relayEpisodeMu.Lock()
+		owner := c.relayEpisode
+		c.relayEpisodeMu.Unlock()
+		require.NotNil(t, owner)
+		require.NotSame(t, orphan, owner)
+		require.Equal(t, ep.Token, owner.proposal().Token, "the new owner holds the committed token")
+		require.Eventually(t, func() bool { return endReason(c) == "relay_change_failed" }, 5*time.Second, 5*time.Millisecond, "the adopted episode is enforced at its deadline")
+	})
+}
+
+// completingAbortWorker is a worker without the C contract whose first abort
+// lets the test complete the episode, as a concurrent completion would
+// between the driver's begin and its immediate end.
+type completingAbortWorker struct {
+	*oldRelayWorker
+	once     sync.Once
+	complete func()
+}
+
+func (w *completingAbortWorker) AbortRelayRestart(ctx context.Context, id string, g uint64) error {
+	w.once.Do(w.complete)
+	return w.oldRelayWorker.AbortRelayRestart(ctx, id, g)
+}
+
+// Code review 2: an immediate end (a worker without the C contract) that
+// finds its episode completed follows the stored outcome: the driver stops
+// after one attempt, its proposal is cleaned up, and the call survives
+// without an ended event. Proof for an earlier attempt cannot be promoted
+// here: the driver's pending write or abort already moved the assignment.
+func TestImmediateEndFollowsCompletedEpisode(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, a, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		events := watchEvents(t, c)
+		now := time.Now()
+		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+		e := armEpisode(t, p, c, 10*time.Second)
+		require.Equal(t, e.proposal().Token, attemptOf(t, store, id).Attempt.Episode, "begin binds the attempt")
+		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
+		markLost(p, "r2") // the driver does not adopt; it tries another slot
+		worker := &completingAbortWorker{oldRelayWorker: &oldRelayWorker{fakeWorker: a.fakeWorker, inner: a}}
+		worker.complete = func() {
+			at, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+			require.NoError(t, err)
+			done := rec
+			episode := *rec.Episode
+			episode.Seq, episode.Outcome = episode.Seq+1, sessionstore.RelayEpisodeCompleted
+			done.Episode = &episode
+			require.NoError(t, confirmations(store).CASRelayConfirmation(context.Background(), id, at, rec, done, time.Time{}, time.Time{}))
+		}
+		p.mu.Lock()
+		p.workers["a"].worker = worker
+		p.mu.Unlock()
+		require.NoError(t, p.startRelayRecoveryFrom(context.Background(), c, false, time.Now(), nil))
+		awaitDone(t, e)
+		require.Eventually(t, func() bool {
+			c.relayEpisodeMu.Lock()
+			defer c.relayEpisodeMu.Unlock()
+			return c.relayEpisode == nil
+		}, 5*time.Second, 5*time.Millisecond, "the completed episode is cleaned up")
+		require.Equal(t, sessionstore.RelayEpisodeCompleted, episodeOf(t, store, id).Outcome)
+		records, err := store.(sessionstore.ControlStore).ControlIntents(context.Background())
+		require.NoError(t, err)
+		for _, r := range records {
+			require.NotEqual(t, e.proposal().ID, r.ID, "the proposal is deleted")
+		}
+		time.Sleep(200 * time.Millisecond) // a driver that kept going would try again within 50 ms
+		_, assigned, err := store.(sessionstore.RelayAssignments).RelayOwner(context.Background(), id)
+		require.NoError(t, err)
+		require.Equal(t, sessionstore.RelayAssignment{Slot: "r2", Generation: 2}, assigned, "one aborted attempt, then the driver stopped")
+		require.Empty(t, endReason(c))
+		p.mu.Lock()
+		terminal := c.terminal
+		p.mu.Unlock()
+		require.False(t, terminal, "the call survives")
+		for drained := false; !drained; {
+			select {
+			case name := <-events:
+				require.NotEqual(t, "published", name, "no ended event")
+			default:
+				drained = true
+			}
+		}
+	})
+}
+
+// lostReplyJournal applies one journal Put and then reports an error, as a
+// write whose reply was lost.
+type lostReplyJournal struct {
+	*sessionstore.Memory
+	drop atomic.Bool
+}
+
+func (s *lostReplyJournal) PutControlIntent(ctx context.Context, intent sessionstore.ControlIntent) error {
+	if err := s.Memory.PutControlIntent(ctx, intent); err != nil {
+		return err
+	}
+	if s.drop.CompareAndSwap(true, false) {
+		return errors.New("store reply lost")
+	}
+	return nil
+}
+
+// Code review 2, P1: a replacement proposal whose Put landed but reported an
+// error is retried with the same token, so the episode still arms and is
+// decided at its deadline instead of minting tokens the journal refuses.
+func TestUncertainReproposalWriteStillArms(t *testing.T) {
+	store := &lostReplyJournal{Memory: sessionstore.NewMemory()}
+	p, _, _, id := relayFailurePlane(t, store)
+	stopRelayRecoveries(t, p)
+	c, err := p.lookup(id)
+	require.NoError(t, err)
+	markLost(p, "r1")
+	events := watchEvents(t, c)
+	c.stateMu.Lock()
+	lease := c.lease
+	c.stateMu.Unlock()
+	stale := sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKind, Started: time.Now().Add(time.Second - relayRecoveryLimit), Lease: lease, Seq: 7}
+	require.NoError(t, store.PutControlIntent(context.Background(), stale))
+	store.drop.Store(true) // the replacement's Put lands, its reply is lost
+	e := p.installRelayEpisode(c, stale)
+	awaitEvent(t, events, "reproposed")
+	select {
+	case <-e.armed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the episode never armed after an uncertain proposal write")
+	}
+	ep := episodeOf(t, store, id)
+	require.True(t, ep.Open())
+	require.Equal(t, e.proposal().Token, ep.Token)
+	records, err := store.ControlIntents(context.Background())
+	require.NoError(t, err)
+	var journaled []string
+	for _, r := range records {
+		if r.ID == stale.ID {
+			journaled = append(journaled, r.Token)
+		}
+	}
+	require.Equal(t, []string{ep.Token}, journaled, "the journal holds the token that began")
+	require.Eventually(t, func() bool { return endReason(c) == "relay_change_failed" }, 5*time.Second, 5*time.Millisecond, "the episode is decided at its deadline")
 }

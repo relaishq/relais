@@ -254,6 +254,9 @@ func (p *Plane) retryRelayDecision(c *call, done <-chan struct{}, attempt func(c
 // owner, never left without a watcher.
 func (p *Plane) armRelayEpisode(c *call, e *relayEpisode) relayOutcome {
 	outcome := p.retryRelayDecision(c, e.done, func(ctx context.Context) relayOutcome {
+		if !p.journalRelayProposal(ctx, c, e) {
+			return relayUncertain // an uncertain replacement write is settled first
+		}
 		if outcome := p.beginRelayEpisode(ctx, c, e); outcome != relayStale {
 			return outcome
 		}
@@ -262,6 +265,7 @@ func (p *Plane) armRelayEpisode(c *call, e *relayEpisode) relayOutcome {
 	if outcome != relayArmed {
 		return outcome
 	}
+	relayWatchEvent(c, "begun") // test barrier: the episode may be replaced here
 	if e.completed.Load() {
 		return p.retryRelayDecision(c, nil, func(ctx context.Context) relayOutcome { return p.adoptDurableEpisode(ctx, c, e) })
 	}
@@ -348,18 +352,33 @@ func (p *Plane) reproposeRelayEpisode(ctx context.Context, c *call, e *relayEpis
 	journal := p.store.(sessionstore.ControlStore)
 	c.relayEpisodeMu.Lock()
 	defer c.relayEpisodeMu.Unlock()
+	if deleteRelayProposal(ctx, journal, e) != nil {
+		return relayUncertain
+	}
+	// The replacement is kept before its write: a Put whose reply is lost may
+	// have landed, so retries put this same token, never a new one.
 	next := e.proposal()
 	next.Token = randomEpisodeToken()
 	next.Seq = 1
 	if rec.Episode != nil {
 		next.Seq = rec.Episode.Seq + 1
 	}
-	if deleteRelayProposal(ctx, journal, e) != nil || journal.PutControlIntent(ctx, next) != nil {
-		return relayUncertain
-	}
 	e.setProposal(next)
+	e.persisted = journal.PutControlIntent(ctx, next) == nil
 	relayWatchEvent(c, "reproposed")
 	return relayUncertain
+}
+
+// journalRelayProposal retries the journal write of a replacement proposal
+// until it is settled; begin follows only a journaled proposal. A Put of the
+// same token is idempotent.
+func (p *Plane) journalRelayProposal(ctx context.Context, c *call, e *relayEpisode) bool {
+	c.relayEpisodeMu.Lock()
+	defer c.relayEpisodeMu.Unlock()
+	if !e.persisted {
+		e.persisted = p.store.(sessionstore.ControlStore).PutControlIntent(ctx, e.proposal()) == nil
+	}
+	return e.persisted
 }
 
 // beginRelayEpisode opens the proposal's episode with one compare-and-set.
