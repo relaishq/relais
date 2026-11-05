@@ -18,7 +18,7 @@ opt-ins. On exit it terminates the command's owned process group, including
 background descendants. It waits up to five seconds for the command to exit,
 then sends SIGKILL to the owned group to stop any remaining descendants.
 
-CI keeps its Redis 7 service and generates the locale on `ubuntu-latest`.
+CI keeps its Redis 7 service and generates the locale on `ubuntu-24.04`.
 Local checks use the installed Redis version and require the locale to exist;
 the wrapper sets `LC_ALL=en_US.UTF-8`. macOS uses its own locale implementation
 and system libraries. Passing locally does not claim an Ubuntu run.

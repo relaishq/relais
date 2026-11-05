@@ -279,7 +279,7 @@ their limits. Re-run after a change to the product default or acceptance gates.
 
 ## Matched split-checkpoint measurement
 
-Manual `mode=split-capacity` runs eight samples in one `ubuntu-latest` job.
+Manual `mode=split-capacity` runs eight samples in one `ubuntu-24.04` job.
 It builds once, then runs history before/after and echo before/after back to
 back at the same fixed call count, bitrate, relay buffers and duration.
 The history baseline uses the documented Demo A legacy operator overrides

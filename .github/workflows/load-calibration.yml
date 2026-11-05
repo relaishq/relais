@@ -38,7 +38,7 @@ on:
         type: string
       runner_label:
         description: Soak runner label; choose larger hardware for 50 calls
-        default: 'ubuntu-latest'
+        default: 'ubuntu-24.04'
         type: string
       generator_processes:
         description: Soak generators; 0 derives from callers_per_process
@@ -86,7 +86,7 @@ permissions:
 jobs:
   calibrate:
     if: github.event_name == 'schedule' || inputs.mode == 'calibration' || inputs.mode == 'both'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
@@ -132,7 +132,7 @@ jobs:
   capacity:
     name: Capacity sample
     if: github.event_name == 'schedule' || inputs.mode == 'capacity' || inputs.mode == 'both'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -196,7 +196,7 @@ jobs:
   soak:
     name: Soak with seeded chaos
     if: github.event_name == 'schedule' || inputs.mode == 'soak'
-    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner_label || 'ubuntu-24.04' }}
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@v6
@@ -267,7 +267,7 @@ jobs:
     name: Manual custom-worker approval evidence
     # Deliberately absent from schedules, required CI, and release dependencies.
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'custom-capacity'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
@@ -335,7 +335,7 @@ jobs:
     name: Matched split checkpoint traffic on one runner
     # Manual only. No schedules, required CI, release or paid runner dependencies.
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'split-capacity'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6

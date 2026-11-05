@@ -55,7 +55,7 @@ replication. The process probe uses its existing five-second warmup and
 observation gates; it does not claim the full 60-second consent proof. Managed
 store durability and provider failover remain separate deployment evidence.
 
-The `cluster-tests` Redis CI job runs on `ubuntu-latest`, installs local Redis and
+The `cluster-tests` Redis CI job runs on `ubuntu-24.04`, installs local Redis and
 ffmpeg, builds race-instrumented processes, and runs `make test-cluster` within
 a 15-minute job limit. It is separate from the PR `build` aggregate while hosted
 reliability is established. No credentials or self-hosted runners are required.
