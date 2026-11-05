@@ -93,6 +93,11 @@ crash trials. The optional Redis Cluster gate remains separate. Use
 checks and their thresholds are described in [CLAUDE.md](CLAUDE.md) and
 [store outage guarantees](docs/guarantees.md#store-outages).
 
+Workflows select versioned GitHub-hosted runner labels, such as `ubuntu-24.04`;
+`make check-rules` rejects floating `*-latest` aliases. Versioned images still
+update and are retired under GitHub's runner-image support policy. Review image
+deprecations and move to a newer image on purpose before retirement (#376).
+
 ## Real process crashes
 
 `crash-run` starts a relay, control, workers, and its own disposable Redis on a

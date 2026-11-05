@@ -1,6 +1,6 @@
 # Coding standards
 
-Reviewers apply this checklist to each change. `make check` enforces the mechanical rules: shipped-code example dependencies, behaviour names, shared Redis test endpoints, workflow Redis ports, local paths in Markdown, lint version parity, and configured formatting.
+Reviewers apply this checklist to each change. `make check` enforces the mechanical rules: shipped-code example dependencies, behaviour names, shared Redis test endpoints, workflow Redis ports, versioned runner labels, local paths in Markdown, lint version parity, and configured formatting.
 
 ## Claims match evidence
 
