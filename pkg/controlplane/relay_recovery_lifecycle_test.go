@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,6 +277,51 @@ type lossWorkStore struct {
 	cuts      atomic.Int64
 	beforeCut atomic.Int64
 	first     chan time.Time
+	// RESEARCH394 timing instrumentation (temporary)
+	t0     time.Time
+	rec    atomic.Bool
+	evMu   sync.Mutex
+	events []lossEvent
+}
+
+type lossEvent struct {
+	id, method string
+	start, dur time.Duration
+	pending    bool
+}
+
+func (s *lossWorkStore) note(id, method string, start time.Time, pending bool) {
+	if !s.rec.Load() {
+		return
+	}
+	s.evMu.Lock()
+	s.events = append(s.events, lossEvent{id: id, method: method, start: start.Sub(s.t0), dur: time.Since(start), pending: pending})
+	s.evMu.Unlock()
+}
+func (s *lossWorkStore) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	st := time.Now()
+	defer s.note(id, "RelayConfirmation", st, false)
+	return s.RelayConfirmations.RelayConfirmation(ctx, id)
+}
+func (s *lossWorkStore) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, nb, na time.Time) error {
+	st := time.Now()
+	defer s.note(id, "CASRelayConfirmation", st, false)
+	return s.RelayConfirmations.CASRelayConfirmation(ctx, id, at, from, to, nb, na)
+}
+func (s *lossWorkStore) Clock(ctx context.Context, id string) (time.Time, error) {
+	st := time.Now()
+	defer s.note(id, "Clock", st, false)
+	return s.Store.Clock(ctx, id)
+}
+func (s *lossWorkStore) PutControlIntent(ctx context.Context, in sessionstore.ControlIntent) error {
+	st := time.Now()
+	defer s.note(strings.TrimPrefix(in.ID, "relay-recovery:"), "PutControlIntent", st, false)
+	return s.ControlStore.PutControlIntent(ctx, in)
+}
+func (s *lossWorkStore) DeleteControlIntent(ctx context.Context, id, token string) error {
+	st := time.Now()
+	defer s.note(strings.TrimPrefix(id, "relay-recovery:"), "DeleteControlIntent", st, false)
+	return s.ControlStore.DeleteControlIntent(ctx, id, token)
 }
 
 func (s *lossWorkStore) pause(ctx context.Context) error {
@@ -295,6 +341,8 @@ func (s *lossWorkStore) pause(ctx context.Context) error {
 	}
 }
 func (s *lossWorkStore) RelayOwner(ctx context.Context, id string) (sessionstore.Lease, sessionstore.RelayAssignment, error) {
+	st := time.Now()
+	defer s.note(id, "RelayOwner", st, false)
 	if err := s.pause(ctx); err != nil {
 		return sessionstore.Lease{}, sessionstore.RelayAssignment{}, err
 	}
@@ -308,6 +356,8 @@ func (s *lossWorkStore) ControlIntents(ctx context.Context) ([]sessionstore.Cont
 	return s.ControlStore.ControlIntents(ctx)
 }
 func (s *lossWorkStore) CASRelay(ctx context.Context, lease sessionstore.Lease, from, to sessionstore.RelayAssignment) error {
+	st := time.Now()
+	defer s.note(lease.SessionID, "CASRelay", st, to.Pending != "")
 	if s.slow.Load() && to.Pending != "" {
 		select {
 		case s.first <- time.Now():
@@ -342,10 +392,15 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 			id, _, lease, err := a.CreateSessionAtRelay(context.Background(), "offer", "r1")
 			require.NoError(t, err)
 			p.calls[id] = &call{id: id, lease: lease, relayCapable: true, relaySlot: "r1", relayWake: make(chan struct{}, 1)}
+			if os.Getenv("R394_ALLMODES") == "1" {
+				require.NoError(t, p.acceptRelayMode(context.Background(), p.calls[id], sessionstore.RelayConfirmDelivery))
+			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
 		measured.lists.Store(0)
+		measured.t0 = time.Now()
+		measured.rec.Store(true)
 		measured.slow.Store(true)
 		defer measured.slow.Store(false)
 		started := time.Now()
@@ -359,7 +414,14 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("no relay recovery dispatch")
 		}
-		require.NoError(t, <-done)
+		loseErr := <-done
+		t.Logf("R394 loseRelay_returned_after=%s", time.Since(measured.t0))
+		if os.Getenv("R394_ALLMODES") == "1" {
+			time.Sleep(1500 * time.Millisecond)
+		}
+		measured.rec.Store(false)
+		researchReport(t, measured, time.Since(measured.t0))
+		require.NoError(t, loseErr)
 		require.Zero(t, measured.beforeCut.Load(), "cut-off acknowledgements must precede per-call/journal reads")
 		require.LessOrEqual(t, measured.lists.Load(), int64(1), "one journal snapshot per loss batch")
 	})
