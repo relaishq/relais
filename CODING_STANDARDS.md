@@ -17,6 +17,7 @@ Reviewers apply this checklist to each change. `make check` enforces the mechani
 - Use typed errors on move, takeover and placement paths. Classify definite and uncertain outcomes. Bound each retry and end it with a typed outcome. See [ADR 0002](docs/adr/0002-checkpoint-age-envelope.md) on uncertain ownership and terminal accounting, and [ADR 0008](docs/adr/0008-store-outage-budget.md) on command and retry bounds.
 - Never drop input and report that nothing happened. Never report a refusal as success. Preserve accepted input and explicit outcomes as described in [ADR 0010](docs/adr/0010-pluggable-agents.md).
 - A fail-closed path must not turn a survivable fault into a dropped call. Preserve live calls through transient store faults under [ADR 0008](docs/adr/0008-store-outage-budget.md). A successful hang-up is a terminal end, not a loss ([ADR 0002](docs/adr/0002-checkpoint-age-envelope.md)).
+- Decide competing terminal outcomes in the store. When more than one path can write a terminal outcome (for example, end versus success), one durable atomic decision chooses it: a compare-and-set or an equivalent store transaction. Every effect the caller can see follows the stored outcome. An in-memory lock cannot order store writes. See the episode decision in [ADR 0016](docs/adr/0016-relay-change-ice-restart.md#implementation-note-2026-11-04-confirmation-choices-left-open).
 
 ## Repeating defect classes
 

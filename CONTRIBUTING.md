@@ -5,7 +5,8 @@ and run the checks that exercise it. Concurrent code must be race-free. Add
 integration coverage for new legacy plugins. Open a pull request from your
 feature branch after testing and linting. Contributors can fork and clone
 [relaishq/relais](https://github.com/relaishq/relais); source builds need Go 1.26+.
-See [CLAUDE.md](CLAUDE.md) for the repository's command and CI contract.
+See [CLAUDE.md](CLAUDE.md) for the repository's command contract and
+[CI jobs](docs/dev/ci.md) for the CI contract.
 
 ## Build and local tools
 
@@ -90,7 +91,7 @@ Pushes to `main`, nightly runs at 08:00 UTC, and manual workflow dispatch add
 the full race harness, timing gates on both stores, benchmarks, and real-process
 crash trials. The optional Redis Cluster gate remains separate. Use
 **Actions → CI → Run workflow** for manual runs. Nightly/manual store-stall
-checks and their thresholds are described in [CLAUDE.md](CLAUDE.md) and
+checks and their thresholds are described in [CI jobs](docs/dev/ci.md) and
 [store outage guarantees](docs/guarantees.md#store-outages).
 
 Workflows select versioned GitHub-hosted runner labels, such as `ubuntu-24.04`;
