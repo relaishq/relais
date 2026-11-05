@@ -658,9 +658,13 @@ change and makes the refusal exact:
   change for it, and relay loss ends it with `relay_lost`. It is never given
   `delivery` mode after create.
 - A confirmation record in an unknown format is refused. It accepts no A or C
-  evidence and completes no attempt. Control deletes it and logs it; the call
-  then has mode `none` ([#392](https://github.com/relaishq/relais/issues/392)). An attempt without a saved store-clock
+  evidence and completes no attempt. An attempt without a saved store-clock
   bound accepts no evidence.
+- Control deletes such a record and logs it; the call then has mode `none`
+  ([#392](https://github.com/relaishq/relais/issues/392)). While control runs,
+  the call's recovery proposal becomes a `relay-recovery-unsupported` entry
+  with the same detection time. At restart the proposal is deleted, so the
+  next loss detection starts a new deadline.
 - At control restart, a `relay-recovery-unsupported` watchdog entry has no
   `seq` and is restored. A journal entry with an unknown kind, or a
   `relay-recovery` entry without `seq`, is deleted as stale.
