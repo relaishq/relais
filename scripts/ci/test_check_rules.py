@@ -92,6 +92,7 @@ class RunnerLabels(unittest.TestCase):
 
     def test_direct_label_fails(self):
         self.assertFloating('jobs:\n  test:\n    runs-on: ubuntu-latest')
+        self.assertFloating('runs-on: macos-latest-xlarge')
 
     def test_quoted_label_fails(self):
         self.assertFloating('runs-on: "macos-latest"')
