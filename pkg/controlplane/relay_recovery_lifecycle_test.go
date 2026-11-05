@@ -276,6 +276,7 @@ type lossWorkStore struct {
 	cuts      atomic.Int64
 	beforeCut atomic.Int64
 	first     chan time.Time
+	pending   sync.Map // session IDs dispatched to a pending relay
 }
 
 func (s *lossWorkStore) pause(ctx context.Context) error {
@@ -309,6 +310,7 @@ func (s *lossWorkStore) ControlIntents(ctx context.Context) ([]sessionstore.Cont
 }
 func (s *lossWorkStore) CASRelay(ctx context.Context, lease sessionstore.Lease, from, to sessionstore.RelayAssignment) error {
 	if s.slow.Load() && to.Pending != "" {
+		s.pending.Store(lease.SessionID, true)
 		select {
 		case s.first <- time.Now():
 		default:
@@ -342,8 +344,15 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 			id, _, lease, err := a.CreateSessionAtRelay(context.Background(), "offer", "r1")
 			require.NoError(t, err)
 			p.calls[id] = &call{id: id, lease: lease, relayCapable: true, relaySlot: "r1", relayWake: make(chan struct{}, 1)}
+			// Without an accepted mode, begin refuses the episode and the call
+			// never dispatches, so the bound would time one call's queue position.
+			require.NoError(t, p.acceptRelayMode(context.Background(), p.calls[id], sessionstore.RelayConfirmDelivery))
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		// The batch bound is loose on purpose. The memory store serializes all
+		// 200 calls behind one lock, so under -race the last calls can queue
+		// for seconds (5 of 400 local runs exceeded 4 s; Redis 0 of 400). The
+		// latency claim is the first-dispatch bound below.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		measured.lists.Store(0)
 		measured.slow.Store(true)
@@ -360,6 +369,11 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 			t.Fatal("no relay recovery dispatch")
 		}
 		require.NoError(t, <-done)
+		dispatched := func() (n int) {
+			measured.pending.Range(func(any, any) bool { n++; return true })
+			return n
+		}
+		require.Eventually(t, func() bool { return dispatched() == 200 }, 3*time.Second, 10*time.Millisecond, "every call must dispatch, not only the first")
 		require.Zero(t, measured.beforeCut.Load(), "cut-off acknowledgements must precede per-call/journal reads")
 		require.LessOrEqual(t, measured.lists.Load(), int64(1), "one journal snapshot per loss batch")
 	})
