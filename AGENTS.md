@@ -94,7 +94,7 @@ settings is a separate admin decision. Superseded PR runs are cancelled;
 main pushes and nightly runs are not cancelled by this policy.
 
 The Redis Cluster job also runs on PRs. It uses disposable local Redis processes
-on `ubuntu-latest`, with TLS/ACL and process-topology coverage, and runs packages
+on `ubuntu-24.04`, with TLS/ACL and process-topology coverage, and runs packages
 serially to protect the media timing gates. It remains outside the `build` aggregate.
 
 Nightly at 08:00 UTC, pushes to `main`, and manual `workflow_dispatch` runs

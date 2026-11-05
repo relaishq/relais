@@ -325,7 +325,7 @@ resume request must also fit the private HTTP wire bound, including base64.
 
 The custom-worker capacity/Save-CPU gate is **manual only** in
 `.github/workflows/load-calibration.yml`, mode `custom-capacity`, on
-`ubuntu-latest`. It never runs on schedule and is not a release gate. From
+`ubuntu-24.04`. It never runs on schedule and is not a release gate. From
 GitHub Actions, select **Load generator calibration**, the exact pushed ref,
 **Run workflow**, and mode **custom-capacity**. Set `duration`, `capacity_max`,
 `callers_per_process`, `save_cpu_us`, and `save_wall_us` for the proposed operating

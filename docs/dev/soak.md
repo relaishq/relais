@@ -324,7 +324,7 @@ After the workflow change is published, short dispatch:
 ```sh
 gh workflow run load-calibration.yml --repo relaishq/relais \
   -f mode=soak -f soak_callers=6 -f soak_duration=10m10s -f chaos_interval=30s \
-  -f seed=41 -f runner_label=ubuntu-latest -f callers_per_process=2 \
+  -f seed=41 -f runner_label=ubuntu-24.04 -f callers_per_process=2 \
   -f soak_workers=3 -f worker_floor=8 -f relay_floor=8
 ```
 

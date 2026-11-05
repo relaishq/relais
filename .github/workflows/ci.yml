@@ -41,7 +41,7 @@ concurrency:
 # Valkey reserves another 8m for its cache/build. Test step limits stay fixed.
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -89,7 +89,7 @@ jobs:
         run: make check-rules
 
   compatibility:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -115,7 +115,7 @@ jobs:
   build:
     needs: [quality, unit-tests, timing-smoke, call-harness, compatibility]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require all essential checks
         env:
@@ -136,7 +136,7 @@ jobs:
 
   benchmark:
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -149,7 +149,7 @@ jobs:
         run: make bench
 
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       redis:
         image: redis:7
@@ -195,7 +195,7 @@ jobs:
   call-harness:
     # Includes the 15-minute PR suite, longer main/nightly matrix and setup reserve.
     timeout-minutes: 100
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       redis:
         image: redis:7
@@ -241,7 +241,7 @@ jobs:
 
   timing-smoke:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
     steps:
@@ -261,7 +261,7 @@ jobs:
   crash-run:
     timeout-minutes: 45
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Set up Go
@@ -303,7 +303,7 @@ jobs:
   dial-out-process:
     timeout-minutes: 75
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Set up Go
@@ -349,7 +349,7 @@ jobs:
       contents: read
     timeout-minutes: 45
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -395,7 +395,7 @@ jobs:
   crash-run-buffer:
     timeout-minutes: 45
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Set up Go
@@ -421,7 +421,7 @@ jobs:
     # The added ledger cut takes about 25s; it fits the existing 35m limit.
     timeout-minutes: 45
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Set up Go
@@ -478,7 +478,7 @@ jobs:
             bin/bridge-output-store-stall.log
 
   valkey-cluster-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 38
     env:
       VALKEY_VERSION: '9.1.2'
@@ -527,7 +527,7 @@ jobs:
           if-no-files-found: warn
 
   cluster-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       RELAIS_TEST_REDIS_CLUSTER: '1'
@@ -565,7 +565,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -641,7 +641,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
