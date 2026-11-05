@@ -29,10 +29,12 @@ func (f *resourceFence) Latched() bool { return f.latched }
 func (f *resourceFence) Halt(string)   { f.latched = true }
 
 type callerResources struct {
-	r        *rehearsal
-	identity operatorcaller.Identity
-	launcher *operatorcaller.FixedLauncher
-	manifest operatorcaller.Manifest
+	r          *rehearsal
+	binary     callerBinary
+	affinities *[]string
+	identity   operatorcaller.Identity
+	launcher   *operatorcaller.FixedLauncher
+	manifest   operatorcaller.Manifest
 }
 
 func resourceReply(id string, c operator.Certainty, payload any) operator.Reply {
@@ -50,7 +52,7 @@ func (c *callerResources) Ready(ctx context.Context, req operator.Request) opera
 	}
 	// Fixed launch configuration remains resource-owned. It receives the public
 	// immutable manifest, not a gate procedure callback.
-	if err := c.r.configureCaller(ctx, args.Manifest, &resourceFence{}); err != nil {
+	if err := c.r.configureCaller(ctx, args.Manifest, &resourceFence{}, c.binary); err != nil {
 		return refusal(req.ID, "invalid-request")
 	}
 	c.launcher = c.r.launcher
@@ -92,7 +94,7 @@ func (c *callerResources) Start(ctx context.Context, req operator.Request) opera
 			c.r.callerDiagnostics(ctx, c.identity)
 			return resourceReply(req.ID, operator.Unknown, operatorgates.CallerProof{})
 		}
-		c.r.report.CPU.CallerAffinities = append(c.r.report.CPU.CallerAffinities, CPUList(cpus))
+		*c.affinities = append(*c.affinities, CPUList(cpus))
 	} else {
 		c.r.callerDiagnostics(ctx, c.identity)
 	}
@@ -158,11 +160,38 @@ func (m mailboxResources) Create(ctx context.Context, req operator.Request) oper
 	return resourceReply(req.ID, certainty, operatorcaller.MailboxValue{State: state})
 }
 
+// resourceSequence names one session's sinks. The pinned sequence and the
+// diagnostic head-caller phase each get their own spool, judge, caller binary
+// and report rows; only the deployment and teardown are shared.
+type resourceSequence struct {
+	spool      string
+	judge      *recordingJudge
+	binary     callerBinary
+	affinities *[]string
+	started    func(*operatorgates.Session)
+	finished   func(*operatorgates.Session, operatorgates.ResourceResult)
+}
+
+func (r *rehearsal) pinnedSequence() resourceSequence {
+	return resourceSequence{spool: "session-spool", judge: r.judge, binary: callerBinary{r.load, r.report.CallerSHA256}, affinities: &r.report.CPU.CallerAffinities,
+		started: func(s *operatorgates.Session) { r.session = s },
+		finished: func(_ *operatorgates.Session, result operatorgates.ResourceResult) {
+			r.recordSequence(result.SequenceResult, result.CallerStopped)
+			if result.PoolError {
+				r.report.Errors = append(r.report.Errors, "media-judge-failed")
+			}
+			r.report.Clocks = result.Clocks
+			if r.runtime != nil {
+				r.report.Clocks = append(append([]clocks.Evidence{}, r.runtime.ClockSamples...), result.Clocks...)
+			}
+		}}
+}
+
 // runResourceSequence is the rehearsal's only gate entry. Both ends exchange
 // real JSON frames through pipes, using the same ServeSequence and ResourceRunner
 // as the session command. Setup/calibration and owner teardown remain outside.
-func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init) error {
-	spoolDir := filepath.Join(r.work, "session-spool")
+func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init, seq resourceSequence) error {
+	spoolDir := filepath.Join(r.work, seq.spool)
 	if err := os.Mkdir(spoolDir, 0700); err != nil {
 		return err
 	}
@@ -171,27 +200,20 @@ func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init)
 		return err
 	}
 	defer root.Close()
-	adapter := &Adapter{Topology: r.topology, Containers: r.deployment.ContainerIDs(), Runner: r.runner, Diagnostics: r.diagnostics, Caller: &callerResources{r: r}, Mailbox: mailboxResources{store: r.store, spool: root}}
+	adapter := &Adapter{Topology: r.topology, Containers: r.deployment.ContainerIDs(), Runner: r.runner, Diagnostics: r.diagnostics, Caller: &callerResources{r: r, binary: seq.binary, affinities: seq.affinities}, Mailbox: mailboxResources{store: r.store, spool: root}}
 	init.Capabilities = adapter.Capabilities()
-	config := operatorgates.ResourceConfig{Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: r.judge.pinned.Binary, CallerIDBase: uint64(len(r.units) + 1), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
-	runner := operatorgates.ResourceRunner{Config: config, Judge: r.judge, Timing: &operatorgates.TimingRecorder{Writer: r.diagnostics}, Started: func(s *operatorgates.Session) {
-		r.session = s
-		r.judge.note = s.RecordUncertainty
+	config := operatorgates.ResourceConfig{Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: seq.judge.pinned.Binary, CallerIDBase: uint64(len(r.units) + 1), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
+	var session *operatorgates.Session
+	runner := operatorgates.ResourceRunner{Config: config, Judge: seq.judge, Timing: &operatorgates.TimingRecorder{Writer: r.diagnostics}, Started: func(s *operatorgates.Session) {
+		session = s
+		seq.started(s)
+		seq.judge.note = s.RecordUncertainty
 		s.SetObservationFailureSink(r.preconditionDiagnostic)
 		s.SetUncertaintySink(func(u operator.Uncertainty) {
 			raw, _ := json.Marshal(u)
 			_, _ = io.WriteString(r.diagnostics, "command-result-unknown "+string(raw)+"\n")
 		})
-	}, Finished: func(_ *operatorgates.Session, result operatorgates.ResourceResult) {
-		r.recordSequence(result.SequenceResult, result.CallerStopped)
-		if result.PoolError {
-			r.report.Errors = append(r.report.Errors, "media-judge-failed")
-		}
-		r.report.Clocks = result.Clocks
-		if r.runtime != nil {
-			r.report.Clocks = append(append([]clocks.Evidence{}, r.runtime.ClockSamples...), result.Clocks...)
-		}
-	}}
+	}, Finished: seq.finished}
 	engineRead, serverWrite := io.Pipe()
 	serverRead, engineWrite := io.Pipe()
 	engine := operatortransport.NewPipe(engineRead, engineWrite)
@@ -210,7 +232,7 @@ func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init)
 	if err != nil || serveErr != nil {
 		return errors.New("operator-session-incomplete")
 	}
-	if final == nil || final.ScenarioDigest != init.Scenario.Digest || final.Latched != r.session.Latched() {
+	if final == nil || session == nil || final.ScenarioDigest != init.Scenario.Digest || final.Latched != session.Latched() {
 		return errors.New("operator-session-incomplete")
 	}
 	return nil

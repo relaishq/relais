@@ -345,7 +345,22 @@ four allowed logical CPUs, build with `make operator-rehearsal-build`, then run
 v0.3.0 and v0.3.1 linux_amd64 archives with fixed SHA-256 pins. It reads the
 current checkout's template, stages both releases before media, builds both
 release-specific judges offline, and uses the unchanged v0.3.0 caller binary
-from its verified archive. Cache the release commits' Go modules before running.
+from its verified archive for every pinned gate. Cache the release commits' Go
+modules before running.
+
+After the pinned sequence, a diagnostic head-caller phase repeats rollout once
+with the `relais-load` that `make operator-rehearsal-build` builds from the
+checkout (`bin/relais-load`, beside `relais-gates`). It runs in its own session,
+spool and judge copy, saves `head-caller-evidence.json` and writes only the
+report's `headCaller` section. `Evaluate` never reads that section, so the pinned
+verdict is unchanged. The phase is skipped when the pinned session latched. It
+shares the deployment and teardown: an unconfirmed head-caller stop still fails
+`cleanup`. It adds about 20 minutes. `callerTiming`, at the top level for pinned
+phases and in `headCaller`, lists per call the probe count, probe-capacity
+invalidation, gaps over 30 s between probe sends (frontend restarts leave about
+140 s in rollout and upgrade-rollback), and per move or takeover the nearest
+probe, probes within 300 ms and the `timing_evidence` binding probes' age and
+drift. These rows are diagnostics, not gate inputs.
 
 Release staging copies each archive to `/opt/relais/relais-stage-<version>.tar.gz`
 and passes that exact `file://` path to the template downloader. It verifies

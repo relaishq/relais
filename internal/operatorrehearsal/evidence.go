@@ -229,7 +229,7 @@ func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string
 	out.Write(encoded)
 	return nil
 }
-func saveMediaEvidence(output string, pool operatorevidence.Pool, judgeSHA string) error {
+func saveMediaEvidence(output, file string, pool operatorevidence.Pool, judgeSHA string) error {
 	if !fullCommit.MatchString(pool.SourceCommit) || !fullDigest.MatchString(judgeSHA) {
 		return fmt.Errorf("invalid-evidence-provenance")
 	}
@@ -247,7 +247,7 @@ func saveMediaEvidence(output string, pool operatorevidence.Pool, judgeSHA strin
 	if err != nil {
 		return err
 	}
-	name := filepath.Join(output, "media-evidence.json")
+	name := filepath.Join(output, file)
 	if err = os.WriteFile(name+".tmp", append(data, '\n'), 0600); err != nil {
 		return err
 	}
