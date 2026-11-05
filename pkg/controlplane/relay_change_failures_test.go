@@ -60,7 +60,10 @@ func (w *relayProtocolWorker) CreateSessionAtRelay(ctx context.Context, offer, s
 	}
 	return id, answer, lease, err
 }
-func relayFailurePlane(t *testing.T, store sessionstore.Store) (*Plane, *relayProtocolWorker, *fakeWorker, string) {
+
+// relayFailurePlane creates one relay-capable call; its mode (delivery by
+// default) is saved as create would save it.
+func relayFailurePlane(t *testing.T, store sessionstore.Store, modes ...string) (*Plane, *relayProtocolWorker, *fakeWorker, string) {
 	t.Helper()
 	p := New(&fakeRelay{}, store)
 	a := &relayProtocolWorker{fakeWorker: &fakeWorker{store: store, addr: netip.MustParseAddrPort("127.0.0.1:17001"), running: map[string]bool{}}}
@@ -77,9 +80,11 @@ func relayFailurePlane(t *testing.T, store sessionstore.Store) (*Plane, *relayPr
 	require.NoError(t, err)
 	c, err := p.lookup(id)
 	require.NoError(t, err)
-	c.stateMu.Lock()
-	c.relayCapable = true
-	c.stateMu.Unlock()
+	mode := sessionstore.RelayConfirmDelivery
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
+	require.NoError(t, p.acceptRelayMode(context.Background(), c, mode))
 	return p, a, b.fakeWorker, id
 }
 func waitRelayPending(t *testing.T, store sessionstore.Store, id string) (sessionstore.Lease, sessionstore.RelayAssignment) {

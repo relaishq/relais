@@ -126,7 +126,7 @@ type Memory struct {
 	controlIntents     map[string]ControlIntent
 	relayLeases        map[string]RelayLease
 	relayAssignments   map[string]RelayAssignment
-	relayConfirmations map[string][2]string // mode, encoded attempt
+	relayConfirmations map[string][3]string // mode, encoded attempt, encoded episode
 	relayCommits       map[string]RelayCommit
 	mu                 sync.RWMutex
 	leases             map[string]Lease

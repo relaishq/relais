@@ -495,7 +495,7 @@ numbers remain unchanged.
 | Case | Deadline | Fallback |
 | --- | --- | --- |
 | Planned change | 10 s from the event to confirmation, including the switch. Before switching, media continues on the old relay, so that wait is not a gap. A mode also has the clipped 3 s post-commit attempt bound. | Before switching, abort and consume the attempted generation; clear pending and delete its credentials. If the caller still uses the old pair, nothing else happens. After switching, or if the caller dropped the old pair, rollback uses a higher generation on the old live slot; never undo a committed generation. Confirm rollback under the same mode. Retry the drain later with backoff; after 3 failures report the call as not movable. Keep it while the old path still works. If still switched and unconfirmed at the planned deadline, rollback and retries share the stall episode's single 15 s deadline, preserving any earlier detection time. |
-| Unplanned loss or caller-stall episode | 5 s target. One hard deadline 15 s from detection, below the 30 s consent limit (RFC 7675 section 5.1). A mode also has the clipped 3 s post-commit attempt bound. | Retry within the remaining time. Without required confirmation at the hard deadline, end with `relay_change_failed` and the delivery detail above, then send `ended`. This includes complete C but missing required A. The page shows an error and may start a new call. This is a dropped call and fails the gate. |
+| Unplanned loss or caller-stall episode | 5 s target. One hard deadline 15 s from detection, below the 30 s consent limit (RFC 7675 section 5.1). A mode also has the clipped 3 s post-commit attempt bound. | Retry within the remaining time. Without required confirmation at the hard deadline, control durably records the episode as ended with one compare-and-set on the call's confirmation record. That write is ordered against any confirmation; valid proof present at that point completes the change instead. Control then ends with `relay_change_failed` and the delivery detail above, and sends `ended`. When one decision attempt (2 s) gets a definite result while control holds authority, `ended` follows the deadline by at most 2.1 s. An uncertain result, a store outage or a control authority gap delays it until a definite decision (ADR 0008: the outage budget is not a termination timer). Past worker ownership expiry the call ends as `ownership_expired`. This includes complete C but missing required A. The page shows an error and may start a new call. This is a dropped call and fails the gate. |
 | Caller cannot restart, or worker cannot supply C | Immediate on loss or restart failure | Without `relay_change`, end with `relay_lost`. If restart throws, end with `relay_change_failed`. A relay-capable call whose worker lacks the C contract ends with `relay_change_failed`, detail `confirmation_unsupported`, including in C-only mode. It is not silently completed on commit. A planned drain instead leaves that call on the old slot and reports it as not movable. |
 
 **C timing risk (unverified).** Browser audio receiver reports may be several
@@ -591,14 +591,11 @@ Preflight rules:
    keeps an ordinary call without relay change and reports `relay_unsupported`.
    With `relay_change: true` but no `media_progress: true`, it deletes the call
    as section 5 requires. There is no implicit C downgrade.
-3. Calls created by the upgraded control without `media_progress` use persisted
-   `delivery` mode if `relay_change` is true, otherwise `none`. At upgrade,
-   existing relay-capable calls with no stored mode are assigned `delivery`
-   before any further change; they do not remain commit-only. Calls without
-   `relay_change` get `none`. This migration never invents A support. Completed
-   historical commits are not relabelled as C proof. An unfinished episode keeps
-   its original detection time and must collect fresh C within the remaining
-   deadline. If its worker lacks C, apply section 7's unsupported-worker rule.
+3. Calls without `media_progress` use persisted `delivery` mode if
+   `relay_change` is true, otherwise `none`. A call without a saved mode has
+   `none`. There is no in-place migration (owner decision 2026-11-04: relay
+   change is unreleased); records or journal entries in an unknown format are
+   refused and treated as stale.
 4. Before acknowledging any A, control must persist the union of MIDs fenced
    against supersession, abort and timeout. A restart restores it before
    processing reports, retries or timeout. The write that supplies the last
@@ -638,9 +635,10 @@ These record choices the accepted text left open while building sections 5,
   echoed or written, so default profiles keep writing store contract 1. A
   requested A also needs the selected worker's C contract; otherwise create
   is refused as `relay_unsupported`.
-- **Durable record.** `relay_confirmation` and `relay_confirmation_state` live
-  in the session hash. One script reads both with the assignment. Every write
-  compares the full assignment and the full record (store contract 3).
+- **Durable record.** `relay_confirmation`, `relay_confirmation_state` and
+  `relay_episode` live in the session hash. One script reads them with the
+  assignment. Every write compares the full assignment and the full record,
+  including the episode (store contract 3).
 - **Switch versus retirement.** The worker's switch commit is a distinct store
   write that records `relay_switched` (generation and store time) atomically
   with the assignment. Clearing a pending slot any other way records
@@ -691,31 +689,41 @@ These record choices the accepted text left open while building sections 5,
   also fails before switching, the caller keeps its old pair. A committed but
   unconfirmed attempt rolls back within the remaining window. As soon as a
   call leaves its original path, control arms the stall episode with
-  detection at the first planned deadline, before any wait for a switch
-  commit; such waits are clipped to the episode's remaining time. An attempt
-  that already exists is durably bound to the armed episode before any wait,
-  keeping or shortening its bounds; a record without store-clock fields first
-  gets them from its own original deadlines, never from the episode. A call not
-  confirmed back (rollback unconfirmed, failed before switching, or out of
-  time) continues in that episode. The fresh window can stretch the planned
-  phase to 20 s, but an episode deadline is at most 10 s + 15 s = 25 s after
-  the original event.
-- **Episodes.** An episode completes only on its own attempt: an attempt it
-  issued, or one it adopted (adoption stamps the episode deadline and may
-  only shorten the attempt's deadlines). An earlier confirmation never ends a
-  later episode. After a control restart, a recorded switch with saved full A
-  completes the same attempt. Unreadable or contended store state at the
-  deadline is retried, never treated as expiry. The watcher rechecks control
-  authority on every retry and before any terminal effect, and stops when the
-  call has ended or its session is gone. If authority ends while it waits for
-  the call lock, it releases the lock and keeps watching, and a call that
-  ends meanwhile closes the episode. The terminal decision and every success
-  are ordered on the episode: if a driver completed first, nothing is
-  published; otherwise `ended` is published at the deadline (without waiting
-  for the call lock) and afterwards no `confirmed` write, A acknowledgement
-  or driver success is accepted; `ChangeRelay` reports the ended episode. At
-  the deadline an unconfirmed attempt that is not the episode's own is also
-  expired durably. A caller told ended always sees the call end.
+  detection at the first planned deadline. A call not confirmed back
+  (rollback unconfirmed, failed before switching, or out of time) continues
+  in that episode. The fresh window can stretch the planned phase to 20 s, but
+  an episode deadline is at most 10 s + 15 s = 25 s after the original event.
+- **Episode decision (accepted by the owner 2026-11-04).** Each episode's
+  outcome (`open`, then `completed` or `ended`) is saved in the session hash
+  as `relay_episode` with a fresh token, a store-clock deadline and `seq`, a
+  per-call counter of decisions. The first compare-and-set that writes an
+  outcome wins, and every effect follows the stored winner.
+  - The journal intent is only a proposal (token, `seq`, detection). Control
+    reads `seq`, journals the proposal, then writes `begin`, which needs
+    `seq + 1`, no open episode, and no `ended` (ended is final for the live
+    session). `begin` retries until definite, past the deadline too; a refused
+    proposal is re-proposed in the term while the call's slot is still lost.
+  - `begin` binds the current attempt if it is pending or switched, owned by
+    no episode, and aimed at a live slot (an in-flight switch to a live target
+    counts); its bounds only move earlier. Historical confirmations are never
+    adopted. New attempts carry the open token.
+  - Success needs proof, an outcome that is not `ended` and, while an episode
+    is open, an attempt owned by it; otherwise the call belongs to the episode
+    (`ErrMoveInProgress`). Every success advances `seq` and completes the open
+    episode in the same write, so a delayed proposal can never begin after it.
+  - One `end` write serves the timeout (with a store-clock lower bound at the
+    episode deadline) and immediate failures. It needs the token open and
+    promotes proof owned by the episode instead of ending.
+  - Every write is bounded by control authority in store clock, and a
+    read-back after an uncertain write compares the whole record. A watcher
+    that finds another token stands down without publication or cleanup.
+- **Publication (accepted by the owner 2026-11-04).** `ended` is published only
+  after a definite end decision, never waiting for the call lock. One decision
+  attempt (read, authority conversion, compare-and-set and read-back) shares
+  one 2 s context; uncertain results fail closed and retry with backoff under
+  authority. Restart reconciles each journal proposal with the session record,
+  which is authoritative; calls without relay change (mode `none`) keep a
+  detection-based watchdog that ends them directly.
 - **One-slot sets.** An explicitly configured set of one slot accepts the
   confirmation contracts and supports same-slot recovery. Changing to another
   address needs a second slot.
@@ -723,8 +731,10 @@ These record choices the accepted text left open while building sections 5,
   slice-2 retry of the only surviving slot.
 - **Ended calls.** `media-progress` returns `410` for a call this control still
   knows as ended; an unknown call returns `404`.
-- **Fence for #323.** A store-side control-epoch fence adds one compared field
-  to the confirmation write, the same way the attempt fields are compared.
+- **#323 scope (accepted by the owner 2026-11-04).** Item 1 is closed for the
+  stale watchdog's end write: it needs its own token open, which a successor's
+  decision makes impossible. Epoch fencing of journal put/delete (#346, option
+  B) and item 2 stay open; stale journal entries are made harmless by `seq`.
 
 ## Measurement
 

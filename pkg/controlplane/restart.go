@@ -759,9 +759,9 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			} else {
 				c := p.rebuildCall(current)
 				c.stateMu.Lock()
-				c.relayCapable = intent.Kind == "relay-recovery"
+				c.relayCapable = intent.Kind == relayIntentKind
 				c.stateMu.Unlock()
-				if _, e = p.relayRecoveryEpisode(ctx, c, intent.Started); e != nil {
+				if e = p.restoreRelayEpisode(ctx, c, intent); e != nil {
 					return e
 				}
 			}

@@ -15,18 +15,21 @@ import (
 // assignment, the mode and the encoded attempt. It needs a live lease but not
 // a worker epoch: control writes it, and a takeover keeps the record.
 const relayConfirmationLua = `
-local v=redis.call('HMGET',KEYS[1],'worker','expires','relay','relay_gen','relay_pending','relay_confirmation','relay_confirmation_state','relay_switched','relay_switched_at','relay_retired')
+local v=redis.call('HMGET',KEYS[1],'worker','expires','relay','relay_gen','relay_pending','relay_confirmation','relay_confirmation_state','relay_switched','relay_switched_at','relay_retired','relay_episode')
 local t=redis.call('TIME')
 local now=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
 if not v[1] or tonumber(v[2])<=now then return {0} end
 local slot,gen,pending,mode,state=v[3] or '',v[4] or '0',v[5] or '',v[6] or '',v[7] or ''
-local switched,switchedAt,retired=v[8] or '0',v[9] or '0',v[10] or '0'
-if ARGV[1]=='read' then return {1,slot,gen,pending,mode,state,switched,switchedAt,retired} end
-if slot~=ARGV[2] or gen~=ARGV[3] or pending~=ARGV[4] or mode~=ARGV[5] or state~=ARGV[6] or switched~=ARGV[9] or switchedAt~=ARGV[10] or retired~=ARGV[11] then return {-3} end
+local switched,switchedAt,retired,episode=v[8] or '0',v[9] or '0',v[10] or '0',v[11] or ''
+if ARGV[1]=='read' then return {1,slot,gen,pending,mode,state,switched,switchedAt,retired,episode} end
+if slot~=ARGV[2] or gen~=ARGV[3] or pending~=ARGV[4] or mode~=ARGV[5] or state~=ARGV[6] or switched~=ARGV[9] or switchedAt~=ARGV[10] or retired~=ARGV[11] or episode~=ARGV[13] then return {-3} end
 if ARGV[12]~='' and now>tonumber(ARGV[12]) then return {-4} end
+if ARGV[15]~='' and now<tonumber(ARGV[15]) then return {-6} end
 redis.call('HSET',KEYS[1],'relay_confirmation',ARGV[7])
 if ARGV[8]=='' then redis.call('HDEL',KEYS[1],'relay_confirmation_state')
 else redis.call('HSET',KEYS[1],'relay_confirmation_state',ARGV[8]) end
+if ARGV[14]=='' then redis.call('HDEL',KEYS[1],'relay_episode')
+else redis.call('HSET',KEYS[1],'relay_episode',ARGV[14]) end
 return {1}
 `
 
@@ -47,10 +50,10 @@ func (r *Redis) RelayConfirmation(ctx context.Context, id string) (RelayAssignme
 	if len(result) == 1 && result[0] == int64(0) {
 		return RelayAssignment{}, RelayConfirmation{}, ErrNotFound
 	}
-	if len(result) != 9 {
+	if len(result) != 10 {
 		return RelayAssignment{}, RelayConfirmation{}, errors.New("sessionstore: malformed relay confirmation")
 	}
-	fields := make([]string, 8)
+	fields := make([]string, 9)
 	for i := range fields {
 		s, ok := result[i+1].(string)
 		if !ok {
@@ -63,7 +66,7 @@ func (r *Redis) RelayConfirmation(ctx context.Context, id string) (RelayAssignme
 	if err != nil || !validRelayAssignment(a) {
 		return RelayAssignment{}, RelayConfirmation{}, errors.New("sessionstore: malformed relay assignment fields")
 	}
-	c, err := decodeRelayConfirmation(fields[3], fields[4])
+	c, err := decodeRelayConfirmation(fields[3], fields[4], fields[8])
 	if err != nil {
 		return RelayAssignment{}, RelayConfirmation{}, err
 	}
@@ -88,15 +91,15 @@ func commitArgs(c RelayCommit) []interface{} {
 	return []interface{}{strconv.FormatUint(c.Switched, 10), at, strconv.FormatUint(c.Retired, 10)}
 }
 
-func (r *Redis) CASRelayConfirmation(ctx context.Context, id string, at RelayAssignment, from, to RelayConfirmation, notAfter time.Time) error {
+func (r *Redis) CASRelayConfirmation(ctx context.Context, id string, at RelayAssignment, from, to RelayConfirmation, notBefore, notAfter time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fromMode, fromState, err := encodeRelayConfirmation(from)
+	fromMode, fromState, fromEpisode, err := encodeRelayConfirmation(from)
 	if err != nil {
 		return err
 	}
-	toMode, toState, err := encodeRelayConfirmation(to)
+	toMode, toState, toEpisode, err := encodeRelayConfirmation(to)
 	if err != nil {
 		return err
 	}
@@ -108,12 +111,15 @@ func (r *Redis) CASRelayConfirmation(ctx context.Context, id string, at RelayAss
 	var result []interface{}
 	err = r.observe("relay_confirmation_cas", func() error {
 		var err error
-		deadline := ""
-		if !notAfter.IsZero() {
-			deadline = strconv.FormatInt(notAfter.UnixMilli(), 10)
+		bound := func(t time.Time) string {
+			if t.IsZero() {
+				return ""
+			}
+			return strconv.FormatInt(t.UnixMilli(), 10)
 		}
 		args := append([]interface{}{"cas", at.Slot, strconv.FormatUint(at.Generation, 10), at.Pending, fromMode, fromState, toMode, toState}, commitArgs(from.Commit)...)
-		result, err = relayConfirmationScript.Run(ctx, r.client, r.keys(id)[:1], append(args, deadline)...).Slice()
+		args = append(args, bound(notAfter), fromEpisode, toEpisode, bound(notBefore))
+		result, err = relayConfirmationScript.Run(ctx, r.client, r.keys(id)[:1], args...).Slice()
 		return err
 	})
 	if err != nil {
@@ -131,6 +137,8 @@ func (r *Redis) CASRelayConfirmation(ctx context.Context, id string, at RelayAss
 		return ErrRelayConflict
 	case int64(-4):
 		return ErrRelayAttemptExpired
+	case int64(-6):
+		return ErrRelayTooEarly
 	default:
 		return fmt.Errorf("sessionstore: unexpected relay confirmation result %v", result[0])
 	}

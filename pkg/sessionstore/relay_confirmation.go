@@ -40,6 +40,35 @@ var ErrRelayConfirmationInvalid = errors.New("sessionstore: invalid relay confir
 // its deadline, measured by the store clock inside the atomic write.
 var ErrRelayAttemptExpired = errors.New("sessionstore: relay attempt deadline passed")
 
+// ErrRelayTooEarly refuses a write whose store-clock lower bound (an episode
+// deadline) has not been reached inside the atomic write.
+var ErrRelayTooEarly = errors.New("sessionstore: relay episode deadline not reached")
+
+// Relay episode outcomes (ADR 0016 section 7). The first write that sets an
+// outcome for an episode token wins; both are final for that token, and
+// ended is final for the live session.
+const (
+	RelayEpisodeOpen      = "open"
+	RelayEpisodeCompleted = "completed"
+	RelayEpisodeEnded     = "ended"
+)
+
+// RelayEpisode is the call's durable episode decision (relay_episode field).
+// Seq counts every final decision about the call's relay outcome (begins,
+// completions and confirmations without an episode); it never decreases, so a
+// stale proposal for seq+1 can never begin after any later decision.
+type RelayEpisode struct {
+	Seq           uint64    `json:"seq"`
+	Token         string    `json:"token,omitempty"`
+	StoreDeadline time.Time `json:"store_deadline,omitzero"`
+	Outcome       string    `json:"outcome,omitempty"`
+	Reason        string    `json:"reason,omitempty"`
+	Detail        string    `json:"detail,omitempty"`
+}
+
+// Open reports an episode that has not decided yet.
+func (e *RelayEpisode) Open() bool { return e != nil && e.Outcome == RelayEpisodeOpen }
+
 // RelayAttempt is the bounded relay_confirmation_state record. It names the
 // current attempt only; supersession replaces it and keeps the episode fields
 // (Tried, Detected, EpisodeDeadline).
@@ -65,6 +94,9 @@ type RelayAttempt struct {
 	// switch is observed: StoreDeadline, or less for the A attempt bound. It is
 	// authoritative; local times above only trigger earlier local decisions.
 	StoreBound time.Time `json:"store_bound,omitzero"`
+	// Episode is the token of the episode that owns this attempt, or empty.
+	// Only proof on an attempt owned by an open episode completes it.
+	Episode string `json:"episode,omitempty"`
 }
 
 // EvidenceBound is the store-clock time after which no A or C may be retained.
@@ -81,6 +113,7 @@ func (t RelayAttempt) EvidenceBound() time.Time {
 type RelayConfirmation struct {
 	Mode    string
 	Attempt *RelayAttempt
+	Episode *RelayEpisode
 	// Commit is maintained by the assignment writes. Reads return it with the
 	// record; a confirmation write compares it and never changes it.
 	Commit RelayCommit
@@ -129,9 +162,10 @@ func (c RelayConfirmation) Switched(a RelayAssignment) bool {
 type RelayConfirmations interface {
 	RelayAssignments
 	RelayConfirmation(context.Context, string) (RelayAssignment, RelayConfirmation, error)
-	// CASRelayConfirmation also compares from.Commit. A non-zero notAfter is
-	// a store-clock time, enforced inside the same atomic write.
-	CASRelayConfirmation(ctx context.Context, id string, at RelayAssignment, from, to RelayConfirmation, notAfter time.Time) error
+	// CASRelayConfirmation also compares from.Commit and from.Episode.
+	// Non-zero notBefore and notAfter are store-clock times, enforced inside
+	// the same atomic write.
+	CASRelayConfirmation(ctx context.Context, id string, at RelayAssignment, from, to RelayConfirmation, notBefore, notAfter time.Time) error
 }
 
 func sameCommit(a, b RelayCommit) bool {
@@ -177,7 +211,38 @@ func (c RelayConfirmation) Confirmed(a RelayAssignment) bool {
 	return false
 }
 
-func encodeRelayConfirmation(c RelayConfirmation) (mode, state string, err error) {
+func encodeRelayConfirmation(c RelayConfirmation) (mode, state, episode string, err error) {
+	if episode, err = encodeRelayEpisode(c); err != nil {
+		return "", "", "", err
+	}
+	mode, state, err = encodeRelayAttempt(c)
+	return mode, state, episode, err
+}
+
+func encodeRelayEpisode(c RelayConfirmation) (string, error) {
+	e := c.Episode
+	if e == nil {
+		return "", nil
+	}
+	if c.Mode != RelayConfirmDelivery && c.Mode != RelayConfirmDecode || len(e.Token) > 64 || len(e.Reason) > 64 || len(e.Detail) > 64 {
+		return "", ErrRelayConfirmationInvalid
+	}
+	switch e.Outcome {
+	case "", RelayEpisodeOpen, RelayEpisodeCompleted, RelayEpisodeEnded:
+	default:
+		return "", ErrRelayConfirmationInvalid
+	}
+	if e.Outcome == RelayEpisodeOpen && (e.Token == "" || e.StoreDeadline.IsZero()) {
+		return "", ErrRelayConfirmationInvalid
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return "", ErrRelayConfirmationInvalid
+	}
+	return string(data), nil
+}
+
+func encodeRelayAttempt(c RelayConfirmation) (mode, state string, err error) {
 	switch c.Mode {
 	case "", RelayConfirmNone, RelayConfirmDelivery, RelayConfirmDecode:
 	default:
@@ -210,7 +275,7 @@ func encodeRelayConfirmation(c RelayConfirmation) (mode, state string, err error
 	return c.Mode, string(data), nil
 }
 
-func decodeRelayConfirmation(mode, state string) (RelayConfirmation, error) {
+func decodeRelayConfirmation(mode, state, episode string) (RelayConfirmation, error) {
 	c := RelayConfirmation{Mode: mode}
 	if state != "" {
 		c.Attempt = &RelayAttempt{}
@@ -218,7 +283,13 @@ func decodeRelayConfirmation(mode, state string) (RelayConfirmation, error) {
 			return RelayConfirmation{}, ErrRelayConfirmationInvalid
 		}
 	}
-	if _, _, err := encodeRelayConfirmation(c); err != nil {
+	if episode != "" {
+		c.Episode = &RelayEpisode{}
+		if err := json.Unmarshal([]byte(episode), c.Episode); err != nil {
+			return RelayConfirmation{}, ErrRelayConfirmationInvalid
+		}
+	}
+	if _, _, _, err := encodeRelayConfirmation(c); err != nil {
 		return RelayConfirmation{}, err
 	}
 	return c, nil
@@ -226,9 +297,18 @@ func decodeRelayConfirmation(mode, state string) (RelayConfirmation, error) {
 
 // The mode is set once. A record never returns to "no attempt"; it never
 // moves to a lower generation; a terminal phase is final for its generation.
+// The episode seq never decreases, and ended is final for the live session.
 func validRelayConfirmationTransition(from, to RelayConfirmation) bool {
 	if from.Mode != "" && to.Mode != from.Mode {
 		return false
+	}
+	if from.Episode != nil {
+		if to.Episode == nil || to.Episode.Seq < from.Episode.Seq {
+			return false
+		}
+		if from.Episode.Outcome == RelayEpisodeEnded && !sameRelayEpisode(*to.Episode, *from.Episode) {
+			return false
+		}
 	}
 	if from.Attempt == nil {
 		return true
@@ -245,6 +325,11 @@ func validRelayConfirmationTransition(from, to RelayConfirmation) bool {
 	return true
 }
 
+// sameRelayEpisode compares episodes with time.Equal for deadlines.
+func sameRelayEpisode(a, b RelayEpisode) bool {
+	return a.Seq == b.Seq && a.Token == b.Token && a.StoreDeadline.Equal(b.StoreDeadline) && a.Outcome == b.Outcome && a.Reason == b.Reason && a.Detail == b.Detail
+}
+
 func (m *Memory) RelayConfirmation(ctx context.Context, id string) (RelayAssignment, RelayConfirmation, error) {
 	if err := ctx.Err(); err != nil {
 		return RelayAssignment{}, RelayConfirmation{}, err
@@ -256,20 +341,20 @@ func (m *Memory) RelayConfirmation(ctx context.Context, id string) (RelayAssignm
 		return RelayAssignment{}, RelayConfirmation{}, ErrNotFound
 	}
 	saved := m.relayConfirmations[id]
-	c, err := decodeRelayConfirmation(saved[0], saved[1])
+	c, err := decodeRelayConfirmation(saved[0], saved[1], saved[2])
 	c.Commit = m.relayCommits[id]
 	return m.relayAssignments[id], c, err
 }
 
-func (m *Memory) CASRelayConfirmation(ctx context.Context, id string, at RelayAssignment, from, to RelayConfirmation, notAfter time.Time) error {
+func (m *Memory) CASRelayConfirmation(ctx context.Context, id string, at RelayAssignment, from, to RelayConfirmation, notBefore, notAfter time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fromMode, fromState, err := encodeRelayConfirmation(from)
+	fromMode, fromState, fromEpisode, err := encodeRelayConfirmation(from)
 	if err != nil {
 		return err
 	}
-	toMode, toState, err := encodeRelayConfirmation(to)
+	toMode, toState, toEpisode, err := encodeRelayConfirmation(to)
 	if err != nil {
 		return err
 	}
@@ -282,16 +367,20 @@ func (m *Memory) CASRelayConfirmation(ctx context.Context, id string, at RelayAs
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		return ErrNotFound
 	}
-	if m.relayAssignments[id] != at || m.relayConfirmations[id] != [2]string{fromMode, fromState} || !sameCommit(m.relayCommits[id], from.Commit) {
+	if m.relayAssignments[id] != at || m.relayConfirmations[id] != [3]string{fromMode, fromState, fromEpisode} || !sameCommit(m.relayCommits[id], from.Commit) {
 		return ErrRelayConflict
 	}
-	if !notAfter.IsZero() && time.Now().After(notAfter) {
+	now := time.Now()
+	if !notAfter.IsZero() && now.After(notAfter) {
 		return ErrRelayAttemptExpired
 	}
-	if m.relayConfirmations == nil {
-		m.relayConfirmations = make(map[string][2]string)
+	if !notBefore.IsZero() && now.Before(notBefore) {
+		return ErrRelayTooEarly
 	}
-	m.relayConfirmations[id] = [2]string{toMode, toState}
+	if m.relayConfirmations == nil {
+		m.relayConfirmations = make(map[string][3]string)
+	}
+	m.relayConfirmations[id] = [3]string{toMode, toState, toEpisode}
 	return nil
 }
 

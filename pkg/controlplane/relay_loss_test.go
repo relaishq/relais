@@ -18,7 +18,7 @@ func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 		c, err := p.lookup(id)
 		require.NoError(t, err)
 		c.stateMu.Lock()
-		c.relayCapable = false
+		c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 		c.relayWake = make(chan struct{}, 1)
 		c.stateMu.Unlock()
 		var unaffected []*call
@@ -48,7 +48,7 @@ func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 		c.relayEpisodeMu.Unlock()
 		require.NotNil(t, episode, "failed cut-off must still install the unsupported call's watchdog")
 		require.Equal(t, binding.lostAt.Add(relayRecoveryLimit), episode.deadline)
-		require.Equal(t, "relay-recovery-unsupported", episode.intent.Kind)
+		require.Equal(t, "relay-recovery-unsupported", episode.proposal().Kind)
 		require.True(t, a.runs(id), "failed cut-off must not end the call before its deadline")
 		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
 		c.relayEpisodeMu.Lock()
@@ -111,7 +111,7 @@ func TestRelayLossUnsupportedEndsAfterCutoff(t *testing.T) {
 				c, err := p.lookup(id)
 				require.NoError(t, err)
 				c.stateMu.Lock()
-				c.relayCapable = false
+				c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 				c.stateMu.Unlock()
 				p.mu.Lock()
 				binding := p.relaySet["r1"]
@@ -175,7 +175,7 @@ func TestRelayLossUnsupportedEndsAfterCutoff(t *testing.T) {
 
 type relayLossCountingStore struct {
 	sessionstore.Store
-	sessionstore.RelayAssignments
+	sessionstore.RelayConfirmations
 	sessionstore.ControlStore
 	owners, lists, puts atomic.Int64
 	missingID           string
@@ -188,7 +188,7 @@ func (s *relayLossCountingStore) RelayOwner(ctx context.Context, id string) (ses
 	if id == s.missingID && s.missingOwner.Load() {
 		return sessionstore.Lease{}, sessionstore.RelayAssignment{}, sessionstore.ErrNotFound
 	}
-	return s.RelayAssignments.RelayOwner(ctx, id)
+	return s.RelayConfirmations.RelayOwner(ctx, id)
 }
 
 func (s *relayLossCountingStore) ControlIntents(ctx context.Context) ([]sessionstore.ControlIntent, error) {
@@ -206,12 +206,12 @@ func (s *relayLossCountingStore) PutControlIntent(ctx context.Context, intent se
 
 func TestRelayLossExpiredOwnerLeaseRetriesAfterTakeover(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		counted := &relayLossCountingStore{Store: store, RelayAssignments: store.(sessionstore.RelayAssignments), ControlStore: store.(sessionstore.ControlStore)}
+		counted := &relayLossCountingStore{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
 		p, a, b, id := relayFailurePlane(t, counted)
 		stopRelayRecoveries(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		c.relayCapable = false
+		c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 		ctx := context.Background()
 		owned, err := store.Transfer(ctx, c.lease, b.addr, time.Minute)
 		require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestRelayLossExpiredOwnerLeaseRetriesAfterTakeover(t *testing.T) {
 		c.relayEpisodeMu.Unlock()
 		require.NotNil(t, episode, "temporary NotFound must not suppress the restored call's watchdog")
 		require.Equal(t, detected.Add(relayRecoveryLimit), episode.deadline)
-		require.Equal(t, a.addr, episode.intent.Lease.Worker)
+		require.Equal(t, a.addr, episode.proposal().Lease.Worker)
 		require.EqualValues(t, 3, counted.owners.Load(), "retry missing ownership until takeover restores it")
 		for range 3 {
 			require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
@@ -270,12 +270,12 @@ func TestRelayLossExpiredOwnerLeaseRetriesAfterTakeover(t *testing.T) {
 
 func TestRelayLossFailedIntentWriteRetriesOriginalDeadline(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		counted := &relayLossCountingStore{Store: store, RelayAssignments: store.(sessionstore.RelayAssignments), ControlStore: store.(sessionstore.ControlStore)}
+		counted := &relayLossCountingStore{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
 		p, _, _, id := relayFailurePlane(t, counted)
 		stopRelayRecoveries(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		c.relayCapable = false
+		c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 		p.mu.Lock()
 		b := p.workers["b"]
 		b.worker = &unavailableRelayWorker{b.worker.(*relayProtocolWorker)}
@@ -303,7 +303,7 @@ func TestRelayLossFailedIntentWriteRetriesOriginalDeadline(t *testing.T) {
 		records, err = store.(sessionstore.ControlStore).ControlIntents(ctx)
 		require.NoError(t, err)
 		require.Len(t, records, 1, "retry must persist the original episode before cut-off succeeds")
-		require.Equal(t, episode.intent.Token, records[0].Token)
+		require.Equal(t, episode.proposal().Token, records[0].Token)
 		require.WithinDuration(t, binding.lostAt, records[0].Started, time.Millisecond)
 		c.relayEpisodeMu.Lock()
 		again := c.relayEpisode
@@ -321,12 +321,12 @@ func TestRelayLossFailedIntentWriteRetriesOriginalDeadline(t *testing.T) {
 
 func TestRelayLossFailedCutoffStopsStoreWorkAfterFirstPass(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		counted := &relayLossCountingStore{Store: store, RelayAssignments: store.(sessionstore.RelayAssignments), ControlStore: store.(sessionstore.ControlStore)}
+		counted := &relayLossCountingStore{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
 		p, a, _, id := relayFailurePlane(t, counted)
 		stopRelayRecoveries(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		c.relayCapable = false
+		c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 		for range 8 {
 			for _, spec := range []struct {
 				slot    string
@@ -368,7 +368,7 @@ func TestRelayLossUnsupportedDeadOwnerDeadline(t *testing.T) {
 		stopRelayRecoveries(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		c.relayCapable = false
+		c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 		p.mu.Lock()
 		owner := p.workers["a"]
 		owner.worker = &deadRelayLossOwner{&unavailableRelayWorker{a}}
@@ -405,7 +405,7 @@ func TestRelayLossUnsupportedDeadlineSurvivesSuccessorRebuild(t *testing.T) {
 		stopRelayRecoveries(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		c.relayCapable = false
+		c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 		p.mu.Lock()
 		b := p.workers["b"]
 		b.worker = &unavailableRelayWorker{b.worker.(*relayProtocolWorker)}
@@ -436,9 +436,9 @@ func TestRelayLossUnsupportedDeadlineSurvivesSuccessorRebuild(t *testing.T) {
 		restored.relayEpisodeMu.Unlock()
 		require.NotNil(t, saved)
 		require.False(t, restored.relayCapable)
-		require.Equal(t, "relay-recovery-unsupported", saved.intent.Kind)
-		require.Equal(t, episode.intent.Token, saved.intent.Token)
-		require.WithinDuration(t, binding.lostAt, saved.intent.Started, time.Millisecond)
+		require.Equal(t, "relay-recovery-unsupported", saved.proposal().Kind)
+		require.Equal(t, episode.proposal().Token, saved.proposal().Token)
+		require.WithinDuration(t, binding.lostAt, saved.proposal().Started, time.Millisecond)
 		require.WithinDuration(t, binding.lostAt.Add(relayRecoveryLimit), saved.deadline, time.Millisecond)
 	})
 }

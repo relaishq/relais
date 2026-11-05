@@ -93,7 +93,7 @@ func TestRelayCommitAloneNeverCompletes(t *testing.T) {
 
 func TestMediaProgressConfirmsDecodeMode(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		p, _, _, id := relayFailurePlane(t, store)
+		p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
 		require.NoError(t, p.acceptRelayMode(context.Background(), c, sessionstore.RelayConfirmDecode))
@@ -145,7 +145,7 @@ func TestMediaProgressConfirmsDecodeMode(t *testing.T) {
 
 func TestDecodeModeCompleteDeliveryWithoutARollsBack(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		p, _, _, id := relayFailurePlane(t, store)
+		p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
 		require.NoError(t, p.acceptRelayMode(context.Background(), c, sessionstore.RelayConfirmDecode))
@@ -228,7 +228,7 @@ func TestRemoteWorkerWithoutDeliveryRoute(t *testing.T) {
 	require.False(t, errors.Is(err, mediaworker.ErrRelayUnsupported), "an unknown session is not an old worker")
 }
 
-func TestRelayModeAcceptanceAndMigration(t *testing.T) {
+func TestRelayModeAcceptance(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
 		p, _, _, _ := relayFailurePlane(t, store)
 		server := httptest.NewServer(p.Handler())
@@ -263,30 +263,12 @@ func TestRelayModeAcceptanceAndMigration(t *testing.T) {
 			require.Equal(t, tc.mode, rec.Mode, "the accepted mode is durable before the echo")
 		}
 
-		// A call from an older control: relay-capable without a stored mode
-		// becomes delivery before any change; it never invents A.
-		other := sessionstore.NewMemory()
-		p1, _, _, legacy := relayFailurePlane(t, other)
-		cl, err := p1.lookup(legacy)
-		require.NoError(t, err)
-		mode, err := p1.relayMode(context.Background(), cl)
-		require.NoError(t, err)
-		require.Equal(t, sessionstore.RelayConfirmDelivery, mode)
-		p2, _, _, plain := relayFailurePlane(t, sessionstore.NewMemory())
-		c, err := p2.lookup(plain)
-		require.NoError(t, err)
-		c.stateMu.Lock()
-		c.relayCapable, c.relayMode = false, ""
-		c.stateMu.Unlock()
-		mode, err = p2.relayMode(context.Background(), c)
-		require.NoError(t, err)
-		require.Equal(t, sessionstore.RelayConfirmNone, mode)
-		_, rec, err := confirmations(p2.store).RelayConfirmation(context.Background(), plain)
-		require.NoError(t, err)
-		require.Empty(t, rec.Mode)
-		_, rec, err = confirmations(other).RelayConfirmation(context.Background(), legacy)
-		require.NoError(t, err)
-		require.Equal(t, sessionstore.RelayConfirmDelivery, rec.Mode, "migration persists delivery before any change")
+		// A call without a saved mode never accepted relay change: none.
+		q := New(&fakeRelay{}, sessionstore.NewMemory())
+		c := &call{id: "never-accepted"}
+		mode, err := q.relayMode(context.Background(), c)
+		require.Error(t, err, "no session record")
+		require.Empty(t, mode)
 	})
 }
 
@@ -304,7 +286,7 @@ func TestRelayFailureDetail(t *testing.T) {
 // connected call, and ends with relay_change_failed by its fixed deadline.
 func TestUnplannedEpisodeEndsWithDeliveryDetail(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		p, _, _, id := relayFailurePlane(t, store)
+		p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
 		stopRelayRecoveries(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
@@ -359,7 +341,7 @@ func TestControlRestartAdoptsUnconfirmedAttempt(t *testing.T) {
 	for _, mode := range []string{sessionstore.RelayConfirmDelivery, sessionstore.RelayConfirmDecode} {
 		t.Run(mode, func(t *testing.T) {
 			forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-				p, _, _, id := relayFailurePlane(t, store)
+				p, _, _, id := relayFailurePlane(t, store, mode)
 				stopRelayRecoveries(t, p)
 				c, err := p.lookup(id)
 				require.NoError(t, err)
@@ -380,7 +362,7 @@ func TestControlRestartAdoptsUnconfirmedAttempt(t *testing.T) {
 				}
 				_, rec, err := confirmations(store).RelayConfirmation(ctx, id)
 				require.NoError(t, err)
-				require.NoError(t, confirmations(store).CASRelayConfirmation(ctx, id, committed, rec, sessionstore.RelayConfirmation{Mode: mode, Attempt: &attempt}, time.Time{}))
+				require.NoError(t, confirmations(store).CASRelayConfirmation(ctx, id, committed, rec, sessionstore.RelayConfirmation{Mode: mode, Attempt: &attempt}, time.Time{}, time.Time{}))
 				c.stateMu.Lock()
 				c.relayMode = "" // a restarted control reloads the mode
 				c.stateMu.Unlock()

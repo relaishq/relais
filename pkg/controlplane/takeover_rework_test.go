@@ -643,7 +643,7 @@ func TestTerminalCallClearsPendingTakeover(t *testing.T) {
 		c, err := p.lookup(id)
 		require.NoError(t, err)
 		c.stateMu.Lock()
-		c.relayCapable = false
+		c.relayCapable, c.relayMode = false, sessionstore.RelayConfirmNone
 		c.stateMu.Unlock()
 		source := p.workers["a"]
 		expireObservedWorker(t, source)
@@ -654,7 +654,7 @@ func TestTerminalCallClearsPendingTakeover(t *testing.T) {
 
 		// Unsupported relay recovery ends the call through the
 		// worker while its crash takeover is still awaiting a transfer.
-		require.NoError(t, p.recoverRelay(ctx, c, false, map[string]bool{}, time.Now().Add(relayRecoveryLimit), time.Now()))
+		require.NoError(t, p.recoverRelay(ctx, c, false, map[string]bool{}, newRelayEpisode(sessionstore.ControlIntent{Started: time.Now()})))
 		require.True(t, c.terminal)
 		_, err = store.Get(ctx, id)
 		require.ErrorIs(t, err, sessionstore.ErrEnded)

@@ -33,6 +33,9 @@ type ControlIntent struct {
 	Started   time.Time `json:"started"`
 	Lease     Lease     `json:"lease"`
 	Candidate *Lease    `json:"candidate,omitempty"`
+	// Seq is a relay episode proposal's decision number (ADR 0016 section 7):
+	// begin succeeds only when it is the session record's seq + 1.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // ControlStore is the restart journal. Control-wide records use one slot;

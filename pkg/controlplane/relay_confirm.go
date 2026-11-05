@@ -27,28 +27,9 @@ const (
 
 var errRelayUnconfirmed = errors.New("controlplane: relay change unconfirmed")
 
-// errRelayEpisodeEnded: the call's episode already decided to end the call;
-// no confirmation is saved and no success is reported after that decision.
+// errRelayEpisodeEnded: the call's episode durably ended; no confirmation is
+// saved and no success is reported after that decision.
 var errRelayEpisodeEnded = errors.New("controlplane: relay_change_failed: episode ended")
-
-// relayDecisionGate runs a success write while the call's active episode
-// cannot make its terminal decision, and refuses it after that decision. The
-// gate holds only the episode's decision lock, never the call lock, so
-// publication at the deadline stays independent of a busy operation.
-func (p *Plane) relayDecisionGate(c *call, write func(episode time.Time) error) error {
-	c.relayEpisodeMu.Lock()
-	e := c.relayEpisode
-	c.relayEpisodeMu.Unlock()
-	if e == nil {
-		return write(time.Time{})
-	}
-	e.decision.Lock()
-	defer e.decision.Unlock()
-	if e.ending {
-		return errRelayEpisodeEnded
-	}
-	return write(e.deadline)
-}
 
 // errRelayRetired: the attempt's generation was consumed without a switch.
 var errRelayRetired = errors.New("controlplane: relay generation retired without a switch")
@@ -75,7 +56,6 @@ type relayAttemptOptions struct {
 	kind     string    // planned or recovery
 	outer    time.Time // planned deadline, or the saved episode deadline
 	detected time.Time // episode detection; zero for planned
-	episode  time.Time // planned attempts issued after an episode was armed
 	tried    []string
 }
 
@@ -102,55 +82,32 @@ func relayFailureDetail(rec sessionstore.RelayConfirmation) RelayEvent {
 	return detail
 }
 
-// relayMode returns the call's accepted confirmation mode. A call created by
-// an older control has no stored mode: a relay-capable one is assigned
-// delivery before any further change (ADR 0016 section 10, rule 3).
+// relayMode returns the call's accepted confirmation mode, saved at create.
+// A call without a saved mode has none: relay change was never accepted.
 func (p *Plane) relayMode(ctx context.Context, c *call) (string, error) {
 	c.stateMu.Lock()
-	mode, capable := c.relayMode, c.relayCapable
+	mode := c.relayMode
 	c.stateMu.Unlock()
 	if mode != "" {
 		return mode, nil
 	}
 	store, ok := p.store.(sessionstore.RelayConfirmations)
 	if !ok {
-		// No durable record: a change attempt fails closed as
-		// confirmation_unsupported; it never completes on commit.
-		if capable {
-			return sessionstore.RelayConfirmDelivery, nil
-		}
 		return sessionstore.RelayConfirmNone, nil
 	}
-	for range 5 {
-		a, rec, err := store.RelayConfirmation(ctx, c.id)
-		if err != nil {
-			return "", err
-		}
-		mode = rec.Mode
-		p.mu.Lock()
-		enabled := len(p.relaySet) > 0
-		p.mu.Unlock()
-		if mode == "" && (!capable || !enabled) {
-			// Without a relay set nothing can change relays, and a default
-			// profile never writes the confirmation record (contract 3).
-			mode = sessionstore.RelayConfirmNone
-		}
-		if mode == "" {
-			mode = sessionstore.RelayConfirmDelivery
-			if err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: mode}, time.Time{}); err != nil {
-				if errors.Is(err, sessionstore.ErrRelayConflict) {
-					continue
-				}
-				return "", err
-			}
-		}
-		c.stateMu.Lock()
-		c.relayMode = mode
-		c.relayCapable = mode == sessionstore.RelayConfirmDelivery || mode == sessionstore.RelayConfirmDecode
-		c.stateMu.Unlock()
-		return mode, nil
+	_, rec, err := store.RelayConfirmation(ctx, c.id)
+	if err != nil {
+		return "", err
 	}
-	return "", sessionstore.ErrRelayConflict
+	mode = rec.Mode
+	if mode == "" {
+		mode = sessionstore.RelayConfirmNone
+	}
+	c.stateMu.Lock()
+	c.relayMode = mode
+	c.relayCapable = mode == sessionstore.RelayConfirmDelivery || mode == sessionstore.RelayConfirmDecode
+	c.stateMu.Unlock()
+	return mode, nil
 }
 
 // acceptCapabilities decides a new call's mode. Without a relay set, or a
@@ -233,6 +190,12 @@ func (p *Plane) acceptRelayMode(ctx context.Context, c *call, mode string) error
 // the end of this control's authority. The store enforces both with its own
 // clock inside the atomic write, so a delayed write cannot land after either.
 func (p *Plane) casRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notAfter time.Time) error {
+	return p.decisionCAS(ctx, id, at, from, to, time.Time{}, notAfter)
+}
+
+// decisionCAS is casRelayConfirmation with a store-clock lower bound. Its
+// read-back proves the whole requested record, including the episode.
+func (p *Plane) decisionCAS(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
 	store := p.store.(sessionstore.RelayConfirmations)
 	if authority, ok := p.authorityDeadline(); ok {
 		storeAuthority, err := p.storeTime(ctx, id, authority)
@@ -243,12 +206,13 @@ func (p *Plane) casRelayConfirmation(ctx context.Context, id string, at sessions
 			notAfter = storeAuthority
 		}
 	}
-	err := store.CASRelayConfirmation(ctx, id, at, from, to, notAfter)
-	if err == nil || errors.Is(err, sessionstore.ErrRelayConflict) || errors.Is(err, sessionstore.ErrRelayTransition) || errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) || errors.Is(err, sessionstore.ErrRelayAttemptExpired) {
+	to.Commit = from.Commit
+	err := store.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+	if err == nil || errors.Is(err, sessionstore.ErrRelayConflict) || errors.Is(err, sessionstore.ErrRelayTransition) || errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) || errors.Is(err, sessionstore.ErrRelayAttemptExpired) || errors.Is(err, sessionstore.ErrRelayTooEarly) {
 		return err
 	}
 	gotA, got, e := store.RelayConfirmation(ctx, id)
-	if e == nil && gotA == at && sameRelayConfirmation(got, to) {
+	if e == nil && gotA == at && sameRelayRecord(got, to) {
 		return nil
 	}
 	return err
@@ -287,56 +251,13 @@ func (p *Plane) storeClockOf(ctx context.Context, id string, local time.Time) (t
 	return now.Add(local.Sub(end) - end.Sub(start)), nil
 }
 
-// bindEpisode stamps an episode on an attempt without extending any bound.
-// A record without store-clock fields first gets them from its own original
-// Outer and Bound; then every value is clamped to the episode deadline.
-func (p *Plane) bindEpisode(ctx context.Context, id string, t sessionstore.RelayAttempt, episode, detected time.Time) (sessionstore.RelayAttempt, error) {
-	bound := t
-	if bound.StoreDeadline.IsZero() && !t.Outer().IsZero() {
-		storeOuter, err := p.storeClockOf(ctx, id, t.Outer())
-		if err != nil {
-			return t, err
-		}
-		bound.StoreDeadline = storeOuter
-	}
-	if bound.StoreBound.IsZero() && !t.AttemptBound.IsZero() {
-		storeBound, err := p.storeClockOf(ctx, id, t.Bound())
-		if err != nil {
-			return t, err
-		}
-		bound.StoreBound = storeBound
-	}
-	bound.EpisodeDeadline = episode
-	if !detected.IsZero() {
-		bound.Detected = detected
-	}
-	if !bound.AttemptBound.IsZero() && episode.Before(bound.AttemptBound) {
-		bound.AttemptBound = episode
-	}
-	storeEpisode, err := p.storeClockOf(ctx, id, episode)
-	if err != nil {
-		return t, err
-	}
-	if bound.StoreDeadline.IsZero() || storeEpisode.Before(bound.StoreDeadline) {
-		bound.StoreDeadline = storeEpisode
-	}
-	if !bound.StoreBound.IsZero() && storeEpisode.Before(bound.StoreBound) {
-		bound.StoreBound = storeEpisode
-	}
-	return bound, nil
-}
-
-// evidenceBound is the store-clock bound for A and C writes. The saved store
-// bound is authoritative; only a record without one (written before the
-// attempt saved store-clock fields) falls back to converting its local bound.
-func (p *Plane) evidenceBound(ctx context.Context, id string, t sessionstore.RelayAttempt) (time.Time, error) {
+// evidenceBound is the saved store-clock bound for A and C writes. A record
+// without it is an unknown format and accepts no evidence.
+func (p *Plane) evidenceBound(t sessionstore.RelayAttempt) (time.Time, error) {
 	if bound := t.EvidenceBound(); !bound.IsZero() {
 		return bound, nil
 	}
-	if local := t.Bound(); !local.IsZero() {
-		return p.storeTime(ctx, id, local)
-	}
-	return time.Time{}, nil
+	return time.Time{}, sessionstore.ErrRelayConfirmationInvalid
 }
 
 // authorityDeadline is the end of this control's acknowledged authority.
@@ -351,10 +272,45 @@ func (p *Plane) authorityDeadline() (time.Time, bool) {
 	return guard.deadline, true
 }
 
-func sameRelayConfirmation(a, b sessionstore.RelayConfirmation) bool {
+// sameRelayRecord compares every field a confirmation write sets or compares:
+// mode, attempt, the whole episode and the commit record.
+func sameRelayRecord(a, b sessionstore.RelayConfirmation) bool {
 	x, _ := json.Marshal(a.Attempt)
 	y, _ := json.Marshal(b.Attempt)
-	return a.Mode == b.Mode && string(x) == string(y)
+	e, _ := json.Marshal(a.Episode)
+	f, _ := json.Marshal(b.Episode)
+	return a.Mode == b.Mode && string(x) == string(y) && string(e) == string(f) &&
+		a.Commit.Switched == b.Commit.Switched && a.Commit.Retired == b.Commit.Retired && a.Commit.SwitchedAt.Equal(b.Commit.SwitchedAt)
+}
+
+// confirmRelaySuccess is the single success write. It needs proof, an outcome
+// that is not ended and, while an episode is open, an attempt owned by that
+// episode; otherwise the call belongs to the episode (ErrMoveInProgress). It
+// advances seq and completes the open episode in the same compare-and-set.
+func (p *Plane) confirmRelaySuccess(ctx context.Context, id string, a sessionstore.RelayAssignment, rec sessionstore.RelayConfirmation) error {
+	ep, t := rec.Episode, *rec.Attempt
+	if ep != nil && ep.Outcome == sessionstore.RelayEpisodeEnded {
+		return errRelayEpisodeEnded
+	}
+	if ep.Open() && t.Episode != ep.Token {
+		return ErrMoveInProgress
+	}
+	if t.Phase == sessionstore.RelayPhaseConfirmed && !ep.Open() {
+		return nil // already decided; seq advanced with that write
+	}
+	next := rec
+	t.Phase = sessionstore.RelayPhaseConfirmed
+	next.Attempt = &t
+	episode := sessionstore.RelayEpisode{}
+	if ep != nil {
+		episode = *ep
+	}
+	episode.Seq++
+	if ep.Open() {
+		episode.Outcome = sessionstore.RelayEpisodeCompleted
+	}
+	next.Episode = &episode
+	return p.casRelayConfirmation(ctx, id, a, rec, next, time.Time{})
 }
 
 // beginRelayAttempt fixes the required MIDs with the owning worker and saves
@@ -371,14 +327,18 @@ func (p *Plane) beginRelayAttempt(ctx context.Context, c *call, lease sessionsto
 		if err != nil {
 			return nil, err
 		}
+		if rec.Episode != nil && rec.Episode.Outcome == sessionstore.RelayEpisodeEnded {
+			return nil, errRelayEpisodeEnded // ended is final for the live session
+		}
 		committed := a.Pending == "" && a.Slot == pending.Pending && a.Generation == generation
 		if a != pending && !committed {
 			return nil, sessionstore.ErrRelayConflict
 		}
 		if rec.Attempt != nil && rec.Attempt.Generation == generation {
-			// An armed episode durably owns an attempt that already exists,
-			// before any wait, so its watchdog recognises the confirmation.
-			bound, err := p.bindRelayAttempt(ctx, c.id, a, rec, opt.episode)
+			// An open episode adopts an eligible attempt that already exists
+			// (for example an in-flight switch to a live slot), so its
+			// confirmation completes the episode.
+			bound, err := p.adoptIntoOpenEpisode(ctx, c.id, a, rec)
 			if errors.Is(err, sessionstore.ErrRelayConflict) {
 				continue
 			}
@@ -407,14 +367,21 @@ func (p *Plane) beginRelayAttempt(ctx context.Context, c *call, lease sessionsto
 		attempt := &sessionstore.RelayAttempt{Generation: generation, Slot: pending.Pending, Phase: sessionstore.RelayPhasePending,
 			Required: slices.Clone(report.Required), Kind: opt.kind, Tried: slices.Clone(opt.tried)}
 		if opt.kind == "planned" {
-			// An armed episode owns a planned attempt too, so its watchdog
-			// recognises this attempt's confirmation (finding: episode binding).
-			attempt.PlannedDeadline, attempt.EpisodeDeadline = opt.outer, opt.episode
+			attempt.PlannedDeadline = opt.outer
 		} else {
 			attempt.Detected, attempt.EpisodeDeadline = opt.detected, opt.outer
 		}
 		if attempt.StoreDeadline, err = p.storeTime(ctx, c.id, attempt.Outer()); err != nil {
 			return nil, err
+		}
+		if ep := rec.Episode; ep.Open() {
+			// A new attempt is owned by the open episode from its creation.
+			deadline := attempt.EpisodeDeadline
+			if deadline.IsZero() {
+				deadline = attempt.Outer()
+			}
+			*attempt = clampToEpisode(*attempt, deadline, ep.StoreDeadline)
+			attempt.Episode = ep.Token
 		}
 		if rec.Attempt != nil && opt.kind != "planned" && rec.Attempt.EpisodeDeadline.Equal(opt.outer) {
 			for _, slot := range rec.Attempt.Tried {
@@ -424,7 +391,7 @@ func (p *Plane) beginRelayAttempt(ctx context.Context, c *call, lease sessionsto
 			}
 		}
 		// Supersession consumes the previous generation.
-		if err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: mode, Attempt: attempt}, time.Time{}); err != nil {
+		if err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: mode, Attempt: attempt, Episode: rec.Episode}, time.Time{}); err != nil {
 			if errors.Is(err, sessionstore.ErrRelayConflict) {
 				continue
 			}
@@ -435,22 +402,43 @@ func (p *Plane) beginRelayAttempt(ctx context.Context, c *call, lease sessionsto
 	return nil, sessionstore.ErrRelayConflict
 }
 
-// bindRelayAttempt stamps an episode deadline on an attempt that has none. It
-// keeps or shortens every saved bound and never extends one: Outer is the
-// earlier deadline, and the store-clock values only move earlier.
-func (p *Plane) bindRelayAttempt(ctx context.Context, id string, a sessionstore.RelayAssignment, rec sessionstore.RelayConfirmation, episode time.Time) (*sessionstore.RelayAttempt, error) {
+// adoptIntoOpenEpisode binds an existing eligible attempt to the call's open
+// episode (the same eligibility as begin) and returns the attempt to wait on.
+func (p *Plane) adoptIntoOpenEpisode(ctx context.Context, id string, a sessionstore.RelayAssignment, rec sessionstore.RelayConfirmation) (*sessionstore.RelayAttempt, error) {
 	t := rec.Attempt
-	if episode.IsZero() || !t.EpisodeDeadline.IsZero() {
+	ep := rec.Episode
+	if !ep.Open() || !p.eligibleForEpisode(*t) {
 		return t, nil
 	}
-	bound, err := p.bindEpisode(ctx, id, *t, episode, time.Time{})
+	local, err := p.localOf(ctx, id, ep.StoreDeadline)
 	if err != nil {
 		return nil, err
 	}
-	if err = p.casRelayConfirmation(ctx, id, a, rec, sessionstore.RelayConfirmation{Mode: rec.Mode, Attempt: &bound, Commit: rec.Commit}, time.Time{}); err != nil {
+	bound := clampToEpisode(*t, local, ep.StoreDeadline)
+	bound.Episode = ep.Token
+	next := rec
+	next.Attempt = &bound
+	if err = p.casRelayConfirmation(ctx, id, a, rec, next, time.Time{}); err != nil {
 		return nil, err
 	}
 	return &bound, nil
+}
+
+// localOf converts a store-clock time to local time, conservatively (the
+// result is never later than the true local equivalent).
+func (p *Plane) localOf(ctx context.Context, id string, storeTime time.Time) (time.Time, error) {
+	clock, ok := p.store.(interface {
+		Clock(context.Context, string) (time.Time, error)
+	})
+	if !ok {
+		return storeTime, nil
+	}
+	start := time.Now()
+	now, err := clock.Clock(ctx, id)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return start.Add(storeTime.Sub(now)), nil
 }
 
 // waitRelayChange publishes the attempt's event and waits for its switch
@@ -499,6 +487,9 @@ func (p *Plane) waitRelayChange(ctx context.Context, c *call, pending sessionsto
 			return mediaworker.ErrRestartMismatch
 		}
 		a, rec, e := store.RelayConfirmation(ctx, c.id)
+		if e == nil && rec.Episode != nil && rec.Episode.Outcome == sessionstore.RelayEpisodeEnded {
+			return errRelayEpisodeEnded
+		}
 		if e == nil && a == committed && rec.Attempt != nil && rec.Attempt.Generation == generation {
 			if done, err := p.confirmStep(ctx, c, a, rec, mode, opt, stall, &poller); done {
 				return err
@@ -526,24 +517,13 @@ type relayDeliveryPoller struct {
 func (p *Plane) confirmStep(ctx context.Context, c *call, a sessionstore.RelayAssignment, rec sessionstore.RelayConfirmation, mode string, opt relayAttemptOptions, stall bool, poller *relayDeliveryPoller) (bool, error) {
 	t := *rec.Attempt
 	next := func(t sessionstore.RelayAttempt) sessionstore.RelayConfirmation {
-		return sessionstore.RelayConfirmation{Mode: mode, Attempt: &t, Commit: rec.Commit}
+		return sessionstore.RelayConfirmation{Mode: mode, Attempt: &t, Episode: rec.Episode, Commit: rec.Commit}
 	}
 	if rec.Confirmed(a) {
-		// Success is gated by the episode's terminal decision: after it, no
-		// confirmation is saved and no success is returned. Before it, the
-		// confirmed attempt is bound to the episode, so its watchdog sees it.
-		err := p.relayDecisionGate(c, func(episode time.Time) error {
-			bound := t.Phase != sessionstore.RelayPhaseConfirmed || !episode.IsZero() && t.EpisodeDeadline.IsZero()
-			if !bound {
-				return nil
-			}
-			t.Phase = sessionstore.RelayPhaseConfirmed
-			if !episode.IsZero() && t.EpisodeDeadline.IsZero() {
-				t.EpisodeDeadline = episode
-			}
-			return p.casRelayConfirmation(ctx, c.id, a, rec, next(t), time.Time{})
-		})
-		if errors.Is(err, errRelayEpisodeEnded) {
+		// The single success write: ordered against the episode's end in the
+		// same compare-and-set; an ended or foreign episode refuses it.
+		err := p.confirmRelaySuccess(ctx, c.id, a, rec)
+		if errors.Is(err, errRelayEpisodeEnded) || errors.Is(err, ErrMoveInProgress) {
 			return true, err
 		}
 		if err != nil {
@@ -619,6 +599,9 @@ func (p *Plane) confirmStep(ctx context.Context, c *call, a sessionstore.RelayAs
 // store refuses the write after the attempt bound.
 func (p *Plane) retainDelivery(ctx context.Context, c *call, worker relayDeliveryWorker, lease sessionstore.Lease, a sessionstore.RelayAssignment, rec sessionstore.RelayConfirmation, mode string) {
 	t := *rec.Attempt
+	if rec.Episode != nil && rec.Episode.Outcome == sessionstore.RelayEpisodeEnded {
+		return
+	}
 	report, err := worker.RelayDelivery(ctx, c.id, t.Generation)
 	if err != nil || !report.Switched || report.Epoch != lease.Epoch || report.Slot != t.Slot || report.Generation != t.Generation {
 		return
@@ -631,76 +614,14 @@ func (p *Plane) retainDelivery(ctx context.Context, c *call, worker relayDeliver
 		}
 	}
 	if grown {
-		bound, err := p.evidenceBound(ctx, c.id, t)
+		bound, err := p.evidenceBound(t)
 		if err != nil {
 			return
 		}
-		_ = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: mode, Attempt: &t, Commit: rec.Commit}, bound)
+		next := rec
+		next.Attempt = &t
+		_ = p.casRelayConfirmation(ctx, c.id, a, rec, next, bound)
 	}
-}
-
-type relayExpiry int
-
-const (
-	relayExpiryEnded     relayExpiry = iota // the episode ends unconfirmed
-	relayExpiryConfirmed                    // this episode's attempt confirmed first
-	relayExpiryUncertain                    // the store could not decide; retry
-	relayExpiryGone                         // the session is gone: nothing to end
-)
-
-// expireRelayAttempt records the episode deadline against the episode's own
-// attempt. Only an attempt bound to this episode (same saved episode
-// deadline) can report confirmed: an earlier episode's confirmation never
-// completes a later one. Unavailable or contended state is uncertain, never
-// expiry.
-func (p *Plane) expireRelayAttempt(ctx context.Context, c *call, deadline time.Time) (relayExpiry, RelayEvent) {
-	store, ok := p.store.(sessionstore.RelayConfirmations)
-	if !ok {
-		return relayExpiryEnded, RelayEvent{Detail: "delivery_unconfirmed"}
-	}
-	for range 5 {
-		a, rec, err := store.RelayConfirmation(ctx, c.id)
-		if errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
-			return relayExpiryGone, RelayEvent{}
-		}
-		if err != nil {
-			return relayExpiryUncertain, RelayEvent{}
-		}
-		t := rec.Attempt
-		if t == nil || !t.EpisodeDeadline.Equal(deadline) {
-			// Not this episode's attempt. An unconfirmed one still in flight is
-			// expired durably too, so no later commit or report revives it.
-			if t != nil && !rec.Confirmed(a) && !rec.Aborted() && (t.Phase == sessionstore.RelayPhasePending || t.Phase == sessionstore.RelayPhaseSwitched) {
-				next := *t
-				next.Phase = sessionstore.RelayPhaseExpired
-				err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: rec.Mode, Attempt: &next, Commit: rec.Commit}, time.Time{})
-				if errors.Is(err, sessionstore.ErrRelayConflict) {
-					continue
-				}
-				if err != nil {
-					return relayExpiryUncertain, RelayEvent{}
-				}
-			}
-			return relayExpiryEnded, RelayEvent{Detail: "delivery_unconfirmed", Confirmation: rec.Mode}
-		}
-		if rec.Confirmed(a) {
-			return relayExpiryConfirmed, RelayEvent{}
-		}
-		detail := relayFailureDetail(rec)
-		if t.Phase == sessionstore.RelayPhaseExpired || rec.Aborted() {
-			return relayExpiryEnded, detail
-		}
-		next := *t
-		next.Phase = sessionstore.RelayPhaseExpired
-		err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: rec.Mode, Attempt: &next, Commit: rec.Commit}, time.Time{})
-		if err == nil {
-			return relayExpiryEnded, detail
-		}
-		if !errors.Is(err, sessionstore.ErrRelayConflict) {
-			return relayExpiryUncertain, RelayEvent{}
-		}
-	}
-	return relayExpiryUncertain, RelayEvent{}
 }
 
 // mediaProgress is the authenticated caller's A report (ADR 0016 section 5).
@@ -789,6 +710,10 @@ func (p *Plane) handleMediaProgress(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
+		if rec.Episode != nil && rec.Episode.Outcome == sessionstore.RelayEpisodeEnded {
+			http.Error(w, "call ended", http.StatusGone) // ended is final; no acknowledgement
+			return
+		}
 		t := rec.Attempt
 		if t == nil || t.Generation != report.Generation || t.Phase == sessionstore.RelayPhaseExpired || rec.Aborted() {
 			http.Error(w, "stale or unknown generation", http.StatusConflict)
@@ -801,7 +726,7 @@ func (p *Plane) handleMediaProgress(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if t.Phase == sessionstore.RelayPhaseConfirmed {
-			w.WriteHeader(http.StatusNoContent)
+			w.WriteHeader(http.StatusNoContent) // read shows not ended (above)
 			return
 		}
 		bound := t.Bound()
@@ -817,26 +742,33 @@ func (p *Plane) handleMediaProgress(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		slices.Sort(next.Decoded)
-		updated := sessionstore.RelayConfirmation{Mode: mode, Attempt: &next, Commit: rec.Commit}
-		// The write that supplies the last prerequisite records the outcome.
-		if updated.Confirmed(a) {
+		if slices.Equal(next.Decoded, t.Decoded) {
+			w.WriteHeader(http.StatusNoContent) // read shows not ended (above)
+			return
+		}
+		updated := rec
+		updated.Attempt = &next
+		// The write that supplies the last prerequisite records the outcome,
+		// under the single success rule: an attempt not owned by an open
+		// episode only retains A.
+		if updated.Confirmed(a) && (!rec.Episode.Open() || t.Episode == rec.Episode.Token) {
 			next.Phase = sessionstore.RelayPhaseConfirmed
+			episode := sessionstore.RelayEpisode{}
+			if rec.Episode != nil {
+				episode = *rec.Episode
+			}
+			episode.Seq++
+			if rec.Episode.Open() {
+				episode.Outcome = sessionstore.RelayEpisodeCompleted
+			}
+			updated.Episode = &episode
 		}
-		if slices.Equal(next.Decoded, t.Decoded) && next.Phase == t.Phase {
-			w.WriteHeader(http.StatusNoContent)
+		storeBound, err := p.evidenceBound(*t)
+		if err != nil {
+			http.Error(w, "attempt has no evidence bound", http.StatusConflict)
 			return
 		}
-		storeBound, err := p.evidenceBound(r.Context(), c.id, *t)
-		if err == nil {
-			// A is never acknowledged after the episode's terminal decision.
-			err = p.relayDecisionGate(c, func(time.Time) error {
-				return p.casRelayConfirmation(r.Context(), c.id, a, rec, updated, storeBound)
-			})
-		}
-		if errors.Is(err, errRelayEpisodeEnded) {
-			http.Error(w, "call ended", http.StatusGone)
-			return
-		}
+		err = p.casRelayConfirmation(r.Context(), c.id, a, rec, updated, storeBound)
 		if errors.Is(err, sessionstore.ErrRelayConflict) {
 			continue
 		}
@@ -881,11 +813,13 @@ func (w *RemoteWorker) RelayDelivery(ctx context.Context, id string, generation 
 	return report, err
 }
 
-// resumeRelayAttempts restores the drivers of unfinished attempts after a
-// control restart (ADR 0016 section 10, rule 4). Saved A, mode, attempt state
-// and deadlines come from the store; nothing is asked again. A planned attempt
-// becomes a stall episode detected no later than its planned deadline. A
-// failure here leaves the call to its caller-stall trigger.
+// resumeRelayAttempts runs after a control restart rebuilt the journal's
+// episodes (restoreRelayEpisode). Per live call it inspects the durable
+// episode even without a pending or switched attempt: an open episode
+// without a journal entry is re-journaled and re-armed, an ended one with a
+// live session resumes the end, and an unfinished planned attempt arms a new
+// episode detected no later than its planned deadline. Every restored episode
+// gets its driver; saved A, mode and deadlines come from the store.
 func (p *Plane) resumeRelayAttempts(ctx context.Context) {
 	store, ok := p.store.(sessionstore.RelayConfirmations)
 	p.mu.Lock()
@@ -899,11 +833,40 @@ func (p *Plane) resumeRelayAttempts(ctx context.Context) {
 		return
 	}
 	for _, c := range calls {
+		c.relayEpisodeMu.Lock()
+		e := c.relayEpisode
+		c.relayEpisodeMu.Unlock()
 		_, rec, err := store.RelayConfirmation(ctx, c.id)
-		if err != nil || rec.Attempt == nil || rec.Attempt.Phase != sessionstore.RelayPhasePending && rec.Attempt.Phase != sessionstore.RelayPhaseSwitched {
+		if err != nil {
+			continue
+		}
+		if _, err = p.relayMode(ctx, c); err != nil {
+			continue
+		}
+		var tried []string
+		if rec.Attempt != nil {
+			tried = rec.Attempt.Tried
+		}
+		if e != nil && !e.completed.Load() {
+			if !e.unsupported() {
+				_ = p.startRelayRecoveryFrom(ctx, c, false, e.proposal().Started, tried)
+			}
+			continue
+		}
+		if ep := rec.Episode; ep != nil && (ep.Open() || ep.Outcome == sessionstore.RelayEpisodeEnded) {
+			e, err = p.journalDurableEpisode(ctx, c, *ep)
+			if err == nil && ep.Open() {
+				err = p.startRelayRecoveryFrom(ctx, c, false, e.proposal().Started, tried)
+			}
+			if err != nil {
+				log.Printf("controlplane: relay episode not resumed call=%s: %v", c.id, err)
+			}
 			continue
 		}
 		t := rec.Attempt
+		if t == nil || t.Phase != sessionstore.RelayPhasePending && t.Phase != sessionstore.RelayPhaseSwitched {
+			continue
+		}
 		detected := t.Detected
 		if t.Kind == "planned" {
 			detected = time.Now()
@@ -911,20 +874,99 @@ func (p *Plane) resumeRelayAttempts(ctx context.Context) {
 				detected = t.PlannedDeadline
 			}
 		}
-		if _, err = p.relayMode(ctx, c); err != nil {
-			continue
-		}
 		if err = p.startRelayRecoveryFrom(ctx, c, false, detected, t.Tried); err != nil {
 			log.Printf("controlplane: relay attempt not resumed call=%s generation=%d: %v", c.id, t.Generation, err)
 		}
 	}
 }
 
+// restoreRelayEpisode reconciles one journal proposal with the durable
+// episode at restart (ADR 0016 §7). The session record is authoritative; the
+// journal only proposes. Unknown formats and stale proposals are deleted.
+func (p *Plane) restoreRelayEpisode(ctx context.Context, c *call, intent sessionstore.ControlIntent) error {
+	journal := p.store.(sessionstore.ControlStore)
+	if intent.Kind == relayIntentKindUnsupported {
+		p.installRelayEpisode(c, intent)
+		return nil
+	}
+	discard := func() error { return journal.DeleteControlIntent(ctx, intent.ID, intent.Token) }
+	if intent.Kind != relayIntentKind || intent.Seq == 0 {
+		return discard() // unknown format: the stall and end paths remain
+	}
+	store, ok := p.store.(sessionstore.RelayConfirmations)
+	if !ok {
+		return discard()
+	}
+	_, rec, err := store.RelayConfirmation(ctx, c.id)
+	if errors.Is(err, sessionstore.ErrNotFound) {
+		return discard()
+	}
+	if err != nil {
+		return err
+	}
+	ep := rec.Episode
+	switch {
+	case ep != nil && ep.Token == intent.Token && ep.Outcome == sessionstore.RelayEpisodeCompleted:
+		return discard() // completed before its journal entry was deleted
+	case ep != nil && ep.Token == intent.Token:
+		p.installRelayEpisode(c, intent) // open: re-arm; ended: resume the end
+		return nil
+	case ep != nil && (ep.Open() || ep.Outcome == sessionstore.RelayEpisodeEnded):
+		if err = discard(); err != nil {
+			return err
+		}
+		_, err = p.journalDurableEpisode(ctx, c, *ep)
+		return err
+	}
+	var seq uint64
+	if ep != nil {
+		seq = ep.Seq
+	}
+	if intent.Seq != seq+1 {
+		return discard() // stale: a later decision already happened
+	}
+	p.installRelayEpisode(c, intent) // its watcher begins it
+	return nil
+}
+
+// journalDurableEpisode re-journals an episode that the session record holds
+// and installs it. Started is derived from the store-clock deadline.
+func (p *Plane) journalDurableEpisode(ctx context.Context, c *call, ep sessionstore.RelayEpisode) (*relayEpisode, error) {
+	local, err := p.localOf(ctx, c.id, ep.StoreDeadline)
+	if err != nil {
+		return nil, err
+	}
+	c.stateMu.Lock()
+	lease := c.lease
+	c.stateMu.Unlock()
+	intent := sessionstore.ControlIntent{ID: "relay-recovery:" + c.id, Token: ep.Token, Kind: relayIntentKind, Started: local.Add(-relayRecoveryLimit), Lease: lease, Seq: ep.Seq}
+	journal := p.store.(sessionstore.ControlStore)
+	if err = journal.PutControlIntent(ctx, intent); err != nil {
+		return nil, err
+	}
+	return p.installRelayEpisode(c, intent), nil
+}
+
+// installRelayEpisode replaces any in-memory episode (a stale one from an
+// earlier term stands down) with one restored from durable state.
+func (p *Plane) installRelayEpisode(c *call, intent sessionstore.ControlIntent) *relayEpisode {
+	c.relayEpisodeMu.Lock()
+	defer c.relayEpisodeMu.Unlock()
+	if old := c.relayEpisode; old != nil {
+		old.close()
+	}
+	e := newRelayEpisode(intent)
+	e.loaded, e.persisted = true, true
+	c.relayEpisode = e
+	p.watchRelayEpisode(c, e)
+	return e
+}
+
 // adoptRelayAttempt waits for a committed attempt that is still unconfirmed,
-// within its saved bound, and binds it to the current episode. It never starts
-// a new generation. A pending record whose switch commit is recorded counts
-// as committed: control may have acknowledged full A and then stopped before
-// it observed the commit.
+// within its saved bound. The attempt must be owned by the call's open
+// episode, or be eligible to join it (adoptIntoOpenEpisode): an in-flight
+// switch to a live slot whose commit landed after begin, or an attempt
+// recovered after a control restart. It never starts a new generation.
 func (p *Plane) adoptRelayAttempt(ctx context.Context, c *call, from sessionstore.RelayAssignment, opt relayAttemptOptions) (bool, error) {
 	store, ok := p.store.(sessionstore.RelayConfirmations)
 	if !ok || from.Generation == 0 {
@@ -935,21 +977,16 @@ func (p *Plane) adoptRelayAttempt(ctx context.Context, c *call, from sessionstor
 		return false, err
 	}
 	t := rec.Attempt
-	if t == nil || t.Generation != from.Generation || t.Slot != from.Slot || rec.Commit.Switched != t.Generation || rec.Aborted() ||
+	ep := rec.Episode
+	if t == nil || !ep.Open() || t.Generation != from.Generation || t.Slot != from.Slot || rec.Commit.Switched != t.Generation || rec.Aborted() ||
 		t.Phase != sessionstore.RelayPhaseSwitched && t.Phase != sessionstore.RelayPhasePending {
 		return false, nil
 	}
-	if !t.EpisodeDeadline.Equal(opt.outer) {
-		if !t.EpisodeDeadline.IsZero() {
-			return false, nil // owned by another episode; never extend it
+	if t.Episode != ep.Token {
+		if !p.eligibleForEpisode(*t) {
+			return false, nil // owned by another episode, or historical
 		}
-		// Adoption keeps or shortens every saved deadline, never extends
-		// one (bindEpisode).
-		bound, err := p.bindEpisode(ctx, c.id, *t, opt.outer, opt.detected)
-		if err != nil {
-			return false, err
-		}
-		if err = p.casRelayConfirmation(ctx, c.id, a, rec, sessionstore.RelayConfirmation{Mode: rec.Mode, Attempt: &bound, Commit: rec.Commit}, time.Time{}); err != nil {
+		if _, err = p.adoptIntoOpenEpisode(ctx, c.id, a, rec); err != nil {
 			return false, err
 		}
 	}

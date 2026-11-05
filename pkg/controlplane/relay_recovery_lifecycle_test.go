@@ -189,7 +189,13 @@ func TestRelayEpisodeExpiresAfterSameAuthorityReturns(t *testing.T) {
 		require.Empty(t, reason)
 		guard.deadline = time.Now().Add(time.Second)
 		p.restart.guard.Store(&guard)
-		require.ErrorIs(t, p.startRelayRecovery(context.Background(), c, true), sessionstore.ErrEnded, "expired context must not restart a no-op driver")
+		// An expired but open episode is joined, never refused: its watcher
+		// decides the end (ADR 0016 §7, design v4); no second episode starts.
+		require.NoError(t, p.startRelayRecovery(context.Background(), c, true))
+		c.relayEpisodeMu.Lock()
+		joined := c.relayEpisode
+		c.relayEpisodeMu.Unlock()
+		require.True(t, joined == nil || joined == episode, "the expired episode is joined, not replaced")
 		require.Eventually(t, func() bool {
 			c.stateMu.Lock()
 			defer c.stateMu.Unlock()
@@ -263,7 +269,7 @@ func TestRelayEpisodeNeverRetriesTriedSlot(t *testing.T) {
 
 type lossWorkStore struct {
 	sessionstore.Store
-	sessionstore.RelayAssignments
+	sessionstore.RelayConfirmations
 	sessionstore.ControlStore
 	slow      atomic.Bool
 	lists     atomic.Int64
@@ -292,7 +298,7 @@ func (s *lossWorkStore) RelayOwner(ctx context.Context, id string) (sessionstore
 	if err := s.pause(ctx); err != nil {
 		return sessionstore.Lease{}, sessionstore.RelayAssignment{}, err
 	}
-	return s.RelayAssignments.RelayOwner(ctx, id)
+	return s.RelayConfirmations.RelayOwner(ctx, id)
 }
 func (s *lossWorkStore) ControlIntents(ctx context.Context) ([]sessionstore.ControlIntent, error) {
 	s.lists.Add(1)
@@ -308,7 +314,7 @@ func (s *lossWorkStore) CASRelay(ctx context.Context, lease sessionstore.Lease, 
 		default:
 		}
 	}
-	return s.RelayAssignments.CASRelay(ctx, lease, from, to)
+	return s.RelayConfirmations.CASRelay(ctx, lease, from, to)
 }
 
 type lossCutWorker struct {
@@ -326,7 +332,7 @@ func (w *lossCutWorker) ConfigureRelays(ctx context.Context, slots []mediaworker
 
 func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		measured := &lossWorkStore{Store: store, RelayAssignments: store.(sessionstore.RelayAssignments), ControlStore: store.(sessionstore.ControlStore), first: make(chan time.Time, 1)}
+		measured := &lossWorkStore{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore), first: make(chan time.Time, 1)}
 		p, a, _, _ := relayFailurePlane(t, measured)
 		stopRelayRecoveries(t, p)
 		for _, w := range p.workers {

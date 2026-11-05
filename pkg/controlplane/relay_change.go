@@ -172,6 +172,14 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if from.Slot == b.Slot.ID {
 		return sessionstore.ErrRelayConflict
 	}
+	if confirmations, ok := p.store.(sessionstore.RelayConfirmations); ok {
+		// An open recovery episode owns the call's relay outcome.
+		if _, rec, e := confirmations.RelayConfirmation(ctx, id); e != nil {
+			return e
+		} else if rec.Episode.Open() {
+			return ErrMoveInProgress
+		}
+	}
 	pending := from
 	pending.Pending = target
 	if err = p.setRelay(ctx, lease, from, pending); err != nil {
@@ -190,6 +198,9 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 		var current sessionstore.RelayAssignment
 		switched := true // the call left its original working path
 		switch {
+		case errors.Is(err, ErrMoveInProgress), errors.Is(err, errRelayEpisodeEnded):
+			// An episode owns the outcome: never abort or roll back under it.
+			return err
 		case errors.Is(err, ErrConfirmationUnsupported):
 			// Never complete on commit alone: the call stays on its slot and
 			// is reported as not movable.
@@ -207,7 +218,6 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 				if armErr != nil {
 					return errors.Join(err, armErr)
 				}
-				planned.episode = e.deadline
 				if err = p.waitRelayChange(recovery, c, pending, min(sessionstore.StoreOutageBudget(0), time.Until(e.deadline)), planned); err == nil {
 					relayWatchEvent(c, "settlement-confirmed")
 					if err = p.completeRelayEpisode(recovery, c, e); err != nil {
@@ -274,7 +284,7 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 		if armErr != nil {
 			return armErr
 		}
-		episode, planned.episode = e, e.deadline
+		episode = e
 		return nil
 	}
 	if switched {
