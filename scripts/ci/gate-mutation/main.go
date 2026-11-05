@@ -1,6 +1,8 @@
-// gate-mutation applies exact function-scoped edits to an isolated source copy.
-// A mutant is killed only by the named test's assertion marker, never by a
-// compiler error, missing test, panic, timeout or unrelated failure.
+// gate-mutation applies exact function-scoped edits, whole-file edits or
+// unified patches to an isolated source copy. A mutant is killed only by the
+// named test's assertion marker, never by a compiler error, missing test,
+// panic, timeout or unrelated failure. -cases runs an external case file for
+// any package instead of the embedded operator cases.
 package main
 
 import (
@@ -36,9 +38,9 @@ type change struct {
 	Receiver                 *string
 }
 type mutation struct {
-	ID, GuardFingerprint, File, Function, Old, New, Test, Marker, Package, PythonTest string
-	Edits                                                                             []change
-	Receiver                                                                          *string
+	ID, GuardFingerprint, File, Function, Old, New, Test, Marker, Package, PythonTest, Patch string
+	Edits                                                                                    []change
+	Receiver                                                                                 *string
 }
 type event struct{ Action, Test, Output string }
 
@@ -51,19 +53,53 @@ func main() {
 func run() error {
 	only := flag.String("only", "", "one mutation ID or comma-separated IDs")
 	jobs := flag.Int("jobs", 2, "parallel isolated mutation workers (1-4)")
+	file := flag.String("cases", "", "JSON case file to run instead of the embedded operator cases")
 	flag.Parse()
 	if *jobs < 1 || *jobs > 4 {
 		return errors.New("jobs must be between 1 and 4")
 	}
-	started := time.Now()
-	var cases []mutation
-	if err := json.Unmarshal(specifications, &cases); err != nil {
+	cases, err := loadCases(*file)
+	if err != nil {
 		return err
 	}
 	root, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+	return runCases(root, cases, *only, *jobs)
+}
+
+// loadCases reads the embedded operator cases, or path when it is set. A
+// relative Patch path is relative to the case file.
+func loadCases(path string) ([]mutation, error) {
+	data, dir := specifications, ""
+	if path != "" {
+		var err error
+		if data, err = os.ReadFile(path); err != nil {
+			return nil, err
+		}
+		if dir, err = filepath.Abs(filepath.Dir(path)); err != nil {
+			return nil, err
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var cases []mutation
+	if err := decoder.Decode(&cases); err != nil {
+		return nil, err
+	}
+	for i, m := range cases {
+		if m.ID == "" || m.Test == "" || m.Marker == "" || m.Package == "" || (m.Patch == "") == (m.File == "" && len(m.Edits) == 0) {
+			return nil, fmt.Errorf("INVALID case %d %q: needs ID, Test, Marker, Package and either Patch or edits", i, m.ID)
+		}
+		if m.Patch != "" && !filepath.IsAbs(m.Patch) {
+			cases[i].Patch = filepath.Join(dir, m.Patch)
+		}
+	}
+	return cases, nil
+}
+func runCases(root string, cases []mutation, only string, jobs int) error {
+	started := time.Now()
 	temp, err := os.MkdirTemp("", "relais-gate-mutation-")
 	if err != nil {
 		return err
@@ -111,7 +147,7 @@ func run() error {
 			return fmt.Errorf("INVALID %s: missing baseline test or duplicate ID", m.ID)
 		}
 		seen[m.ID] = true
-		if *only == "" || slices.Contains(strings.Split(*only, ","), m.ID) {
+		if only == "" || slices.Contains(strings.Split(only, ","), m.ID) {
 			selected = append(selected, m)
 		}
 	}
@@ -128,7 +164,7 @@ func run() error {
 	}
 	close(queue)
 	var wg sync.WaitGroup
-	for worker := 0; worker < min(*jobs, len(groups)); worker++ {
+	for worker := 0; worker < min(jobs, len(groups)); worker++ {
 		workerTree := filepath.Join(temp, fmt.Sprintf("worker-%d", worker))
 		if err := copyTree(tree, workerTree); err != nil {
 			return err
@@ -154,7 +190,7 @@ func run() error {
 			}
 		}
 	}
-	fmt.Printf("VERIFIED: %d owned ledger mutants and %d additional mutants killed; %d executions, %d workers, %s\n", ledger, additional, len(groups), *jobs, time.Since(started).Round(time.Millisecond))
+	fmt.Printf("VERIFIED: %d owned ledger mutants and %d additional mutants killed; %d executions, %d workers, %s\n", ledger, additional, len(groups), jobs, time.Since(started).Round(time.Millisecond))
 	return nil
 }
 func copyTree(root, tree string) error {
@@ -217,40 +253,20 @@ func groupMutations(cases []mutation) [][]mutation {
 	}
 	return groups
 }
-func kill(tree, cache string, m mutation) error {
-	edits := m.Edits
-	if len(edits) == 0 {
-		edits = []change{{File: m.File, Function: m.Function, Old: m.Old, New: m.New, Receiver: m.Receiver}}
-	}
+
+// kill restores every touched file before it returns, so a worker tree is
+// clean for its next mutant. A restore that differs fails the whole run.
+func kill(tree, cache string, m mutation) (err error) {
 	originals := map[string][]byte{}
 	defer func() {
-		for path, original := range originals {
-			_ = os.WriteFile(path, original, 0600)
+		if restoreErr := restore(originals, os.WriteFile); restoreErr != nil {
+			err = fmt.Errorf("INVALID %s: %w", m.ID, restoreErr)
 		}
 	}()
-	for _, spec := range edits {
-		path := filepath.Join(tree, spec.File)
-		original, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if _, exists := originals[path]; !exists {
-			originals[path] = original
-		}
-		changed, err := edit(original, spec)
-		if err != nil {
-			return fmt.Errorf("INVALID %s: %w", m.ID, err)
-		}
-		if err := os.WriteFile(path, changed, 0600); err != nil {
-			return err
-		}
+	if err := mutate(tree, m, originals); err != nil {
+		return fmt.Errorf("INVALID %s: %w", m.ID, err)
 	}
 	events, testErr := test(tree, cache, "^"+m.Test+"$", []string{m.Package})
-	for path, original := range originals {
-		if err := os.WriteFile(path, original, 0600); err != nil {
-			return err
-		}
-	}
 	if testErr == nil {
 		return fmt.Errorf("SURVIVED %s", m.ID)
 	}
@@ -265,10 +281,102 @@ func kill(tree, cache string, m mutation) error {
 	return nil
 }
 
+// mutate records each file's original bytes before its first change.
+func mutate(tree string, m mutation, originals map[string][]byte) error {
+	if m.Patch != "" {
+		return patch(tree, m.Patch, originals)
+	}
+	edits := m.Edits
+	if len(edits) == 0 {
+		edits = []change{{File: m.File, Function: m.Function, Old: m.Old, New: m.New, Receiver: m.Receiver}}
+	}
+	for _, spec := range edits {
+		path := filepath.Join(tree, spec.File)
+		original, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, exists := originals[path]; !exists {
+			originals[path] = original
+		}
+		changed, err := edit(original, spec)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, changed, 0600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// patch applies a unified diff with git apply, which refuses context that does
+// not match exactly. Only changes to existing files are accepted, so every
+// touched file has original bytes to restore and compare.
+func patch(tree, diff string, originals map[string][]byte) error {
+	git := func(args ...string) ([]byte, error) {
+		cmd := exec.Command("git", append(append([]string{"apply"}, args...), diff)...)
+		cmd.Dir = tree
+		// The source copy has no .git; never resolve paths against a parent repository.
+		cmd.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(tree))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("git apply %s: %w\n%s", strings.Join(args, " "), err, out)
+		}
+		return out, nil
+	}
+	summary, err := git("--summary")
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(summary)) != 0 {
+		return fmt.Errorf("patch may only modify existing files:\n%s", summary)
+	}
+	stat, err := git("--numstat", "-z")
+	if err != nil {
+		return err
+	}
+	for _, row := range strings.Split(string(stat), "\x00") {
+		if row == "" {
+			continue
+		}
+		path := filepath.Join(tree, strings.SplitN(row, "\t", 3)[2])
+		original, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		originals[path] = original
+	}
+	_, err = git()
+	return err
+}
+
+// restore writes the original bytes back, then rereads every touched file and
+// fails when one differs.
+func restore(originals map[string][]byte, write func(string, []byte, os.FileMode) error) error {
+	for path, original := range originals {
+		if err := write(path, original, 0600); err != nil {
+			return err
+		}
+	}
+	for path, original := range originals {
+		restored, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(restored, original) {
+			return fmt.Errorf("restored file differs: %s", path)
+		}
+	}
+	return nil
+}
+
+// edit replaces Old once inside the named declaration, or once in the whole
+// file when Function is empty. Python edits are always whole-file.
 func edit(source []byte, m change) ([]byte, error) {
-	if strings.HasSuffix(m.File, ".py") {
+	if strings.HasSuffix(m.File, ".py") || m.Function == "" {
 		if strings.Count(string(source), m.Old) != 1 {
-			return nil, errors.New("python edit must match exactly once")
+			return nil, errors.New("file edit must match exactly once")
 		}
 		return []byte(strings.Replace(string(source), m.Old, m.New, 1)), nil
 	}
