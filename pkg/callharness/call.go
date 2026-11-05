@@ -31,6 +31,13 @@ const (
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
 	RelayChange bool // advertise relay-change support and open the event stream
+	// MediaProgress declares A (ADR 0016 section 5) and reports per-MID
+	// progress after each restart. The Pion caller has no audio decoder, so
+	// its report uses fresh per-MID packet progress: a protocol stand-in for
+	// control tests, never decode proof. WithholdMediaProgress declares A but
+	// never reports, as a caller whose decoder fails.
+	MediaProgress         bool
+	WithholdMediaProgress bool
 	// Freshness configures the caller's bounded recovery evaluation.
 	// Defaults stay strict (2s recovery + 3s stability), including under race.
 	// Acceptance callers such as #27 can set RecoveryLimit: 2*time.Second
@@ -99,6 +106,8 @@ type Call struct {
 	relayRestartMu    sync.Mutex
 	relayGeneration   uint64
 	relayAttemptUntil time.Time
+	mediaProgress     int // 0 off, 1 report, 2 withhold
+	progressReports   atomic.Int64
 	inboundMedia      atomic.Pointer[time.Time]
 	liveMedia         atomic.Bool
 	iceStalled        atomic.Bool
@@ -265,7 +274,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 	call.offer = pc.LocalDescription().SDP
 	rec.offerAnswerExchange()
-	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer, opts.RelayChange)
+	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer, opts.RelayChange, opts.RelayChange && (opts.MediaProgress || opts.WithholdMediaProgress))
 	if err != nil {
 		return call, err
 	}
@@ -280,6 +289,11 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	call.localUfrag = iceUfrag(pc.LocalDescription())
 	call.remoteUfrag = iceUfrag(pc.RemoteDescription())
 	if opts.RelayChange {
+		if opts.MediaProgress {
+			call.mediaProgress = 1
+		} else if opts.WithholdMediaProgress {
+			call.mediaProgress = 2
+		}
 		call.startRelayEvents()
 	}
 

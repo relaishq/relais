@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -69,11 +70,32 @@ func (p *Plane) Handler() http.Handler {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/sdp")
+		// ADR 0016 sections 5 and 10: accept a capability only when the
+		// topology and the selected worker support it, and persist the mode
+		// before echoing it. media_progress requires relay_change.
+		relayChange := r.Header.Get("Relais-Relay-Change") == "true"
+		mediaProgress := relayChange && r.Header.Get("Relais-Media-Progress") == "true"
 		if c, e := p.lookup(id); e == nil {
-			c.stateMu.Lock()
-			c.relayCapable = r.Header.Get("Relais-Relay-Change") == "true"
-			c.stateMu.Unlock()
+			mode, err := p.acceptCapabilities(r.Context(), c, relayChange, mediaProgress)
+			if err != nil {
+				// Never echo a mode that is not durable or not supported.
+				_ = p.End(context.WithoutCancel(r.Context()), id)
+				if errors.Is(err, mediaworker.ErrRelayUnsupported) {
+					privateapi.Error(w, err, RemoteErrors)
+					return
+				}
+				writeError(w, err)
+				return
+			}
+			relayChange = mode == sessionstore.RelayConfirmDelivery || mode == sessionstore.RelayConfirmDecode
+			mediaProgress = mode == sessionstore.RelayConfirmDecode
+		}
+		w.Header().Set("Content-Type", "application/sdp")
+		if relayChange {
+			w.Header().Set("Relais-Relay-Change", "true")
+		}
+		if mediaProgress {
+			w.Header().Set("Relais-Media-Progress", "true")
 		}
 		w.Header().Set("Location", "/calls/"+id)
 		w.WriteHeader(http.StatusCreated)

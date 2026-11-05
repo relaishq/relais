@@ -35,18 +35,29 @@ type relayChangeWorker interface {
 	AbortRelayRestart(context.Context, string, uint64) error
 	RestartSession(context.Context, string, mediaworker.RestartRequest) (string, error)
 }
+
+// RelayEvent is one event-stream message (ADR 0016 section 5): relay-change
+// carries generation, deadline, required_mids and confirmation; ended carries
+// reason and, for relay_change_failed, the evidence detail.
 type RelayEvent struct {
-	Generation uint64    `json:"generation"`
-	Deadline   time.Time `json:"deadline"`
-	Reason     string    `json:"reason,omitempty"`
+	Generation   uint64    `json:"generation,omitempty"`
+	Deadline     time.Time `json:"deadline,omitzero"`
+	RequiredMIDs []string  `json:"required_mids,omitempty"`
+	Confirmation string    `json:"confirmation,omitempty"`
+	Reason       string    `json:"reason,omitempty"`
+	Detail       string    `json:"detail,omitempty"`
+	Slot         string    `json:"slot,omitempty"`
+	MissingMIDs  []string  `json:"missing_mids,omitempty"`
 }
 
 // ConfigureRelaySet is a bootstrap operation. Existing one-relay construction
-// and placement remain unchanged; relay changes require a set of at least two.
+// and placement remain unchanged. An explicitly configured set of one slot
+// accepts the confirmation contracts and supports same-slot recovery (ADR 0016
+// sections 5 and 10); changing to another address needs a second slot.
 func (p *Plane) ConfigureRelaySet(ctx context.Context, bindings []RelayBinding) error {
 	p.relayPlacement.Lock()
 	defer p.relayPlacement.Unlock()
-	if _, ok := p.store.(sessionstore.RelayAssignments); !ok || len(bindings) < 2 {
+	if _, ok := p.store.(sessionstore.RelayAssignments); !ok || len(bindings) < 1 {
 		return mediaworker.ErrRelayUnsupported
 	}
 	p.mu.Lock()
@@ -134,9 +145,11 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 		c.controlMu.Unlock()
 		cancel()
 	}()
-	c.stateMu.Lock()
-	capable := c.relayCapable
-	c.stateMu.Unlock()
+	mode, err := p.relayMode(ctx, c)
+	if err != nil {
+		return err
+	}
+	capable := mode == sessionstore.RelayConfirmDelivery || mode == sessionstore.RelayConfirmDecode
 	p.mu.Lock()
 	b, known := p.relaySet[target]
 	p.mu.Unlock()
@@ -159,39 +172,79 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if from.Slot == b.Slot.ID {
 		return sessionstore.ErrRelayConflict
 	}
+	if confirmations, ok := p.store.(sessionstore.RelayConfirmations); ok {
+		// An open recovery episode owns the call's relay outcome.
+		if _, rec, e := confirmations.RelayConfirmation(ctx, id); e != nil {
+			return e
+		} else if rec.Episode.Open() {
+			return ErrMoveInProgress
+		}
+	}
 	pending := from
 	pending.Pending = target
 	if err = p.setRelay(ctx, lease, from, pending); err != nil {
 		return errors.Join(err, p.cleanupRelayPending(ctx, lease, pending))
 	}
-	err = p.waitRelayChange(ctx, c, pending, 10*time.Second)
+	planned := relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit)}
+	firstOuter := planned.outer // never extended by a fresh rollback window
+	err = p.waitRelayChange(ctx, c, pending, relayPlannedLimit, planned)
 	cleanup := from.Slot
 	if err != nil {
 		if recoveryBase.Err() != nil {
 			return errors.Join(err, p.cleanupRelayPending(ctx, lease, pending))
 		}
-		recovery, cancel := context.WithTimeout(recoveryBase, sessionstore.StoreOutageBudget(0))
+		recovery, cancel := context.WithTimeout(recoveryBase, sessionstore.StoreOutageBudget(0)+relayRecoveryLimit)
 		defer cancel()
-		rolled, abortErr := p.abortRelayPending(recovery, lease, pending)
-
-		if errors.Is(abortErr, mediaworker.ErrRelaySwitched) {
-			// A switched worker retries its fenced commit. Never send it back.
-			err = p.waitRelayChange(recovery, c, pending, sessionstore.StoreOutageBudget(0))
-			if err != nil {
-				return err
-			}
-			ctx = recovery
-		} else {
-			if abortErr != nil {
+		var current sessionstore.RelayAssignment
+		switched := true // the call left its original working path
+		switch {
+		case errors.Is(err, ErrMoveInProgress), errors.Is(err, errRelayEpisodeEnded):
+			// An episode owns the outcome: never abort or roll back under it.
+			return err
+		case errors.Is(err, ErrConfirmationUnsupported):
+			// Never complete on commit alone: the call stays on its slot and
+			// is reported as not movable.
+			_, abortErr := p.abortRelayPending(recovery, lease, pending)
+			return errors.Join(err, abortErr)
+		case errors.Is(err, errRelayUnconfirmed):
+			current = sessionstore.RelayAssignment{Slot: target, Generation: pending.Generation + 1}
+		default:
+			rolled, abortErr := p.abortRelayPending(recovery, lease, pending)
+			if errors.Is(abortErr, mediaworker.ErrRelaySwitched) {
+				// A switched worker retries its fenced commit. Never send it back.
+				// The call left its path: arm the episode first, so settlement
+				// can never push its end past the first planned deadline + 15 s.
+				e, armErr := p.relayRecoveryEpisode(recovery, c, firstOuter)
+				if armErr != nil {
+					return errors.Join(err, armErr)
+				}
+				if err = p.waitRelayChange(recovery, c, pending, min(sessionstore.StoreOutageBudget(0), time.Until(e.deadline)), planned); err == nil {
+					relayWatchEvent(c, "settlement-confirmed")
+					if err = p.completeRelayEpisode(recovery, c, e); err != nil {
+						return err // the episode ended at its deadline
+					}
+					ctx = recovery
+					break
+				}
+				if !errors.Is(err, errRelayUnconfirmed) {
+					return err
+				}
+				current = sessionstore.RelayAssignment{Slot: target, Generation: pending.Generation + 1}
+			} else if abortErr != nil {
 				return errors.Join(err, abortErr, p.cleanupRelayPending(ctx, lease, pending))
+			} else {
+				// The attempted generation is consumed before any switch. A
+				// caller that dropped its old pair gets one restart on the old
+				// slot in a fresh planned window (ADR 0016 section 7).
+				current, switched = rolled, false
+				planned = relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit)}
 			}
-			pending = rolled
-			pending.Pending = from.Slot // a new restart on the still-live old slot
-			if e := p.setRelay(recovery, lease, rolled, pending); e != nil {
-				return errors.Join(err, e, p.cleanupRelayPending(ctx, lease, pending))
-			}
-			if e := p.waitRelayChange(recovery, c, pending, 10*time.Second); e != nil {
-				return errors.Join(err, e, p.cleanupRelayPending(ctx, lease, pending))
+		}
+		if current.Slot != "" {
+			// Roll back with a higher generation on the still-live old slot,
+			// confirmed under the same mode (ADR 0016 section 7).
+			if e := p.rollbackRelay(recovery, c, lease, current, from.Slot, planned, firstOuter, switched); e != nil {
+				return errors.Join(err, e)
 			}
 			cleanup = target
 			ctx = recovery
@@ -207,6 +260,121 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 		return errors.Join(err, r.ForgetSessionTenure(ctx, lease))
 	}
 	return err
+}
+
+// rollbackRelay restarts on the original live slot with higher generations
+// until one is confirmed. switched reports that the call already left its
+// original working path through a committed but unconfirmed attempt. Only
+// when it did not may a rollback that fails before switching simply keep the
+// caller's old pair. Otherwise, and when the call is still switched and
+// unconfirmed at the planned deadline, it enters a stall episode detected no
+// later than the first planned deadline, so the 10 s + 15 s bound holds.
+func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.Lease, current sessionstore.RelayAssignment, original string, planned relayAttemptOptions, firstOuter time.Time, switched bool) error {
+	var err error
+	var episode *relayEpisode
+	confirmed := false
+	// arm fixes the hard end as soon as the call has left its original path:
+	// detection is the first planned deadline, so no wait below (settlement,
+	// rollback attempts) can move the end past it + 15 s.
+	arm := func() error {
+		if episode != nil {
+			return nil
+		}
+		e, armErr := p.relayRecoveryEpisode(ctx, c, firstOuter)
+		if armErr != nil {
+			return armErr
+		}
+		episode = e
+		return nil
+	}
+	if switched {
+		if err = arm(); err != nil {
+			return err
+		}
+	}
+	settle := func() time.Duration {
+		if episode == nil {
+			return sessionstore.StoreOutageBudget(0)
+		}
+		return min(sessionstore.StoreOutageBudget(0), time.Until(episode.deadline))
+	}
+	for time.Now().Before(planned.outer) {
+		p.mu.Lock()
+		lost := p.relaySet[original].lost
+		p.mu.Unlock()
+		if lost {
+			break
+		}
+		next := current
+		next.Pending = original
+		if err = p.setRelay(ctx, lease, current, next); err != nil {
+			err = errors.Join(err, p.cleanupRelayPending(ctx, lease, next))
+			break
+		}
+		err = p.waitRelayChange(ctx, c, next, time.Until(planned.outer), planned)
+		if err == nil {
+			confirmed = true
+			break
+		}
+		if errors.Is(err, errRelayUnconfirmed) {
+			current, switched = sessionstore.RelayAssignment{Slot: original, Generation: next.Generation + 1}, true
+			if err = arm(); err != nil {
+				return err
+			}
+			continue
+		}
+		if errors.Is(err, ErrConfirmationUnsupported) {
+			err = errors.Join(err, p.cleanupRelayPending(ctx, lease, next))
+			break
+		}
+		_, abortErr := p.abortRelayPending(ctx, lease, next)
+		if errors.Is(abortErr, mediaworker.ErrRelaySwitched) {
+			// The worker switched: arm the episode before waiting for its
+			// fenced commit, and never wait past the episode deadline.
+			switched = true
+			if err = arm(); err != nil {
+				return err
+			}
+			if err = p.waitRelayChange(ctx, c, next, settle(), planned); err == nil {
+				confirmed = true
+				break
+			}
+			if errors.Is(err, errRelayUnconfirmed) {
+				current = sessionstore.RelayAssignment{Slot: original, Generation: next.Generation + 1}
+				continue
+			}
+			break
+		}
+		err = errors.Join(err, abortErr)
+		break // the rollback failed before switching
+	}
+	if confirmed {
+		if episode != nil {
+			relayWatchEvent(c, "rollback-confirmed")
+			if e := p.completeRelayEpisode(ctx, c, episode); e != nil {
+				return e // the episode ended at its deadline
+			}
+		}
+		return nil
+	}
+	if !switched {
+		if err == nil {
+			err = context.DeadlineExceeded
+		}
+		return err // the original working path was kept
+	}
+	seed := current.Slot
+	if _, a, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id); e == nil {
+		seed = a.Slot
+	}
+	detected := time.Now()
+	if firstOuter.Before(detected) {
+		detected = firstOuter
+	}
+	if e := p.startRelayRecoveryFrom(ctx, c, false, detected, []string{seed}); e != nil {
+		return errors.Join(err, e)
+	}
+	return errors.Join(errRelayUnconfirmed, err)
 }
 
 // Cancellation cleanup leaves time for takeover inside its original budget.
@@ -291,43 +459,6 @@ func (p *Plane) setRelay(ctx context.Context, lease sessionstore.Lease, from, to
 	}
 }
 
-func (p *Plane) waitRelayChange(ctx context.Context, c *call, pending sessionstore.RelayAssignment, bound time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, bound)
-	defer cancel()
-	deadline, _ := ctx.Deadline()
-	c.stateMu.Lock()
-	c.relayEvent = &RelayEvent{Generation: pending.Generation + 1, Deadline: deadline}
-	c.relayRejected = false
-	select {
-	case c.relayWake <- struct{}{}:
-	default:
-	}
-	c.stateMu.Unlock()
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		c.stateMu.Lock()
-		rejected := c.relayRejected
-		c.stateMu.Unlock()
-		if rejected {
-			return mediaworker.ErrRestartMismatch
-		}
-		_, got, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id)
-		if e == nil && got == (sessionstore.RelayAssignment{Slot: pending.Pending, Generation: pending.Generation + 1}) {
-			c.stateMu.Lock()
-			c.relayEvent = nil
-			c.relaySlot = got.Slot
-			c.stateMu.Unlock()
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-tick.C:
-		}
-	}
-}
-
 func (p *Plane) relayHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("POST /relays/{id}/drain", func(w http.ResponseWriter, r *http.Request) {
 		if err := p.DrainRelay(r.Context(), r.PathValue("id")); err != nil {
@@ -397,7 +528,7 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 			writeError(w, mediaworker.ErrRelayUnsupported)
 			return
 		}
-		answer, err := worker.RestartSession(r.Context(), c.id, mediaworker.RestartRequest{Offer: string(body), Generation: g, Slot: a.Pending})
+		answer, err := worker.RestartSession(r.Context(), c.id, mediaworker.RestartRequest{Offer: string(body), Generation: g, Slot: a.Pending, Required: event.RequiredMIDs})
 		if err != nil {
 			if errors.Is(err, mediaworker.ErrRestartMismatch) {
 				c.stateMu.Lock()
@@ -409,12 +540,18 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 			privateapi.Error(w, err, RemoteErrors)
 			return
 		}
+		writeRestartHeaders(w, *event)
 		w.Header().Set("Content-Type", "application/sdp")
 		_, _ = io.WriteString(w, answer)
 	})
+	mux.HandleFunc("POST /calls/{id}/media-progress", p.handleMediaProgress)
 	mux.HandleFunc("GET /calls/{id}/events", func(w http.ResponseWriter, r *http.Request) {
 		c, err := p.lookup(r.PathValue("id"))
 		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if _, err = p.relayMode(r.Context(), c); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -457,12 +594,17 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 			c.stateMu.Unlock()
 			if c.hungUp.Load() || terminal || endedReason != "" {
 				c.stateMu.Lock()
-				reason := c.relayEndReason
+				reason, detail := c.relayEndReason, c.relayEndDetail
 				c.stateMu.Unlock()
 				if reason == "" {
 					reason = "ended"
 				}
-				data, _ := json.Marshal(RelayEvent{Reason: reason})
+				ended := RelayEvent{Reason: reason}
+				if reason == "relay_change_failed" {
+					ended = detail
+					ended.Reason, ended.Deadline = reason, time.Time{}
+				}
+				data, _ := json.Marshal(ended)
 				_, _ = fmt.Fprintf(w, "event: ended\ndata: %s\n\n", data)
 				_ = flush.Flush()
 				return

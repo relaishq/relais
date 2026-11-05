@@ -46,8 +46,10 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.Header = http.Header{"Content-Type": pr.In.Header.Values("Content-Type")}
-			if pr.In.Header.Get("Relais-Relay-Change") == "true" {
-				pr.Out.Header.Set("Relais-Relay-Change", "true")
+			for _, capability := range []string{"Relais-Relay-Change", "Relais-Media-Progress"} {
+				if pr.In.URL.Path == "/calls" && pr.In.Header.Get(capability) == "true" {
+					pr.Out.Header.Set(capability, "true")
+				}
 			}
 			pr.Out.Trailer = nil
 			pr.Out.TransferEncoding = nil
@@ -107,6 +109,13 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 				Message string `json:"message"`
 			}{failure.Code, policy.message})
 			headers.Set("Content-Type", "application/json")
+		} else if progressPath(r.Request.URL.Path) && r.StatusCode >= 400 && r.StatusCode <= 599 {
+			// A is never acknowledged on error; fixed bodies only.
+			data = []byte("media progress not acknowledged\n")
+			headers.Set("Content-Type", "text/plain; charset=utf-8")
+			if r.StatusCode == http.StatusTooManyRequests {
+				headers.Set("Retry-After", "1")
+			}
 		} else if r.Request.Method == http.MethodPost && r.Request.URL.Path == "/calls" && r.StatusCode == http.StatusServiceUnavailable && capacityRefusal(data) {
 			data, _ = json.Marshal(struct {
 				Code    string `json:"code"`
@@ -127,7 +136,12 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 				return err
 			}
 			headers.Set("Content-Type", "application/json")
+		} else if progressPath(r.Request.URL.Path) && r.StatusCode == http.StatusNoContent {
+			data = nil
 		} else if restartPath(r.Request.URL.Path) && r.StatusCode == http.StatusOK {
+			if !copyRestartMetadata(headers, r.Header) {
+				return errors.New("invalid restart metadata")
+			}
 			headers.Set("Content-Type", "application/sdp")
 		} else if r.Request.Method == http.MethodPost && r.StatusCode == http.StatusCreated {
 			location := r.Header.Get("Location")
@@ -136,6 +150,11 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 			}
 			headers.Set("Location", location)
 			headers.Set("Content-Type", "application/sdp")
+			for _, capability := range []string{"Relais-Relay-Change", "Relais-Media-Progress"} {
+				if r.Header.Get(capability) == "true" {
+					headers.Set(capability, "true")
+				}
+			}
 		} else if r.Request.Method == http.MethodDelete && r.StatusCode == http.StatusOK {
 			data = nil
 		} else {
@@ -177,7 +196,7 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 			method = http.MethodPost
 		case controlPath(r.URL.Path):
 			method = http.MethodPost
-		case restartPath(r.URL.Path):
+		case restartPath(r.URL.Path), progressPath(r.URL.Path):
 			method = http.MethodPost
 		case eventPath(r.URL.Path):
 			method = http.MethodGet
@@ -257,6 +276,34 @@ func eventPath(path string) bool {
 	base, ok := strings.CutSuffix(path, "/events")
 	return ok && callPath(base)
 }
+func progressPath(path string) bool {
+	base, ok := strings.CutSuffix(path, "/media-progress")
+	return ok && callPath(base)
+}
+
+// copyRestartMetadata forwards ADR 0016 section 5 reply metadata only in its
+// documented forms. Missing metadata comes from an older control: forward
+// the answer without it, so a capable caller sees no generation.
+func copyRestartMetadata(dst, src http.Header) bool {
+	generation, deadline, mids, mode := src.Get("Relais-Relay-Generation"), src.Get("Relais-Relay-Deadline"), src.Get("Relais-Required-Mids"), src.Get("Relais-Relay-Confirmation")
+	if generation == "" && deadline == "" && mids == "" && mode == "" {
+		return true
+	}
+	var list []string
+	g, err := strconv.ParseUint(generation, 10, 64)
+	if err != nil || g == 0 || len(mids) > 1024 || json.Unmarshal([]byte(mids), &list) != nil || list == nil || mode != "decode" && mode != "delivery" {
+		return false
+	}
+	if _, err = time.Parse(time.RFC3339Nano, deadline); err != nil {
+		return false
+	}
+	dst.Set("Relais-Relay-Generation", generation)
+	dst.Set("Relais-Relay-Deadline", deadline)
+	dst.Set("Relais-Required-Mids", mids)
+	dst.Set("Relais-Relay-Confirmation", mode)
+	return true
+}
+
 func restartPath(path string) bool {
 	base, ok := strings.CutSuffix(path, "/ice-restart")
 	return ok && callPath(base)

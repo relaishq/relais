@@ -51,3 +51,5 @@ func (h *Harness) closeCalls() error {
 
 	return errors.Join(errs...)
 }
+
+var ErrRelayUnsupported = errors.New("callharness: relay_unsupported")

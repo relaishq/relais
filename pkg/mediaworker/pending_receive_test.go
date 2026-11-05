@@ -223,3 +223,14 @@ func (s *relayCommitFault) CASRelay(ctx context.Context, l sessionstore.Lease, f
 	}
 	return s.RelayAssignments.CASRelay(ctx, l, from, to)
 }
+
+func (s *relayCommitFault) CommitRelay(ctx context.Context, l sessionstore.Lease, from, to sessionstore.RelayAssignment) error {
+	if to.Slot == "r2" && s.block.Load() {
+		select {
+		case s.attempts <- struct{}{}:
+		default:
+		}
+		return sessionstore.ErrTransient
+	}
+	return s.RelayAssignments.CommitRelay(ctx, l, from, to)
+}

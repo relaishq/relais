@@ -26,6 +26,10 @@ if slot~=ARGV[4] or gen~=ARGV[5] or pending~=ARGV[6] then return {-3} end
 redis.call('HSET',KEYS[1],'relay',ARGV[7],'relay_gen',ARGV[8])
 if ARGV[9]=='' then redis.call('HDEL',KEYS[1],'relay_pending')
 else redis.call('HSET',KEYS[1],'relay_pending',ARGV[9]) end
+if pending~='' then
+ if ARGV[1]=='commit' then redis.call('HSET',KEYS[1],'relay_switched',ARGV[8],'relay_switched_at',string.format('%.0f',now))
+ else redis.call('HSET',KEYS[1],'relay_retired',ARGV[8]) end
+end
 return {1}
 `
 
@@ -65,6 +69,17 @@ func (r *Redis) RelayOwner(ctx context.Context, id string) (Lease, RelayAssignme
 }
 
 func (r *Redis) CASRelay(ctx context.Context, lease Lease, from, to RelayAssignment) error {
+	return r.casRelay(ctx, "cas", lease, from, to)
+}
+
+func (r *Redis) CommitRelay(ctx context.Context, lease Lease, from, to RelayAssignment) error {
+	if !validRelayCommit(from, to) {
+		return ErrRelayTransition
+	}
+	return r.casRelay(ctx, "commit", lease, from, to)
+}
+
+func (r *Redis) casRelay(ctx context.Context, op string, lease Lease, from, to RelayAssignment) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -77,7 +92,7 @@ func (r *Redis) CASRelay(ctx context.Context, lease Lease, from, to RelayAssignm
 	err := r.observe("relay_assignment_cas", func() error {
 		var err error
 		result, err = relayAssignmentScript.Run(ctx, r.client, r.keys(lease.SessionID)[:1],
-			"cas", lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10),
+			op, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10),
 			from.Slot, strconv.FormatUint(from.Generation, 10), from.Pending,
 			to.Slot, strconv.FormatUint(to.Generation, 10), to.Pending).Slice()
 		return err

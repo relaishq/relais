@@ -142,7 +142,10 @@ func TestRelayRestartTimeline(t *testing.T) {
 		call, err := h.Dial(ctx, CallOptions{Video: true, RelayChange: true})
 		require.NoError(t, err)
 		sent := make(chan error, 1)
-		go func() { sent <- call.SendMedia(ctx, 5*time.Second) }()
+		// Each change now completes only on fresh receiver reports (C), which
+		// need media flowing after the switch; keep media live past both
+		// changes even when RRs (1 s interval) arrive late under load.
+		go func() { sent <- call.SendMedia(ctx, 9*time.Second) }()
 		time.Sleep(time.Second)
 		for _, track := range call.rec.report().Tracks {
 			t.Logf("TIMELINE_BASELINE track=%s max_ms=%.3f", track.Kind, float64(track.MediaGap)/float64(time.Millisecond))

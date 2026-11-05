@@ -76,7 +76,7 @@ func (s *session) processSRTPPacketLocked(pkt earlyPacket) mediaPacketResult {
 		}
 	}
 	if pkt.rtcp {
-		failure, err := s.handleRTCPLocked(pkt.data)
+		failure, err := s.handleRTCPLocked(pkt.data, pkt.path)
 		return mediaPacketResult{protocol: "SRTCP", failure: failure, decryptErr: err}
 	}
 	complete, failure, err := s.handleRTPLocked(pkt.data, pkt.path)

@@ -34,7 +34,7 @@ func TestRelayEpisodeDeadlineSurvivesBusyRetriesAndReload(t *testing.T) {
 		require.NoError(t, err)
 		defer saved.once.Do(func() { close(saved.done) })
 		require.WithinDuration(t, detected.Add(15*time.Second), saved.deadline, time.Millisecond)
-		require.Equal(t, first.intent.Token, saved.intent.Token)
+		require.Equal(t, first.proposal().Token, saved.proposal().Token)
 	})
 }
 

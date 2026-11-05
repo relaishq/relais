@@ -121,24 +121,26 @@ type WorkerIndexRefresher interface {
 
 // Memory is a single-process store. Use NewMemory, not its zero value.
 type Memory struct {
-	controlLease      ControlLease
-	controlRecords    map[string]json.RawMessage
-	controlIntents    map[string]ControlIntent
-	relayLeases       map[string]RelayLease
-	relayAssignments  map[string]RelayAssignment
-	mu                sync.RWMutex
-	leases            map[string]Lease
-	ended             map[string]Lease // ExpiresAt is the tombstone retention deadline
-	endedPruneAt      time.Time
-	componentRecords  map[string]componentRecord
-	componentCrypto   *Redis
-	componentSequence uint64
-	states            map[string][]byte
-	checkpoints       map[string]Checkpoint
-	routes            map[routeKey]Route
-	routeNominations  map[routeSessionKey]Route
-	routeSessions     map[string]map[routeKey]struct{}
-	epoch             uint64 // global; no per-session history survives release
+	controlLease       ControlLease
+	controlRecords     map[string]json.RawMessage
+	controlIntents     map[string]ControlIntent
+	relayLeases        map[string]RelayLease
+	relayAssignments   map[string]RelayAssignment
+	relayConfirmations map[string][3]string // mode, encoded attempt, encoded episode
+	relayCommits       map[string]RelayCommit
+	mu                 sync.RWMutex
+	leases             map[string]Lease
+	ended              map[string]Lease // ExpiresAt is the tombstone retention deadline
+	endedPruneAt       time.Time
+	componentRecords   map[string]componentRecord
+	componentCrypto    *Redis
+	componentSequence  uint64
+	states             map[string][]byte
+	checkpoints        map[string]Checkpoint
+	routes             map[routeKey]Route
+	routeNominations   map[routeSessionKey]Route
+	routeSessions      map[string]map[routeKey]struct{}
+	epoch              uint64 // global; no per-session history survives release
 }
 
 var _ Store = (*Memory)(nil)
@@ -186,6 +188,8 @@ func (m *Memory) Claim(ctx context.Context, id string, worker netip.AddrPort, tt
 
 	delete(m.componentRecords, id)
 	delete(m.relayAssignments, id)
+	delete(m.relayConfirmations, id)
+	delete(m.relayCommits, id)
 	return m.next(id, worker, ttl), nil
 }
 
@@ -253,6 +257,8 @@ func (m *Memory) Get(ctx context.Context, id string) (Lease, error) {
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		delete(m.leases, id)
 		delete(m.relayAssignments, id)
+		delete(m.relayConfirmations, id)
+		delete(m.relayCommits, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
 		delete(m.componentRecords, id)
@@ -300,6 +306,8 @@ func (m *Memory) Release(ctx context.Context, lease Lease) error {
 		}
 		delete(m.leases, lease.SessionID)
 		delete(m.relayAssignments, lease.SessionID)
+		delete(m.relayConfirmations, lease.SessionID)
+		delete(m.relayCommits, lease.SessionID)
 		delete(m.states, lease.SessionID)
 		delete(m.checkpoints, lease.SessionID)
 		delete(m.componentRecords, lease.SessionID)
@@ -327,6 +335,8 @@ func (m *Memory) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lea
 		if !now.Before(lease.ExpiresAt) {
 			delete(m.leases, lease.SessionID)
 			delete(m.relayAssignments, lease.SessionID)
+			delete(m.relayConfirmations, lease.SessionID)
+			delete(m.relayCommits, lease.SessionID)
 			delete(m.states, lease.SessionID)
 			delete(m.checkpoints, lease.SessionID)
 			delete(m.componentRecords, lease.SessionID)
@@ -372,6 +382,8 @@ func (m *Memory) GetState(ctx context.Context, id string) ([]byte, error) {
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		delete(m.leases, id)
 		delete(m.relayAssignments, id)
+		delete(m.relayConfirmations, id)
+		delete(m.relayCommits, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
 		delete(m.componentRecords, id)

@@ -52,9 +52,8 @@ An `ended` event with a `reason` closes the stream on any terminal call outcome.
 A capable caller also posts a full restart offer to `POST /calls/{id}/ice-restart`
 without a `generation` query when ICE disconnects/fails, or inbound RTP/RTCP
 stops for two seconds during live media. Control restarts the live current slot
-first, then tries another live slot. Retries share one journaled 15-second loss
-episode deadline. Completion currently means assignment commit; caller media
-progress confirmation remains a known limit.
+first, then tries another live, untried slot. Retries share one journaled
+15-second loss episode deadline; a slot is never retried within one episode.
 This requires a configured relay set. Without one, the request returns 400
 and does not start a recovery episode.
 
@@ -66,8 +65,48 @@ authorization and `Content-Type: application/sdp`. A successful response is
 relay as the only candidate; DTLS and media keys continue. A stale generation
 returns `409` (`relay_conflict`), and a changed media identity returns `409`
 (`restart_mismatch`). The caller must process higher-generation recovery events
-even after a failed offer. A planned change that cannot switch rolls back to the
-old slot; if necessary control requests a new same-slot restart to restore media.
+even after a failed offer. A planned change that cannot switch, or switches
+without confirmation, rolls back to the old slot with a higher generation,
+confirmed under the same mode.
+
+### Relay change confirmation (ADR 0016 sections 5, 7, 10)
+
+A switch commit alone never completes a relay change. A caller may also send
+`Relais-Media-Progress: true` on `POST /calls` (it needs `Relais-Relay-Change`).
+Control echoes each accepted capability as the same response header and fixes
+the call's mode: `decode` (A) with both, `delivery` (C) with relay change only.
+Without a configured relay set nothing is echoed and the call is ordinary; a
+set of one slot accepts both capabilities and supports same-slot restarts. If
+the selected worker lacks the C contract, a request for A is refused with `409`
+`relay_unsupported`. A caller that requested A and sees only the relay-change
+echo must delete the call and report `relay_unsupported`.
+
+- **C (delivery).** The owning worker reads the caller's SRTCP receiver
+  reports on the new path. Every required track must report a sequence sent
+  after the switch. C completes a `delivery` call; it is diagnostic for `decode`.
+- **A (decode).** After applying the answer and selecting the new pair, the
+  caller discards 500 ms, then observes at least 500 ms of new decoded output
+  on each required MID (non-concealed audio samples, new decoded video frames).
+  It posts `POST /calls/{id}/media-progress` with `Content-Type:
+  application/json` and `{"generation": 3, "decoded_mids": ["0", "1"]}`.
+  Replies: `204` retained (or already confirmed); `409` stale, expired,
+  unknown generation or a MID outside the required set; `400` malformed or a
+  call without A; `410` ended; `413` over 4 KiB; `429` with `Retry-After: 1`
+  above one request per second (burst 2); `503` retention uncertain or control
+  not holding authority. A retired (aborted) or expired generation returns
+  `409`. Only `204` is an acknowledgement.
+
+Every successful `ice-restart` reply adds `Relais-Relay-Generation`,
+`Relais-Relay-Deadline` (RFC 3339 UTC), `Relais-Required-Mids` (JSON array) and
+`Relais-Relay-Confirmation` (`decode` or `delivery`). `relay-change` events add
+`required_mids` and `confirmation`; the deadline is the planned or loss-episode
+deadline and never grows. An unconfirmed planned change rolls back to the old
+slot with a higher generation; if it is still unconfirmed at the 10 s planned
+deadline, it becomes a 15 s stall episode. An episode that ends unconfirmed
+sends `ended` with `reason: relay_change_failed` and `detail`
+`delivered_decode_unconfirmed`, `delivery_unconfirmed` or
+`confirmation_unsupported`, plus `generation`, `slot`, `confirmation` and
+`missing_mids`.
 
 ## Fixed-pool admission and telemetry
 

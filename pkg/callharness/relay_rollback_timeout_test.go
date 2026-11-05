@@ -45,15 +45,23 @@ func TestRelayRollbackTimeoutKeepsOldPairMovable(t *testing.T) {
 					lines[i] = "a=ice-pwd:pendingpasswordpendingpassword"
 				}
 			}
-			req, e := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/ice-restart?generation=%d", c.resourceURL, generation), strings.NewReader(strings.Join(lines, "\r\n")))
-			require.NoError(t, e)
-			req.Header.Set("Content-Type", "application/sdp")
-			resp, e := h.httpClient.Do(req)
-			require.NoError(t, e)
-			body, e := io.ReadAll(resp.Body)
-			require.NoError(t, e)
-			require.NoError(t, resp.Body.Close())
-			require.Equal(t, 200, resp.StatusCode, string(body))
+			// The event follows the pending write once control has fixed the
+			// attempt's required MIDs; a real caller offers only after it.
+			var status int
+			var body []byte
+			require.Eventually(t, func() bool {
+				req, e := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/ice-restart?generation=%d", c.resourceURL, generation), strings.NewReader(strings.Join(lines, "\r\n")))
+				require.NoError(t, e)
+				req.Header.Set("Content-Type", "application/sdp")
+				resp, e := h.httpClient.Do(req)
+				require.NoError(t, e)
+				body, e = io.ReadAll(resp.Body)
+				require.NoError(t, e)
+				require.NoError(t, resp.Body.Close())
+				status = resp.StatusCode
+				return status == 200
+			}, time.Second, 10*time.Millisecond)
+			require.Equal(t, 200, status, string(body))
 		}
 		require.Error(t, <-changed)
 		_, a, err := store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.SessionID())

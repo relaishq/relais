@@ -12,7 +12,7 @@ import (
 
 type blindRelayView struct {
 	sessionstore.Store
-	sessionstore.RelayAssignments
+	sessionstore.RelayConfirmations
 	sessionstore.RelayLeases
 	sessionstore.ControlStore
 	blind  atomic.Bool
@@ -29,7 +29,7 @@ func (s *blindRelayView) GetRelay(ctx context.Context, key string) (sessionstore
 
 func TestWrongRelayLossKeepsLiveCall(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-		view := &blindRelayView{Store: store, RelayAssignments: store.(sessionstore.RelayAssignments), RelayLeases: store.(sessionstore.RelayLeases), ControlStore: store.(sessionstore.ControlStore)}
+		view := &blindRelayView{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), RelayLeases: store.(sessionstore.RelayLeases), ControlStore: store.(sessionstore.ControlStore)}
 		p, w, h, _, _ := relayChangeTopology(t, view, false, false)
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()

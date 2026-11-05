@@ -119,12 +119,25 @@ func (w *Worker) PrivateHandler() http.Handler {
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		answer, err := w.RestartSession(r.Context(), r.PathValue("id"), req)
+		reply, err := w.RestartRelaySession(r.Context(), r.PathValue("id"), req)
 		if err != nil {
 			workerAPIError(rw, err)
 			return
 		}
-		privateapi.Write(rw, RestartReply{Answer: answer})
+		privateapi.Write(rw, reply)
+	})
+	mux.HandleFunc("GET /sessions/{id}/relay-delivery", func(rw http.ResponseWriter, r *http.Request) {
+		generation, err := strconv.ParseUint(r.URL.Query().Get("generation"), 10, 64)
+		if err != nil || generation == 0 {
+			http.Error(rw, "invalid generation", http.StatusBadRequest)
+			return
+		}
+		report, err := w.RelayDelivery(r.Context(), r.PathValue("id"), generation)
+		if err != nil {
+			workerAPIError(rw, err)
+			return
+		}
+		privateapi.Write(rw, report)
 	})
 	mux.HandleFunc("DELETE /sessions/{id}/restart", func(rw http.ResponseWriter, r *http.Request) {
 		generation, err := strconv.ParseUint(r.URL.Query().Get("generation"), 10, 64)

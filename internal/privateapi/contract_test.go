@@ -46,6 +46,8 @@ func endpoints() []endpoint {
 		{"control", "POST /relays/{id}/drain", nil, nil, []int{200, 404, 409}},
 		{"worker", "POST /relays", mediaworker.RelaySetRequest{}, nil, []int{204, 400, 409}},
 		{"worker", "POST /sessions/{id}/restart", mediaworker.RestartRequest{}, mediaworker.RestartReply{}, []int{200, 400, 409}},
+		{"worker", "GET /sessions/{id}/relay-delivery", nil, mediaworker.RelayDeliveryReport{}, []int{200, 400, 404, 409}},
+		{"control", "POST /calls/{id}/media-progress", "media progress JSON", nil, []int{204, 400, 404, 409, 410, 413, 429, 503}},
 		{"control", "GET /calls/{id}/events", nil, "SSE events", []int{200, 404, 409}},
 		{"control", "POST /calls/{id}/ice-restart", "SDP offer", "SDP answer", []int{200, 400, 404, 409}},
 		{"control", "POST /calls/{id}/relay", nil, nil, []int{200, 404, 409}},
