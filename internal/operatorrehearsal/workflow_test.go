@@ -41,7 +41,7 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		t.Fatal("nightly clashes with existing CI")
 	}
 	job := w.Jobs["rehearsal"]
-	if job.RunsOn != "ubuntu-latest" {
+	if job.RunsOn != "ubuntu-24.04" {
 		t.Fatal(job.RunsOn)
 	}
 	tokens, uploads, execute := 0, 0, false
