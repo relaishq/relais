@@ -44,6 +44,8 @@ type EventTiming struct {
 
 // BindingTiming holds the lower and upper binding probes of one mapped event
 // endpoint: the larger |age| bound and drift_per_side, in ns; -1 if absent.
+// callharness Map intersects all probes and binds the tightest bound, not the
+// nearest probe, so a large binding age does not mean a loose bound.
 type BindingTiming struct {
 	AgeNS   [2]int64 `json:"bindingAgeNs"`
 	DriftNS [2]int64 `json:"bindingDriftNs"`

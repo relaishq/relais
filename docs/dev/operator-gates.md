@@ -351,7 +351,8 @@ modules before running.
 After the pinned sequence, a diagnostic head-caller phase repeats rollout once
 with the `relais-load` that `make operator-rehearsal-build` builds from the
 checkout (`bin/relais-load`, beside `relais-gates`). It runs in its own session,
-spool and judge copy, saves `head-caller-evidence.json` and writes only the
+spool and judge copy, saves `head-caller-evidence.json` (with
+`headCaller.commit` and `headCaller.callerSha256`) and writes only the
 report's `headCaller` section. `Evaluate` never reads that section, so the pinned
 verdict is unchanged. The phase is skipped when the pinned session latched. It
 shares the deployment and teardown: an unconfirmed head-caller stop still fails

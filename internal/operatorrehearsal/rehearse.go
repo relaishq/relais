@@ -380,7 +380,7 @@ func (r *rehearsal) setup(ctx context.Context) error {
 		r.report.JudgeSHA256 = append(r.report.JudgeSHA256, pinned.SHA256)
 		if i == 0 {
 			r.judge = &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error {
-				return saveMediaEvidence(r.c.Output, "media-evidence.json", p, pinned.SHA256)
+				return saveMediaEvidence(r.c.Output, "media-evidence.json", p, pinned.SHA256, nil)
 			}}
 		}
 	}

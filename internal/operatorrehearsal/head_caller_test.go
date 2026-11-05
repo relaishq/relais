@@ -3,6 +3,8 @@ package operatorrehearsal
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -16,7 +18,10 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/oracletest"
 	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -188,5 +193,100 @@ func TestCallerTimingReportsBurstsGapsAndBindingProbes(t *testing.T) {
 	}
 	if takeover.TimingEvidence || takeover.Start != nil || *takeover.NearestProbeMS != -67000 || takeover.ProbesWithin300MS != 0 {
 		t.Fatalf("takeover %+v", takeover)
+	}
+}
+
+// A head phase on an idle deployment names the checkout and caller digest it
+// built in both report.json's headCaller section and head-caller-evidence.json.
+func TestHeadCallerPhaseNamesItsBuildInReportAndEvidence(t *testing.T) {
+	raw, err := os.ReadFile("../operatorgates/testdata/resource-session.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Scenario operator.Scenario
+		Config   operatorgates.ResourceConfig
+	}
+	if err = json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	work, bin, output := t.TempDir(), t.TempDir(), t.TempDir()
+	judgeBinary := filepath.Join(work, "judge")
+	if err = os.WriteFile(judgeBinary, []byte("judge-stub"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(bin, "relais-load"), []byte("head-load"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("head-load"))
+	loadSHA, commit := hex.EncodeToString(sum[:]), strings.Repeat("c", 40)
+
+	fixtures, pins := idleInventory(t)
+	clock := operatorgates.NewRealClock()
+	now := clock.Wall()
+	scenario := operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: CoveredGates, ReleaseA: operator.Identity{SourceCommit: pins[0].Commit, SHA256: pins[0].ArchiveSHA256}, ReleaseB: operator.Identity{SourceCommit: pins[1].Commit, SHA256: pins[1].ArchiveSHA256}}
+	session, err := operatorgates.NewSession("idle", operator.Init{Scenario: scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostExecute}}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology := fixtureTopology(t)
+	runner := commandRunner(func(context.Context, Command) CommandResult { return CommandResult{Err: context.DeadlineExceeded} })
+	r := &rehearsal{work: work, bridge: filepath.Join(bin, "relais-gates"), run: "run-head", clock: clock, session: session, runner: runner, diagnostics: io.Discard, topology: topology, pins: fixture.Config.Pins, c: RehearseConfig{Commit: commit, Output: output}, report: &Report{Bounds: clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}}, judge: &recordingJudge{pinned: operatorevidence.PinnedJudge{Binary: judgeBinary, SHA256: fixture.Scenario.Judge.SHA256}}}
+	r.deployment = &Deployment{Topology: topology, containerIDs: fixtureContainerIDs()}
+	r.process = &operatorgates.ProcessConfig{Parameters: r.parameters(), ArmedAt: now}
+	idle := controlplane.Status{Ready: true}
+	for _, name := range []string{"w1", "w2"} {
+		idle.Workers = append(idle.Workers, controlplane.WorkerStatus{Name: name, Address: r.process.Parameters.Workers[name].Media})
+	}
+	peer := &idlePeer{respond: func(req operator.Request) operator.Reply {
+		switch req.Action {
+		case "clock":
+			return hostReply(t, oracletest.Marshal(t, clocks.Sample{MeasuredUnixNS: strconv.FormatInt(now.UnixNano(), 10)}))
+		case "inventory":
+			return hostReply(t, fixtures[req.Target])
+		}
+		var product any = idle
+		if req.Action == "worker-status" {
+			product = mediaworker.WorkerStatus{InventoryKnown: true, Inventory: []mediaworker.InstalledSession{}}
+		}
+		return hostReply(t, oracletest.Marshal(t, map[string]any{"kind": "ok", "started": now, "ended": now, "data": product}))
+	}}
+	r.runtime = &operatorgates.ProcessRuntime{Session: session, Peer: peer, Config: r.process, Pins: pins, Architecture: "x86_64", Bounds: &clocks.Bounds{FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	head := r.runHeadCaller(ctx, fixture.Scenario)
+	// The fake rollout yields no media, so only the judge step may report an error.
+	if head.Commit != commit || head.CallerSHA256 != loadSHA || !fullDigest.MatchString(head.ScenarioSHA256) || len(head.Gates) != 1 || head.Gates[0].Gate != operator.Rollout || strings.Join(head.Errors, ",") != "media-judge-failed" {
+		t.Fatalf("head phase did not run with its build: %+v", head)
+	}
+	if _, err = os.Stat(filepath.Join(work, "head-session-spool")); err != nil {
+		t.Fatal("head phase did not reach its session", err)
+	}
+	report := passingReport()
+	report.HeadCaller = head
+	var out bytes.Buffer
+	if err = report.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	var written struct {
+		HeadCaller headCallerBuild `json:"headCaller"`
+	}
+	if err = json.Unmarshal(out.Bytes(), &written); err != nil || written.HeadCaller != (headCallerBuild{commit, loadSHA}) {
+		t.Fatalf("report headCaller %+v %v", written.HeadCaller, err)
+	}
+
+	// The fake sequence yields no media phases, so judge the head copy directly.
+	_, _ = r.headJudge(head).Judge(ctx, operatorevidence.Pool{SourceCommit: ReleaseACommit, RunID: "run-head"})
+	raw, err = os.ReadFile(filepath.Join(output, HeadCallerEvidence))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence struct {
+		SourceCommit string          `json:"sourceCommit"`
+		HeadCaller   headCallerBuild `json:"headCaller"`
+	}
+	if err = json.Unmarshal(raw, &evidence); err != nil || evidence.SourceCommit != ReleaseACommit || evidence.HeadCaller != (headCallerBuild{commit, loadSHA}) {
+		t.Fatalf("evidence %s %v", raw, err)
 	}
 }

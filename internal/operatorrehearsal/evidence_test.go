@@ -45,7 +45,7 @@ func TestEvidenceArtifactScrubsTextWithoutFillingMissingFields(t *testing.T) {
 		t.Fatal("duplicate members disappeared")
 	}
 	output := t.TempDir()
-	if err = saveMediaEvidence(output, "media-evidence.json", pool, strings.Repeat("b", 64)); err != nil {
+	if err = saveMediaEvidence(output, "media-evidence.json", pool, strings.Repeat("b", 64), nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(output, "media-evidence.json"))
@@ -99,7 +99,7 @@ func TestRecordingJudgeRetainsInputAndLogsPublicContract(t *testing.T) {
 	retained := false
 	judge := recordingJudge{pinned: operatorevidence.PinnedJudge{Commit: ReleaseACommit, Binary: binary, SHA256: hex.EncodeToString(sum[:])}, diagnostics: &log, retain: func(p operatorevidence.Pool) error {
 		retained = true
-		return saveMediaEvidence(output, "media-evidence.json", p, hex.EncodeToString(sum[:]))
+		return saveMediaEvidence(output, "media-evidence.json", p, hex.EncodeToString(sum[:]), nil)
 	}}
 	if _, err = judge.Judge(context.Background(), operatorevidence.Pool{SourceCommit: ReleaseACommit, RunID: "private-run"}); err != nil {
 		t.Fatal(err)

@@ -60,6 +60,8 @@ func (r *rehearsal) runHeadCaller(ctx context.Context, scenario operator.Scenari
 		return fail("local-file-unavailable")
 	}
 	head.CallerSHA256 = load.sha256
+	// As after calibration, prove the pinned gates released every call and
+	// session before a new caller starts on the shared deployment.
 	if err = r.verifyIdleAt(ctx, r.clock.Elapsed()+2*time.Minute, "head-caller"); err != nil {
 		return fail("precondition-failed")
 	}
@@ -71,10 +73,7 @@ func (r *rehearsal) runHeadCaller(ctx context.Context, scenario operator.Scenari
 	head.ScenarioSHA256 = scenario.Digest
 	armed := r.clock.Wall()
 	init := operator.Init{Scenario: scenario, ArmedAtUnixMS: strconv.FormatInt(armed.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(armed.Add(operatorgates.SessionMaximum).UnixMilli(), 10)}
-	pinned := r.judge.pinned
-	judge := &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error {
-		return saveMediaEvidence(r.c.Output, HeadCallerEvidence, p, pinned.SHA256)
-	}}
+	judge := r.headJudge(head)
 	if err = r.runResourceSequence(ctx, init, headSequence(head, judge, load)); err != nil {
 		fail("sequence-failed")
 	}
@@ -82,6 +81,15 @@ func (r *rehearsal) runHeadCaller(ctx context.Context, scenario operator.Scenari
 		head.CallerTiming = judge.timing
 	}
 	return head
+}
+
+// headJudge is the head phase's judge copy. Its evidence file names the head
+// caller build, which the pool's release source commit does not.
+func (r *rehearsal) headJudge(head *HeadCallerReport) *recordingJudge {
+	pinned := r.judge.pinned
+	return &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error {
+		return saveMediaEvidence(r.c.Output, HeadCallerEvidence, p, pinned.SHA256, &headCallerBuild{head.Commit, head.CallerSHA256})
+	}}
 }
 
 func headSequence(head *HeadCallerReport, judge *recordingJudge, load callerBinary) resourceSequence {
