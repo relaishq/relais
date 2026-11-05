@@ -348,7 +348,11 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 			// never dispatches, so the bound would time one call's queue position.
 			require.NoError(t, p.acceptRelayMode(context.Background(), p.calls[id], sessionstore.RelayConfirmDelivery))
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		// The batch bound is loose on purpose. The memory store serializes all
+		// 200 calls behind one lock, so under -race the last calls can queue
+		// for seconds (5 of 400 local runs passed 4 s; Redis 0 of 400). The
+		// latency claim is the first-dispatch bound below.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		measured.lists.Store(0)
 		measured.slow.Store(true)

@@ -155,11 +155,17 @@ func TestRefusedBeginReproposesWhileSlotLost(t *testing.T) {
 				}
 				awaitDone(t, e)
 				require.Nil(t, episodeOf(t, store, id), "a stale proposal on a live slot is discarded")
-				records, err := store.(sessionstore.ControlStore).ControlIntents(context.Background())
-				require.NoError(t, err)
-				for _, r := range records {
-					require.NotEqual(t, stale.ID, r.ID)
-				}
+				// Cleanup closes done before it deletes the journal entry.
+				require.Eventually(t, func() bool {
+					records, err := store.(sessionstore.ControlStore).ControlIntents(context.Background())
+					require.NoError(t, err)
+					for _, r := range records {
+						if r.ID == stale.ID {
+							return false
+						}
+					}
+					return true
+				}, 5*time.Second, 10*time.Millisecond)
 			})
 		})
 	}
