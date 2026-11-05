@@ -1,6 +1,6 @@
 # ADR 0016: Move live calls to a new relay address through ICE restart
 
-Status: **Accepted** 2026-11-02 by the project lead (proposed 2026-10-29), including the 2026-11-01 amendment and its detail defaults.
+Status: **Accepted** 2026-11-02 by the project lead (proposed 2026-10-29), including the 2026-11-01 amendment and its detail defaults. The 2026-11-05 amendment was accepted by the owner on 2026-11-05.
 
 **Amended 2026-11-01 (owner decision A+C).** Receiver reports give a fast
 delivery signal; a capable caller reports decoded media through signaling.
