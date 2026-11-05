@@ -2,8 +2,10 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -297,42 +299,83 @@ func TestStaleWatchdogStandsDown(t *testing.T) {
 // After ended, no acknowledgement: not for a pending attempt and not for an
 // already-confirmed record.
 func TestEndedEpisodeRefusesAcknowledgement(t *testing.T) {
-	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
-		p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
-		stopRelayRecoveries(t, p)
-		c, err := p.lookup(id)
-		require.NoError(t, err)
-		now := time.Now()
-		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
-		committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
-		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, committed))
-		_, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
-		require.NoError(t, err)
-		require.NoError(t, p.confirmRelaySuccess(context.Background(), id, committed, rec)) // an earlier confirmation
-		markLost(p, "r2")
-		e := armEpisode(t, p, c, 10*time.Second)
-		require.Empty(t, attemptOf(t, store, id).Attempt.Episode, "a historical confirmation is never adopted")
-		c.mu.Lock() // keep the session while the record is inspected
-		defer c.mu.Unlock()
-		require.Equal(t, relayEnded, p.endRelayEpisode(context.Background(), c, e.proposal().Token, "relay_change_failed", false))
-		c.stateMu.Lock()
-		c.relayEndReason = "" // isolate the store check from the in-memory one
-		c.stateMu.Unlock()
-		server := httptest.NewServer(p.Handler())
-		defer server.Close()
-		require.Equal(t, http.StatusGone, postProgress(t, server.URL+"/calls/"+id+"/media-progress", "application/json", `{"generation":1,"decoded_mids":["0"]}`).StatusCode)
-	})
+	for _, pending := range []bool{true, false} {
+		t.Run(map[bool]string{true: "pending", false: "confirmed"}[pending], func(t *testing.T) {
+			forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+				p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+				stopRelayRecoveries(t, p)
+				c, err := p.lookup(id)
+				require.NoError(t, err)
+				now := time.Now()
+				attempt := sessionstore.RelayAttempt{Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)}
+				if !pending {
+					attempt.Decoded = []string{"0"}
+				}
+				lease, assigned := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, attempt)
+				if !pending {
+					committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
+					require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, assigned, committed))
+					_, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+					require.NoError(t, err)
+					require.NoError(t, p.confirmRelaySuccess(context.Background(), id, committed, rec)) // an earlier confirmation
+				}
+				markLost(p, "r2") // the attempt's target is lost: begin never binds it
+				e := armEpisode(t, p, c, 10*time.Second)
+				require.Empty(t, attemptOf(t, store, id).Attempt.Episode, "the attempt stays outside the episode")
+				c.mu.Lock() // keep the session while the record is inspected
+				defer c.mu.Unlock()
+				require.Equal(t, relayEnded, p.endRelayEpisode(context.Background(), c, e.proposal().Token, "relay_change_failed", false))
+				before := attemptOf(t, store, id).Attempt
+				c.stateMu.Lock()
+				c.relayEndReason = "" // isolate the store check from the in-memory one
+				c.stateMu.Unlock()
+				server := httptest.NewServer(p.Handler())
+				defer server.Close()
+				require.Equal(t, http.StatusGone, postProgress(t, server.URL+"/calls/"+id+"/media-progress", "application/json", `{"generation":1,"decoded_mids":["0"]}`).StatusCode)
+				require.Equal(t, before.Decoded, attemptOf(t, store, id).Attempt.Decoded, "no A is retained after ended")
+			})
+		})
+	}
 }
 
+// ambiguousStore applies a confirmation write and then reports an uncertain
+// error, as a timeout after the write would. With drift set it applies a
+// record whose episode differs from the requested one.
+type ambiguousStore struct {
+	*sessionstore.Memory
+	drift atomic.Bool
+}
+
+func (s *ambiguousStore) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	if s.drift.Load() && to.Episode != nil {
+		episode := *to.Episode
+		episode.Detail = "drifted"
+		to.Episode = &episode
+	}
+	if err := s.Memory.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter); err != nil {
+		return err
+	}
+	return errors.New("store reply lost")
+}
+
+// decisionCAS proves an uncertain write by reading back the whole record,
+// the episode included.
 func TestReadBackComparesWholeEpisode(t *testing.T) {
-	ep := sessionstore.RelayEpisode{Seq: 2, Token: "t", StoreDeadline: time.Now(), Outcome: sessionstore.RelayEpisodeEnded, Detail: "delivery_unconfirmed"}
-	other := ep
-	other.Detail = "delivered_decode_unconfirmed"
-	a := sessionstore.RelayConfirmation{Mode: sessionstore.RelayConfirmDecode, Episode: &ep}
-	b := sessionstore.RelayConfirmation{Mode: sessionstore.RelayConfirmDecode, Episode: &other}
-	require.True(t, sameRelayRecord(a, a))
-	require.False(t, sameRelayRecord(a, b), "an episode-only difference is a different record")
+	for _, drift := range []bool{false, true} {
+		store := &ambiguousStore{Memory: sessionstore.NewMemory()}
+		p, _, _, id := relayFailurePlane(t, store)
+		a, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+		require.NoError(t, err)
+		next := rec
+		next.Episode = &sessionstore.RelayEpisode{Seq: 1, Token: "t", StoreDeadline: time.Now().Add(time.Minute), Outcome: sessionstore.RelayEpisodeOpen}
+		store.drift.Store(drift)
+		err = p.decisionCAS(context.Background(), id, a, rec, next, time.Time{}, time.Time{})
+		if drift {
+			require.Error(t, err, "an episode-only difference is a different record")
+		} else {
+			require.NoError(t, err, "the read-back proves an exact write")
+		}
+	}
 }
 
 // A removed session is gone at once, never waited on.
@@ -439,4 +482,203 @@ func TestBeginNeverAdoptsHistoricalConfirmation(t *testing.T) {
 		require.Empty(t, attemptOf(t, store, id).Attempt.Episode)
 		require.Equal(t, relayEnded, p.endRelayEpisode(context.Background(), c, e.proposal().Token, "relay_change_failed", false), "an earlier confirmation never completes a later episode")
 	})
+}
+
+// gatedJournal holds the first journal read until an episode opens, or for
+// 300 ms: an episode that begins during reconciliation shows up in the record.
+type gatedJournal struct {
+	*sessionstore.Memory
+	gate atomic.Bool
+	id   string
+}
+
+func (s *gatedJournal) ControlIntents(ctx context.Context) ([]sessionstore.ControlIntent, error) {
+	if s.gate.CompareAndSwap(true, false) {
+		for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if _, rec, err := s.RelayConfirmation(ctx, s.id); err == nil && rec.Episode.Open() {
+				break
+			}
+		}
+	}
+	return s.Memory.ControlIntents(ctx)
+}
+
+// Code review 1, P1: no watcher runs before journal reconciliation picks the
+// final proposal. The journaled proposal (first detection) is the one that
+// begins; a temporary proposal never opens an episode.
+func TestWatcherStartsAfterJournalReconciliation(t *testing.T) {
+	store := &gatedJournal{Memory: sessionstore.NewMemory()}
+	p, _, _, id := relayFailurePlane(t, store)
+	stopRelayRecoveries(t, p)
+	store.id = id
+	c, err := p.lookup(id)
+	require.NoError(t, err)
+	c.stateMu.Lock()
+	lease := c.lease
+	c.stateMu.Unlock()
+	saved := sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKind, Started: time.Now().Add(-time.Second), Lease: lease, Seq: 1}
+	require.NoError(t, store.PutControlIntent(context.Background(), saved))
+	store.gate.Store(true)
+	e, err := p.relayRecoveryEpisode(context.Background(), c, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, saved.Token, e.proposal().Token)
+	require.Eventually(t, func() bool { return episodeOf(t, store, id).Open() }, 5*time.Second, 5*time.Millisecond)
+	require.Equal(t, saved.Token, episodeOf(t, store, id).Token, "only the reconciled proposal begins")
+}
+
+// Code review 1, P1: an open episode that no watcher owns (a replaced
+// watcher's begin committed) is adopted, armed and enforced at its deadline.
+func TestUnownedOpenEpisodeIsAdopted(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, _, _, id := relayFailurePlane(t, store)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		events := watchEvents(t, c)
+		a, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+		require.NoError(t, err)
+		orphan := rec
+		deadline, err := p.convertClock(context.Background(), id, time.Now().Add(time.Second), true)
+		require.NoError(t, err)
+		orphan.Episode = &sessionstore.RelayEpisode{Seq: 1, Token: randomEpisodeToken(), StoreDeadline: deadline, Outcome: sessionstore.RelayEpisodeOpen}
+		require.NoError(t, confirmations(store).CASRelayConfirmation(context.Background(), id, a, rec, orphan, time.Time{}, time.Time{}))
+		_, err = p.relayRecoveryEpisode(context.Background(), c, time.Now())
+		require.NoError(t, err)
+		awaitEvent(t, events, "adopted")
+		c.relayEpisodeMu.Lock()
+		owner := c.relayEpisode
+		c.relayEpisodeMu.Unlock()
+		require.NotNil(t, owner)
+		require.Equal(t, orphan.Episode.Token, owner.proposal().Token)
+		require.Eventually(t, func() bool { return endReason(c) == "relay_change_failed" }, 5*time.Second, 5*time.Millisecond, "the adopted episode is enforced at its deadline")
+	})
+}
+
+// cleanupFault fails journal deletes while fail is set.
+type cleanupFault struct {
+	*sessionstore.Memory
+	fail atomic.Bool
+}
+
+func (s *cleanupFault) DeleteControlIntent(ctx context.Context, id, token string) error {
+	if s.fail.Load() {
+		return errors.New("journal unavailable")
+	}
+	return s.Memory.DeleteControlIntent(ctx, id, token)
+}
+
+// Code review 1, P1: a failed proposal cleanup is retried by the next
+// recovery instead of refusing it forever.
+func TestFailedProposalCleanupIsRetried(t *testing.T) {
+	store := &cleanupFault{Memory: sessionstore.NewMemory()}
+	p, _, _, id := relayFailurePlane(t, store)
+	stopRelayRecoveries(t, p)
+	c, err := p.lookup(id)
+	require.NoError(t, err)
+	first := armEpisode(t, p, c, 10*time.Second)
+	store.fail.Store(true)
+	p.cleanupRelayEpisode(context.Background(), c, first)
+	store.fail.Store(false)
+	next, err := p.relayRecoveryEpisode(context.Background(), c, time.Now())
+	require.NoError(t, err, "one failed delete must not block every later recovery")
+	require.NotSame(t, first, next)
+	records, err := store.ControlIntents(context.Background())
+	require.NoError(t, err)
+	for _, r := range records {
+		require.NotEqual(t, first.proposal().Token, r.Token, "the old proposal is deleted")
+	}
+}
+
+// seqFault fails confirmation-record reads while fail is set.
+type seqFault struct {
+	*sessionstore.Memory
+	fail atomic.Bool
+}
+
+func (s *seqFault) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	if s.fail.Load() {
+		return sessionstore.RelayAssignment{}, sessionstore.RelayConfirmation{}, errors.New("store unavailable")
+	}
+	return s.Memory.RelayConfirmation(ctx, id)
+}
+
+// Code review 1, P1: a proposal is never created without its seq baseline,
+// so it can never be rebased past a success that lands meanwhile and end the
+// recovered call at an old deadline.
+func TestUnreadableSeqCreatesNoProposal(t *testing.T) {
+	store := &seqFault{Memory: sessionstore.NewMemory()}
+	p, _, _, id := relayFailurePlane(t, store)
+	stopRelayRecoveries(t, p)
+	c, err := p.lookup(id)
+	require.NoError(t, err)
+	store.fail.Store(true)
+	_, err = p.relayRecoveryEpisode(context.Background(), c, time.Now().Add(-10*time.Second))
+	require.Error(t, err)
+	store.fail.Store(false)
+	detected := time.Now()
+	e, err := p.relayRecoveryEpisode(context.Background(), c, detected)
+	require.NoError(t, err)
+	require.Equal(t, detected.Add(relayRecoveryLimit), e.deadline, "the later detection starts its own window")
+}
+
+// Code review 1, P1: once its episode completed, a driver starts no further
+// attempt: the attempt write is fenced on its token still being open.
+func TestCompletedEpisodeDriverStartsNoAttempt(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, _, _, id := relayFailurePlane(t, store)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		e := armEpisode(t, p, c, 10*time.Second)
+		a, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+		require.NoError(t, err)
+		done := rec
+		episode := *rec.Episode
+		episode.Seq, episode.Outcome = episode.Seq+1, sessionstore.RelayEpisodeCompleted
+		done.Episode = &episode
+		require.NoError(t, confirmations(store).CASRelayConfirmation(context.Background(), id, a, rec, done, time.Time{}, time.Time{}))
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		defer cancel()
+		err = p.recoverRelay(ctx, c, false, map[string]bool{}, e)
+		require.ErrorIs(t, err, errRelayEpisodeClosed)
+		_, after, err := confirmations(store).RelayConfirmation(context.Background(), id)
+		require.NoError(t, err)
+		require.Nil(t, after.Attempt, "no attempt is created after completion")
+	})
+}
+
+// Code review 1, P2: a watcher that stops for shutdown releases its driver.
+func TestShutdownReleasesEpisodeDriver(t *testing.T) {
+	store := &seqFault{Memory: sessionstore.NewMemory()}
+	p, _, _, id := relayFailurePlane(t, store)
+	stopRelayRecoveries(t, p)
+	authorizeTestControl(t, p)
+	c, err := p.lookup(id)
+	require.NoError(t, err)
+	_, rec, err := store.RelayConfirmation(context.Background(), id)
+	require.NoError(t, err)
+	require.Nil(t, rec.Episode)
+	store.fail.Store(true) // begin stays uncertain; the driver waits for arming
+	ctx := context.Background()
+	c.stateMu.Lock()
+	lease := c.lease
+	c.stateMu.Unlock()
+	c.relayEpisodeMu.Lock()
+	c.relayEpisode = newRelayEpisode(sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKind, Started: time.Now(), Lease: lease, Seq: 1})
+	c.relayEpisodeMu.Unlock()
+	require.NoError(t, p.startRelayRecoveryFrom(ctx, c, false, time.Now(), nil))
+	c.relayEpisodeMu.Lock()
+	e := c.relayEpisode
+	running := e.running
+	c.relayEpisodeMu.Unlock()
+	require.True(t, running)
+	lapsed := *p.restart.guard.Load()
+	lapsed.deadline = time.Now().Add(-time.Millisecond)
+	p.restart.guard.Store(&lapsed)
+	p.restart.stopping.Store(true)
+	require.Eventually(t, func() bool {
+		c.relayEpisodeMu.Lock()
+		defer c.relayEpisodeMu.Unlock()
+		return !e.running
+	}, 5*time.Second, 5*time.Millisecond, "the driver exits with its watcher")
 }

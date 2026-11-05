@@ -31,6 +31,11 @@ var errRelayUnconfirmed = errors.New("controlplane: relay change unconfirmed")
 // saved and no success is reported after that decision.
 var errRelayEpisodeEnded = errors.New("controlplane: relay_change_failed: episode ended")
 
+// errRelayEpisodeClosed: the recovery's episode is no longer open (it
+// completed, or a later decision replaced it), so its driver is finished and
+// starts no further attempt.
+var errRelayEpisodeClosed = errors.New("controlplane: relay episode closed")
+
 // errRelayRetired: the attempt's generation was consumed without a switch.
 var errRelayRetired = errors.New("controlplane: relay generation retired without a switch")
 
@@ -57,6 +62,7 @@ type relayAttemptOptions struct {
 	outer    time.Time // planned deadline, or the saved episode deadline
 	detected time.Time // episode detection; zero for planned
 	tried    []string
+	episode  string // recovery: the token that must still be open
 }
 
 // relayFailureDetail names the evidence state for an unconfirmed attempt
@@ -226,29 +232,34 @@ func (p *Plane) storeTime(ctx context.Context, id string, local time.Time) (time
 	if !local.After(time.Now()) {
 		return time.Time{}, sessionstore.ErrRelayAttemptExpired
 	}
-	converted, err := p.storeClockOf(ctx, id, local)
+	converted, err := p.convertClock(ctx, id, local, true)
 	if err == nil && !local.After(time.Now()) {
 		return time.Time{}, sessionstore.ErrRelayAttemptExpired
 	}
 	return converted, err
 }
 
-// storeClockOf converts any local time, past or future, to the store clock
-// with the same conservative round-trip bound as storeTime.
-func (p *Plane) storeClockOf(ctx context.Context, id string, local time.Time) (time.Time, error) {
+// convertClock converts a time, past or future, between the local and the
+// store clock (toStore picks the direction). It reads the store clock once and
+// charges the read's round trip so that the result is never later than the
+// true equivalent.
+func (p *Plane) convertClock(ctx context.Context, id string, t time.Time, toStore bool) (time.Time, error) {
 	clock, ok := p.store.(interface {
 		Clock(context.Context, string) (time.Time, error)
 	})
-	start := time.Now()
 	if !ok {
-		return local, nil
+		return t, nil
 	}
+	start := time.Now()
 	now, err := clock.Clock(ctx, id)
 	if err != nil {
 		return time.Time{}, err
 	}
 	end := time.Now()
-	return now.Add(local.Sub(end) - end.Sub(start)), nil
+	if toStore {
+		return now.Add(t.Sub(end) - end.Sub(start)), nil
+	}
+	return start.Add(t.Sub(now)), nil
 }
 
 // evidenceBound is the saved store-clock bound for A and C writes. A record
@@ -298,19 +309,24 @@ func (p *Plane) confirmRelaySuccess(ctx context.Context, id string, a sessionsto
 	if t.Phase == sessionstore.RelayPhaseConfirmed && !ep.Open() {
 		return nil // already decided; seq advanced with that write
 	}
-	next := rec
+	return p.casRelayConfirmation(ctx, id, a, rec, successRecord(rec), time.Time{})
+}
+
+// successRecord is the record after a success: the attempt confirmed, seq
+// advanced (fencing every older proposal) and an open episode completed.
+func successRecord(rec sessionstore.RelayConfirmation) sessionstore.RelayConfirmation {
+	t := *rec.Attempt
 	t.Phase = sessionstore.RelayPhaseConfirmed
-	next.Attempt = &t
 	episode := sessionstore.RelayEpisode{}
-	if ep != nil {
-		episode = *ep
+	if rec.Episode != nil {
+		episode = *rec.Episode
 	}
 	episode.Seq++
-	if ep.Open() {
+	if rec.Episode.Open() {
 		episode.Outcome = sessionstore.RelayEpisodeCompleted
 	}
-	next.Episode = &episode
-	return p.casRelayConfirmation(ctx, id, a, rec, next, time.Time{})
+	rec.Attempt, rec.Episode = &t, &episode
+	return rec
 }
 
 // beginRelayAttempt fixes the required MIDs with the owning worker and saves
@@ -329,6 +345,13 @@ func (p *Plane) beginRelayAttempt(ctx context.Context, c *call, lease sessionsto
 		}
 		if rec.Episode != nil && rec.Episode.Outcome == sessionstore.RelayEpisodeEnded {
 			return nil, errRelayEpisodeEnded // ended is final for the live session
+		}
+		if opt.episode != "" {
+			// A recovery attempt belongs to its episode: the compare-and-set
+			// below carries this open token, and its completion is final.
+			if ep := rec.Episode; !ep.Open() || ep.Token != opt.episode {
+				return nil, errRelayEpisodeClosed
+			}
 		}
 		committed := a.Pending == "" && a.Slot == pending.Pending && a.Generation == generation
 		if a != pending && !committed {
@@ -410,7 +433,7 @@ func (p *Plane) adoptIntoOpenEpisode(ctx context.Context, id string, a sessionst
 	if !ep.Open() || !p.eligibleForEpisode(*t) {
 		return t, nil
 	}
-	local, err := p.localOf(ctx, id, ep.StoreDeadline)
+	local, err := p.convertClock(ctx, id, ep.StoreDeadline, false)
 	if err != nil {
 		return nil, err
 	}
@@ -422,23 +445,6 @@ func (p *Plane) adoptIntoOpenEpisode(ctx context.Context, id string, a sessionst
 		return nil, err
 	}
 	return &bound, nil
-}
-
-// localOf converts a store-clock time to local time, conservatively (the
-// result is never later than the true local equivalent).
-func (p *Plane) localOf(ctx context.Context, id string, storeTime time.Time) (time.Time, error) {
-	clock, ok := p.store.(interface {
-		Clock(context.Context, string) (time.Time, error)
-	})
-	if !ok {
-		return storeTime, nil
-	}
-	start := time.Now()
-	now, err := clock.Clock(ctx, id)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return start.Add(storeTime.Sub(now)), nil
 }
 
 // waitRelayChange publishes the attempt's event and waits for its switch
@@ -752,16 +758,7 @@ func (p *Plane) handleMediaProgress(w http.ResponseWriter, r *http.Request) {
 		// under the single success rule: an attempt not owned by an open
 		// episode only retains A.
 		if updated.Confirmed(a) && (!rec.Episode.Open() || t.Episode == rec.Episode.Token) {
-			next.Phase = sessionstore.RelayPhaseConfirmed
-			episode := sessionstore.RelayEpisode{}
-			if rec.Episode != nil {
-				episode = *rec.Episode
-			}
-			episode.Seq++
-			if rec.Episode.Open() {
-				episode.Outcome = sessionstore.RelayEpisodeCompleted
-			}
-			updated.Episode = &episode
+			updated = successRecord(updated)
 		}
 		storeBound, err := p.evidenceBound(*t)
 		if err != nil {
@@ -932,7 +929,7 @@ func (p *Plane) restoreRelayEpisode(ctx context.Context, c *call, intent session
 // journalDurableEpisode re-journals an episode that the session record holds
 // and installs it. Started is derived from the store-clock deadline.
 func (p *Plane) journalDurableEpisode(ctx context.Context, c *call, ep sessionstore.RelayEpisode) (*relayEpisode, error) {
-	local, err := p.localOf(ctx, c.id, ep.StoreDeadline)
+	local, err := p.convertClock(ctx, c.id, ep.StoreDeadline, false)
 	if err != nil {
 		return nil, err
 	}
@@ -956,7 +953,7 @@ func (p *Plane) installRelayEpisode(c *call, intent sessionstore.ControlIntent) 
 		old.close()
 	}
 	e := newRelayEpisode(intent)
-	e.loaded, e.persisted = true, true
+	e.loaded, e.persisted, e.watching = true, true, true
 	c.relayEpisode = e
 	p.watchRelayEpisode(c, e)
 	return e

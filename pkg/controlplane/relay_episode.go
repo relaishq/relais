@@ -36,6 +36,7 @@ type relayEpisode struct {
 	armOnce                sync.Once
 	running, loaded        bool // guarded by relayEpisodeMu
 	persisted, cleanupDone bool // guarded by relayEpisodeMu
+	watching               bool // guarded by relayEpisodeMu; set once its watcher runs
 	completed              atomic.Bool
 }
 
@@ -83,15 +84,21 @@ const (
 
 // relayRecoveryEpisode creates or joins the call's episode and journals its
 // proposal. The journal stores the first detection time, so a busy operation
-// or a repeated caller request cannot buy another 15 seconds. The episode is
-// armed asynchronously by its watcher once begin is definite.
+// or a repeated caller request cannot buy another 15 seconds. The proposal's
+// seq is read at detection; an unreadable seq creates nothing, so a proposal
+// is never rebased past a later success. The watcher starts only once the
+// journal is reconciled and the final proposal is journaled.
 func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time.Time, snapshot ...map[string]sessionstore.ControlIntent) (*relayEpisode, error) {
 	c.relayEpisodeMu.Lock()
 	defer c.relayEpisodeMu.Unlock()
 	journal := p.store.(sessionstore.ControlStore)
 	if e := c.relayEpisode; e != nil && e.completed.Load() {
 		if !e.cleanupDone {
-			return nil, ErrMoveInProgress
+			// A cleanup that failed earlier is retried here; nothing else would.
+			if err := deleteRelayProposal(ctx, journal, e); err != nil {
+				return nil, err
+			}
+			e.cleanupDone = true
 		}
 		c.relayEpisode = nil
 	}
@@ -101,16 +108,13 @@ func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time
 		c.stateMu.Unlock()
 		intent := sessionstore.ControlIntent{ID: "relay-recovery:" + c.id, Token: randomEpisodeToken(), Kind: relayIntentKindUnsupported, Started: detected, Lease: lease}
 		if capable {
-			intent.Kind = relayIntentKind
-			// An unreadable seq is resolved by the watcher before begin; the
-			// detection time is journaled now either way.
-			if seq, err := p.relaySeq(ctx, c); err == nil {
-				intent.Seq = seq + 1
+			seq, err := p.relaySeq(ctx, c)
+			if err != nil {
+				return nil, err
 			}
+			intent.Kind, intent.Seq = relayIntentKind, seq+1
 		}
-		e := newRelayEpisode(intent)
-		c.relayEpisode = e
-		p.watchRelayEpisode(c, e)
+		c.relayEpisode = newRelayEpisode(intent)
 	}
 	e := c.relayEpisode
 	if !e.loaded {
@@ -122,34 +126,36 @@ func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time
 		} else {
 			var err error
 			if records, err = journal.ControlIntents(ctx); err != nil {
-				return nil, err
+				return nil, err // the detection time stays remembered
 			}
 		}
 		for _, saved := range records {
-			if saved.ID != e.proposal().ID || saved.Token == e.proposal().Token {
-				continue
+			if saved.ID == e.proposal().ID && saved.Token != e.proposal().Token {
+				// The journaled proposal keeps its first detection time, so a
+				// reload cannot buy another 15 s. Its watcher begins or discards it.
+				e = newRelayEpisode(saved)
+				c.relayEpisode = e
 			}
-			if saved.Kind == relayIntentKind && saved.Seq == 0 || saved.Kind != relayIntentKind && saved.Kind != relayIntentKindUnsupported {
-				// Unknown format: never adopted; the stall and end paths remain.
-				if err := journal.DeleteControlIntent(ctx, saved.ID, saved.Token); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			// The journaled proposal keeps its first detection time, so a
-			// reload cannot buy another 15 s. Its watcher begins or discards it.
-			e.close()
-			e = newRelayEpisode(saved)
-			c.relayEpisode = e
-			p.watchRelayEpisode(c, e)
 		}
 		e.loaded = true
 	}
-	err := journal.PutControlIntent(ctx, e.proposal())
-	if err == nil {
-		e.persisted = true
+	if err := journal.PutControlIntent(ctx, e.proposal()); err != nil {
+		return e, err
 	}
-	return e, err
+	e.persisted = true
+	if !e.watching {
+		e.watching = true
+		p.watchRelayEpisode(c, e)
+	}
+	return e, nil
+}
+
+func deleteRelayProposal(ctx context.Context, journal sessionstore.ControlStore, e *relayEpisode) error {
+	intent := e.proposal()
+	if err := journal.DeleteControlIntent(ctx, intent.ID, intent.Token); err != nil && !errors.Is(err, sessionstore.ErrLeaseLost) {
+		return err
+	}
+	return nil
 }
 
 // relaySeq reads the call's decision counter.
@@ -189,108 +195,155 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 				return
 			case <-timer.C:
 			}
-			outcome = p.decideRelayEnd(c, e)
+			outcome = p.retryRelayDecision(c, e.done, func(ctx context.Context) relayOutcome {
+				return p.endRelayEpisode(ctx, c, e.proposal().Token, "relay_change_failed", true)
+			})
 		}
-		var detail RelayEvent
 		switch outcome {
 		case relayEnded:
-			detail = p.relayEndedDetail(c)
+			p.publishRelayEnd(c)
+			p.finishRelayEnd(c, e)
 		case relayCompleted, relayGone, relayStale:
 			p.cleanupRelayEpisode(context.Background(), c, e)
-			return
 		case relayStandDown:
 			p.standDownRelayEpisode(c, e)
-			return
-		default: // shutdown or a finished episode
-			return
+		default: // shutdown: release the driver; the journal keeps the proposal
+			e.once.Do(func() { close(e.done) })
 		}
-		p.publishRelayEnd(c, detail)
-		p.finishRelayEnd(c, e)
 	}()
 }
 
-// armRelayEpisode retries begin until it is definite, past the deadline too:
-// an episode that arms late is decided at once. A refused proposal is
-// re-proposed within this term while the call's current slot is still lost.
-func (p *Plane) armRelayEpisode(c *call, e *relayEpisode) relayOutcome {
+// retryRelayDecision runs decision attempts, each with one shared 2 s context
+// (read, authority conversion, compare-and-set and read-back), and retries
+// uncertain results with backoff under authority until one is definite. It
+// stops on shutdown, a gone call, or done.
+func (p *Plane) retryRelayDecision(c *call, done <-chan struct{}, attempt func(context.Context) relayOutcome) relayOutcome {
 	for backoff := 50 * time.Millisecond; ; backoff = min(2*backoff, time.Second) {
-		if !p.awaitRelayAuthority(c, e) {
+		select {
+		case <-done:
+			return relayUncertain
+		default:
+		}
+		if !p.awaitRelayAuthority(c, done) {
+			if p.callGone(c) {
+				return relayGone
+			}
 			return relayUncertain
 		}
 		if p.callGone(c) {
 			return relayGone
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), relayDecisionLimit)
-		outcome := relayUncertain
-		if p.resolveRelaySeq(ctx, c, e) {
-			outcome = p.beginRelayEpisode(ctx, c, e)
-		}
+		outcome := attempt(ctx)
 		cancel()
-		switch outcome {
-		case relayArmed:
-			e.arm()
-			relayWatchEvent(c, "armed")
-			return relayArmed
-		case relayStale:
-			if p.reproposeRelayEpisode(c, e) {
-				continue
-			}
-			return relayStale
-		case relayUncertain:
-		default:
+		if outcome != relayUncertain {
 			return outcome
 		}
 		select {
-		case <-e.done:
+		case <-done:
 			return relayUncertain
 		case <-time.After(backoff):
 		}
 	}
 }
 
-// resolveRelaySeq fills a proposal whose seq could not be read when it was
-// journaled, and re-journals it under the same token.
-func (p *Plane) resolveRelaySeq(ctx context.Context, c *call, e *relayEpisode) bool {
-	c.relayEpisodeMu.Lock()
-	seq := e.proposal().Seq
-	c.relayEpisodeMu.Unlock()
-	if seq != 0 {
-		return true
+// armRelayEpisode retries begin until it is definite, past the deadline too:
+// an episode that arms late is decided at once. A refused proposal is
+// re-proposed within this term while the call's current slot is still lost.
+// A begin that commits after the episode was replaced is handed to a new
+// owner, never left without a watcher.
+func (p *Plane) armRelayEpisode(c *call, e *relayEpisode) relayOutcome {
+	outcome := p.retryRelayDecision(c, e.done, func(ctx context.Context) relayOutcome {
+		if outcome := p.beginRelayEpisode(ctx, c, e); outcome != relayStale {
+			return outcome
+		}
+		return p.reproposeRelayEpisode(ctx, c, e)
+	})
+	if outcome != relayArmed {
+		return outcome
 	}
-	current, err := p.relaySeq(ctx, c)
+	if e.completed.Load() {
+		return p.retryRelayDecision(c, nil, func(ctx context.Context) relayOutcome { return p.adoptDurableEpisode(ctx, c, e) })
+	}
+	e.arm()
+	relayWatchEvent(c, "armed")
+	return relayArmed
+}
+
+// adoptDurableEpisode gives an open or ended episode that the record holds a
+// new watcher (and an open one a driver), replacing the call's in-memory
+// episode. Within one control term no other watcher can own it: the call's
+// own episode is the one adopting, or was replaced. It reports relayStandDown
+// once ownership moved, so the caller exits without cleanup.
+func (p *Plane) adoptDurableEpisode(ctx context.Context, c *call, e *relayEpisode) relayOutcome {
+	store, ok := p.store.(sessionstore.RelayConfirmations)
+	if !ok {
+		return relayStandDown
+	}
+	_, rec, err := store.RelayConfirmation(ctx, c.id)
+	if errors.Is(err, sessionstore.ErrNotFound) {
+		return relayGone
+	}
 	if err != nil {
-		return false
+		return relayUncertain
 	}
+	ep := rec.Episode
+	if ep == nil || !ep.Open() && ep.Outcome != sessionstore.RelayEpisodeEnded {
+		return relayStandDown // decided meanwhile; nothing is left to own
+	}
+	// The journal holds one proposal per call: replace this episode's (or the
+	// current one's) with the durable token.
+	journal := p.store.(sessionstore.ControlStore)
 	c.relayEpisodeMu.Lock()
-	defer c.relayEpisodeMu.Unlock()
-	next := e.proposal()
-	next.Seq = current + 1
-	if p.store.(sessionstore.ControlStore).PutControlIntent(ctx, next) != nil {
-		return false
+	replaced := []*relayEpisode{e}
+	if current := c.relayEpisode; current != nil && current != e {
+		replaced = append(replaced, current)
 	}
-	e.setProposal(next)
-	return true
+	c.relayEpisodeMu.Unlock()
+	for _, old := range replaced {
+		if deleteRelayProposal(ctx, journal, old) != nil {
+			return relayUncertain
+		}
+	}
+	adopted, err := p.journalDurableEpisode(ctx, c, *ep)
+	if err != nil {
+		return relayUncertain
+	}
+	relayWatchEvent(c, "adopted")
+	if ep.Open() {
+		var tried []string
+		if rec.Attempt != nil {
+			tried = rec.Attempt.Tried
+		}
+		_ = p.startRelayRecoveryFrom(ctx, c, false, adopted.proposal().Started, tried)
+	}
+	return relayStandDown
 }
 
 // reproposeRelayEpisode replaces a refused proposal with a fresh token at the
 // current seq + 1, but only while the call still needs recovery (its current
-// slot is lost). Otherwise the proposal is discarded.
-func (p *Plane) reproposeRelayEpisode(c *call, e *relayEpisode) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), relayDecisionLimit)
-	defer cancel()
+// slot is lost); it then reports relayUncertain so begin runs again.
+// Otherwise the proposal is stale and is discarded.
+func (p *Plane) reproposeRelayEpisode(ctx context.Context, c *call, e *relayEpisode) relayOutcome {
 	store, ok := p.store.(sessionstore.RelayConfirmations)
 	if !ok {
-		return false
+		return relayStale
 	}
 	a, rec, err := store.RelayConfirmation(ctx, c.id)
-	if err != nil || rec.Episode != nil && rec.Episode.Outcome != sessionstore.RelayEpisodeCompleted && rec.Episode.Outcome != "" {
-		return false
+	if errors.Is(err, sessionstore.ErrNotFound) {
+		return relayGone
+	}
+	if err != nil {
+		return relayUncertain
 	}
 	p.mu.Lock()
 	lost := p.relaySet[a.Slot].lost
 	p.mu.Unlock()
+	if ep := rec.Episode; ep.Open() || ep != nil && ep.Outcome == sessionstore.RelayEpisodeEnded {
+		return relayUncertain // opened or ended meanwhile: the next begin adopts it
+	}
 	if !lost {
-		return false
+		return relayStale
 	}
 	journal := p.store.(sessionstore.ControlStore)
 	c.relayEpisodeMu.Lock()
@@ -301,12 +354,12 @@ func (p *Plane) reproposeRelayEpisode(c *call, e *relayEpisode) bool {
 	if rec.Episode != nil {
 		next.Seq = rec.Episode.Seq + 1
 	}
-	if journal.DeleteControlIntent(ctx, e.proposal().ID, e.proposal().Token) != nil || journal.PutControlIntent(ctx, next) != nil {
-		return false
+	if deleteRelayProposal(ctx, journal, e) != nil || journal.PutControlIntent(ctx, next) != nil {
+		return relayUncertain
 	}
 	e.setProposal(next)
 	relayWatchEvent(c, "reproposed")
-	return true
+	return relayUncertain
 }
 
 // beginRelayEpisode opens the proposal's episode with one compare-and-set.
@@ -333,11 +386,14 @@ func (p *Plane) beginRelayEpisode(ctx context.Context, c *call, e *relayEpisode)
 		case sessionstore.RelayEpisodeCompleted:
 			return relayCompleted
 		case sessionstore.RelayEpisodeEnded:
+			noteRelayEnd(c, rec)
 			return relayEnded
 		}
 	}
 	if ep != nil && (ep.Open() || ep.Outcome == sessionstore.RelayEpisodeEnded) {
-		return relayStandDown // another episode owns the decision; ended is final
+		// Another token holds the decision with no watcher of its own (for
+		// example a replaced episode's begin): this one takes it over.
+		return p.adoptDurableEpisode(ctx, c, e)
 	}
 	var seq uint64
 	if ep != nil {
@@ -346,7 +402,7 @@ func (p *Plane) beginRelayEpisode(ctx context.Context, c *call, e *relayEpisode)
 	if e.proposal().Seq != seq+1 || rec.Mode != sessionstore.RelayConfirmDelivery && rec.Mode != sessionstore.RelayConfirmDecode {
 		return relayStale
 	}
-	storeDeadline, err := p.storeClockOf(ctx, c.id, e.deadline)
+	storeDeadline, err := p.convertClock(ctx, c.id, e.deadline, true)
 	if err != nil {
 		return relayUncertain
 	}
@@ -393,31 +449,6 @@ func clampToEpisode(t sessionstore.RelayAttempt, deadline, storeDeadline time.Ti
 	return t
 }
 
-// decideRelayEnd writes the episode's end at its deadline, retrying uncertain
-// results with backoff under authority. Proof for an attempt owned by the
-// episode is promoted instead, in the same compare-and-set.
-func (p *Plane) decideRelayEnd(c *call, e *relayEpisode) relayOutcome {
-	for backoff := 50 * time.Millisecond; ; backoff = min(2*backoff, time.Second) {
-		if !p.awaitRelayAuthority(c, e) {
-			return relayUncertain
-		}
-		if p.callGone(c) {
-			return relayGone
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), relayDecisionLimit)
-		outcome := p.endRelayEpisode(ctx, c, e.proposal().Token, "relay_change_failed", true)
-		cancel()
-		if outcome != relayUncertain {
-			return outcome
-		}
-		select {
-		case <-e.done:
-			return relayUncertain
-		case <-time.After(backoff):
-		}
-	}
-}
-
 // endRelayEpisode is the one end operation, for the timeout and for immediate
 // failures. It requires the token to be open; a timeout also requires the
 // store clock to have reached the episode deadline.
@@ -441,22 +472,19 @@ func (p *Plane) endRelayEpisode(ctx context.Context, c *call, token, reason stri
 	case sessionstore.RelayEpisodeCompleted:
 		return relayCompleted
 	case sessionstore.RelayEpisodeEnded:
+		noteRelayEnd(c, rec) // also settles our own uncertain end write
 		return relayEnded
 	}
-	next := rec
-	episode := *ep
-	next.Episode = &episode
 	t := rec.Attempt
 	if t != nil && t.Episode == token && rec.Confirmed(a) {
-		promoted := *t
-		promoted.Phase = sessionstore.RelayPhaseConfirmed
-		next.Attempt = &promoted
-		episode.Outcome, episode.Seq = sessionstore.RelayEpisodeCompleted, episode.Seq+1
-		if p.decisionCAS(ctx, c.id, a, rec, next, time.Time{}, time.Time{}) != nil {
+		if p.decisionCAS(ctx, c.id, a, rec, successRecord(rec), time.Time{}, time.Time{}) != nil {
 			return relayUncertain
 		}
 		return relayCompleted
 	}
+	next := rec
+	episode := *ep
+	next.Episode = &episode
 	detail := RelayEvent{Detail: "delivery_unconfirmed", Confirmation: rec.Mode}
 	if t != nil && t.Episode == token {
 		detail = relayFailureDetail(rec)
@@ -478,39 +506,29 @@ func (p *Plane) endRelayEpisode(ctx context.Context, c *call, token, reason stri
 	if p.decisionCAS(ctx, c.id, a, rec, next, notBefore, time.Time{}) != nil {
 		return relayUncertain
 	}
+	noteRelayEnd(c, next)
+	return relayEnded
+}
+
+// noteRelayEnd keeps the detail saved with an ended outcome for the event.
+func noteRelayEnd(c *call, rec sessionstore.RelayConfirmation) {
+	ep := rec.Episode
+	detail := RelayEvent{Detail: ep.Detail, Confirmation: rec.Mode}
+	if t := rec.Attempt; t != nil && t.Episode == ep.Token {
+		detail = relayFailureDetail(rec)
+		detail.Detail = ep.Detail
+	}
 	c.stateMu.Lock()
 	if c.relayEndDetail.Detail == "" {
 		c.relayEndDetail = detail
 	}
 	c.stateMu.Unlock()
-	return relayEnded
-}
-
-// relayEndedDetail returns the detail saved with the ended outcome.
-func (p *Plane) relayEndedDetail(c *call) RelayEvent {
-	c.stateMu.Lock()
-	detail := c.relayEndDetail
-	c.stateMu.Unlock()
-	if detail.Detail != "" {
-		return detail
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), relayDecisionLimit)
-	defer cancel()
-	if store, ok := p.store.(sessionstore.RelayConfirmations); !ok {
-		return RelayEvent{Detail: "delivery_unconfirmed"}
-	} else if _, rec, err := store.RelayConfirmation(ctx, c.id); err == nil && rec.Episode != nil {
-		return RelayEvent{Detail: rec.Episode.Detail, Confirmation: rec.Mode}
-	}
-	return RelayEvent{Detail: "delivery_unconfirmed"}
 }
 
 // publishRelayEnd tells the caller after a definite end. It never waits for
 // the call lock, so a busy operation cannot delay it.
-func (p *Plane) publishRelayEnd(c *call, detail RelayEvent) {
+func (p *Plane) publishRelayEnd(c *call) {
 	c.stateMu.Lock()
-	if c.relayEndDetail.Detail == "" {
-		c.relayEndDetail = detail
-	}
 	c.relayEndReason = "relay_change_failed"
 	select {
 	case c.relayWake <- struct{}{}:
@@ -546,7 +564,10 @@ func (p *Plane) finishRelayEnd(c *call, e *relayEpisode) {
 		}
 		c.mu.Unlock()
 		relayWatchEvent(c, "suspended")
-		if !p.awaitRelayAuthority(c, e) {
+		if !p.awaitRelayAuthority(c, e.done) {
+			if p.callGone(c) {
+				p.cleanupRelayEpisode(context.Background(), c, e)
+			}
 			return
 		}
 	}
@@ -563,14 +584,13 @@ func (p *Plane) watchUnsupportedEpisode(c *call, e *relayEpisode) {
 		return
 	case <-timer.C:
 	}
-	if !p.awaitRelayAuthority(c, e) || e.completed.Load() {
+	if !p.awaitRelayAuthority(c, e.done) || e.completed.Load() || p.callGone(c) {
+		if p.callGone(c) {
+			p.cleanupRelayEpisode(context.Background(), c, e)
+		}
 		return
 	}
-	if p.callGone(c) {
-		p.cleanupRelayEpisode(context.Background(), c, e)
-		return
-	}
-	p.publishRelayEnd(c, RelayEvent{})
+	p.publishRelayEnd(c)
 	p.finishRelayEnd(c, e)
 }
 
@@ -585,25 +605,23 @@ func relayWatchEvent(c *call, name string) {
 }
 
 // awaitRelayAuthority waits until this control holds authority. It reports
-// false when the episode finished, control is stopping, or the call ended
-// (the episode is then cleaned up).
-func (p *Plane) awaitRelayAuthority(c *call, e *relayEpisode) bool {
+// false when done closes, control is stopping, or the call ended.
+func (p *Plane) awaitRelayAuthority(c *call, done <-chan struct{}) bool {
 	for !p.controlAuthority() {
 		if p.restart != nil && p.restart.stopping.Load() {
 			return false
 		}
 		if p.callGone(c) {
-			p.cleanupRelayEpisode(context.Background(), c, e)
 			relayWatchEvent(c, "gone-while-suspended")
 			return false
 		}
 		select {
-		case <-e.done:
+		case <-done:
 			return false
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	return !e.completed.Load()
+	return true
 }
 
 // completeRelayEpisode is a driver's report after its confirmation write. The
@@ -638,11 +656,9 @@ func (p *Plane) cleanupRelayEpisode(ctx context.Context, c *call, e *relayEpisod
 	e.close()
 	c.relayEpisodeMu.Lock()
 	defer c.relayEpisodeMu.Unlock()
-	journal := p.store.(sessionstore.ControlStore)
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
-	err := journal.DeleteControlIntent(cleanup, e.proposal().ID, e.proposal().Token)
-	if err == nil || errors.Is(err, sessionstore.ErrLeaseLost) {
+	if deleteRelayProposal(cleanup, p.store.(sessionstore.ControlStore), e) == nil {
 		e.cleanupDone = true
 		if c.relayEpisode == e {
 			c.relayEpisode = nil
@@ -715,6 +731,10 @@ func (p *Plane) startRelayRecoveryFrom(ctx context.Context, c *call, sameSlot bo
 				if p.callGone(c) { // nothing is left to decide; release the watcher
 					p.cleanupRelayEpisode(recovery, c, e)
 				}
+				return
+			}
+			if errors.Is(err, errRelayEpisodeClosed) {
+				_ = p.completeRelayEpisode(recovery, c, e)
 				return
 			}
 			if errors.Is(err, errRelayEpisodeEnded) {
@@ -833,7 +853,7 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 		p.endRelayFailure(c, lease, "relay_lost")
 		return nil
 	}
-	opt := relayAttemptOptions{kind: "recovery", outer: e.deadline, detected: e.proposal().Started}
+	opt := relayAttemptOptions{kind: "recovery", outer: e.deadline, detected: e.proposal().Started, episode: e.proposal().Token}
 	p.mu.Lock()
 	currentLost := p.relaySet[from.Slot].lost
 	p.mu.Unlock()
@@ -888,11 +908,14 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 		end, cancelEnd := context.WithTimeout(context.WithoutCancel(ctx), relayDecisionLimit)
 		outcome := p.endRelayEpisode(end, c, e.proposal().Token, "confirmation_unsupported", false)
 		cancelEnd()
-		if outcome == relayEnded {
-			p.publishRelayEnd(c, p.relayEndedDetail(c))
+		switch outcome {
+		case relayEnded:
+			p.publishRelayEnd(c)
 			p.endRelayFailure(c, lease, "relay_change_failed")
 			p.cleanupRelayEpisode(ctx, c, e)
 			return errRelayEpisodeEnded
+		case relayCompleted:
+			return errRelayEpisodeClosed // existing proof was promoted
 		}
 		return errors.Join(abortErr, ErrConfirmationUnsupported)
 	}

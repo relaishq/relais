@@ -699,14 +699,18 @@ These record choices the accepted text left open while building sections 5,
   per-call counter of decisions. The first compare-and-set that writes an
   outcome wins, and every effect follows the stored winner.
   - The journal intent is only a proposal (token, `seq`, detection). Control
-    reads `seq`, journals the proposal, then writes `begin`, which needs
-    `seq + 1`, no open episode, and no `ended` (ended is final for the live
-    session). `begin` retries until definite, past the deadline too; a refused
-    proposal is re-proposed in the term while the call's slot is still lost.
+    reads `seq` at detection (an unreadable `seq` creates no proposal),
+    reconciles the journal, journals the proposal, and only then starts the
+    watcher that writes `begin`. `begin` needs `seq + 1`, no open episode, and
+    no `ended` (ended is final for the live session). It retries until
+    definite, past the deadline too; a refused proposal is re-proposed in the
+    term while the call's slot is still lost.
   - `begin` binds the current attempt if it is pending or switched, owned by
     no episode, and aimed at a live slot (an in-flight switch to a live target
     counts); its bounds only move earlier. Historical confirmations are never
-    adopted. New attempts carry the open token.
+    adopted. New attempts carry the open token; a recovery attempt is written
+    only while its own token is open, and its driver stops once that token
+    completed.
   - Success needs proof, an outcome that is not `ended` and, while an episode
     is open, an attempt owned by it; otherwise the call belongs to the episode
     (`ErrMoveInProgress`). Every success advances `seq` and completes the open
@@ -715,8 +719,11 @@ These record choices the accepted text left open while building sections 5,
     episode deadline) and immediate failures. It needs the token open and
     promotes proof owned by the episode instead of ending.
   - Every write is bounded by control authority in store clock, and a
-    read-back after an uncertain write compares the whole record. A watcher
-    that finds another token stands down without publication or cleanup.
+    read-back after an uncertain write compares the whole record. An open or
+    ended episode that no running watcher owns (for example a replaced
+    watcher's `begin`) is adopted by the call's current episode. A watcher
+    whose `end` finds another token stands down without publication or
+    cleanup.
 - **Publication (accepted by the owner 2026-11-04).** `ended` is published only
   after a definite end decision, never waiting for the call lock. One decision
   attempt (read, authority conversion, compare-and-set and read-back) shares

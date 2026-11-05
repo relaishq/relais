@@ -195,11 +195,12 @@ type flakyConfirmations struct {
 	sessionstore.Store
 	sessionstore.RelayConfirmations
 	sessionstore.ControlStore
-	fail atomic.Bool
+	fail  atomic.Bool
+	allow atomic.Int32 // reads that still succeed while fail is set
 }
 
 func (s *flakyConfirmations) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
-	if s.fail.Load() {
+	if s.fail.Load() && s.allow.Add(-1) < 0 {
 		return sessionstore.RelayAssignment{}, sessionstore.RelayConfirmation{}, sessionstore.ErrTransient
 	}
 	return s.RelayConfirmations.RelayConfirmation(ctx, id)
@@ -218,6 +219,7 @@ func TestStoreUncertaintyNeverEndsCall(t *testing.T) {
 		p.store = flaky
 		require.Equal(t, relayUncertain, p.endRelayEpisode(context.Background(), c, "any", "relay_change_failed", false))
 
+		flaky.allow.Store(1) // the seq read at detection succeeds; begin cannot read
 		_, err = p.relayRecoveryEpisode(context.Background(), c, time.Now().Add(-relayRecoveryLimit+50*time.Millisecond))
 		require.NoError(t, err)
 		time.Sleep(400 * time.Millisecond)
@@ -400,6 +402,7 @@ func TestWatchdogRechecksAuthorityBeforeEnding(t *testing.T) {
 		require.NoError(t, err)
 		flaky := &flakyConfirmations{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
 		flaky.fail.Store(true)
+		flaky.allow.Store(1) // the seq read at detection succeeds; begin cannot read
 		p.store = flaky
 		_, err = p.relayRecoveryEpisode(context.Background(), c, time.Now().Add(-relayRecoveryLimit+50*time.Millisecond))
 		require.NoError(t, err)
@@ -433,6 +436,7 @@ func TestHangupStopsUncertainWatchdog(t *testing.T) {
 		require.NoError(t, err)
 		flaky := &flakyConfirmations{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
 		flaky.fail.Store(true)
+		flaky.allow.Store(1) // the seq read at detection succeeds; begin cannot read
 		p.store = flaky
 		e, err := p.relayRecoveryEpisode(context.Background(), c, time.Now().Add(-relayRecoveryLimit+50*time.Millisecond))
 		require.NoError(t, err)
