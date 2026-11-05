@@ -89,7 +89,13 @@ adapter shell command or pass credentials to it.
 The bridge publishes setup evidence, then waits for `begin` before spawning the load
 process. Pre-dial signal RTTs can reject a far caller without dialing. A dedicated
 ten-probe registration burst preserves nanosecond RTTs and the existing 10 ms
-threshold. Feed delivery uses the child's literal loopback API. Terminal hangup is
+threshold. Feed delivery uses the child's literal loopback API. Each `arm` feed
+carries the operator's confirmed probe count. Its ack carries only the probes from
+that index, so ack size does not grow with the run. The broker appends a delta only
+when its start index is not past the confirmed count, any overlap repeats confirmed
+probes exactly, and send times increase. Any other delta stops later arms. This is
+caller contract version 2; a bridge and an operator on other versions refuse each
+other's manifest. Terminal hangup is
 watched independently while probe/feed delivery is pending. Generator abort precedes
 evidence publication. All abort routes share one SIGINT/SIGKILL grace timer.
 

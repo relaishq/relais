@@ -105,8 +105,8 @@ func (b *composedBox) Create(ctx context.Context, key string, raw []byte) operat
 	}
 	ack, err := operatorcaller.Deliver(ctx, feed, b.sessions, func(_ context.Context, path string, in, out any) error {
 		switch path {
-		case "/clock-probes":
-			*out.(*json.RawMessage) = json.RawMessage(`[]`)
+		case "/clock-probes?after=0":
+			*out.(*[]callharness.ClockProbe) = []callharness.ClockProbe{}
 		case "/record-events":
 			b.delivered += len(in.([]operatorcaller.Receipt))
 		}
@@ -161,7 +161,7 @@ func TestComposedProcedureCallerPool(t *testing.T) {
 				base := phase.Probes[0].Send
 				at := base.Add(123 * time.Second)
 				identity := operatorcaller.Identity{RunID: input.RunID, Gate: operator.Load, Phase: operatorcaller.Survivor, CallerID: fmt.Sprint(index + 1), Attempt: "1", PublicSHA: strings.Repeat("a", 40)}
-				manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: base.UnixMilli(), CreatedAt: base.UnixMilli(), Deadline: base.Add(20 * time.Minute).UnixMilli(), Plan: operatorcaller.NewPlan(identity.Phase, 120, identity.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: input.RunID, Signaling: "https://signal.test/calls", Relay: "192.0.2.1:24700", FrontendControlBoundNS: 1, FrontendWorkerBoundNS: 1, DriftPPM: 100}}
+				manifest := operatorcaller.Manifest{Version: operatorcaller.ManifestVersion, Identity: identity, ArmedAt: base.UnixMilli(), CreatedAt: base.UnixMilli(), Deadline: base.Add(20 * time.Minute).UnixMilli(), Plan: operatorcaller.NewPlan(identity.Phase, 120, identity.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: input.RunID, Signaling: "https://signal.test/calls", Relay: "192.0.2.1:24700", FrontendControlBoundNS: 1, FrontendWorkerBoundNS: 1, DriftPPM: 100}}
 				clock := composedClock{at}
 				box := &composedBox{t: t, manifest: manifest, sessions: phase.Sessions, clock: clock, values: map[string][]byte{}}
 				ctx, cancel := context.WithCancel(context.WithValue(context.Background(), retentionRequired{}, exitCollection && index == 0))

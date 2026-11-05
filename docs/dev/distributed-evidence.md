@@ -33,7 +33,8 @@ promise of unlimited memory. Default online video decoding remains unchanged.
 The caller samples the authenticated frontend `/clock` before setup and every
 10 seconds. It uses the same trusted HTTP client as signaling and status.
 `GET /clock-probes` on the caller's loopback operator endpoint exposes the
-samples. Each final call report also retains the samples and host bounds.
+samples. `GET /clock-probes?after=N` returns only the samples from index `N`
+onward. Each final call report also retains the samples and host bounds.
 
 ## Arm, act, then deliver the durable receipt
 

@@ -64,6 +64,10 @@ type Broker struct {
 	FirstFaultAt                    *time.Time
 	ReadyObservedAt, MediaStartedAt time.Time
 	Events                          []Receipt
+	// ClockProbes are the caller's probes confirmed by arm acks. The count is
+	// the cursor of the next arm; after a continuity error it stops growing.
+	ClockProbes []callharness.ClockProbe
+	probeErr    error
 }
 
 func NewBroker(m Manifest, box *Mailbox, c Clock, f Fence) (*Broker, error) {
@@ -254,14 +258,18 @@ func (b *Broker) Arm(ctx context.Context, operation string, ids []callharness.Op
 		}
 		delete(expected, id.SessionID)
 	}
-	ack, err := b.Feed(ctx, operation, Payload{Kind: "arm", Identities: ids, Deadline: time.UnixMilli(b.Manifest.Deadline)}, end)
+	if b.probeErr != nil {
+		return b.probeErr
+	}
+	ack, err := b.Feed(ctx, operation, Payload{Kind: "arm", Identities: ids, Deadline: time.UnixMilli(b.Manifest.Deadline), ClockProbesAfter: len(b.ClockProbes)}, end)
 	if err != nil {
 		return err
 	}
 	if !sameIdentities(ack.Identities, ids) {
 		return errors.New("arm-ack-identity")
 	}
-	return nil
+	b.ClockProbes, b.probeErr = AppendProbes(b.ClockProbes, ack.ClockProbes)
+	return b.probeErr
 }
 func sameIdentities(a, b []callharness.OperationIdentity) bool {
 	if len(a) > maxSafeInteger || len(b) > maxSafeInteger || len(a) != len(b) {

@@ -78,7 +78,7 @@ func put(t *testing.T, m *memoryBox, key string, value any) {
 func fixtureManifest() Manifest {
 	at := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
 	i := Identity{"run-fixture", operator.Rollout, Survivor, "1", "1", strings.Repeat("a", 40)}
-	return Manifest{1, i, at.UnixMilli(), at.UnixMilli(), at.Add(20 * time.Minute).UnixMilli(), NewPlan(Survivor, 60, i.PublicSHA), Endpoints{RunID: i.RunID, Signaling: "https://signal.example.test/calls", Relay: "192.0.2.1:24780", FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000, DriftPPM: 10}}
+	return Manifest{ManifestVersion, i, at.UnixMilli(), at.UnixMilli(), at.Add(20 * time.Minute).UnixMilli(), NewPlan(Survivor, 60, i.PublicSHA), Endpoints{RunID: i.RunID, Signaling: "https://signal.example.test/calls", Relay: "192.0.2.1:24780", FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000, DriftPPM: 10}}
 }
 func fixtureBurst(at time.Time) Burst {
 	var probes []Probe

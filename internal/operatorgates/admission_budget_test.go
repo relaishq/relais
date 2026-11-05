@@ -81,7 +81,7 @@ func TestResourceAdmissionCountsActualPhaseGap(t *testing.T) {
 	s.capabilities[operator.CallerStop] = true
 	clock := s.clock.(*FakeClock)
 	id := operatorcaller.Identity{RunID: "run-load-budget", Gate: operator.Load, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: runtime.Pins[0].Commit}
-	m := operatorcaller.Manifest{Version: 1, Identity: id, ArmedAt: clock.Wall().UnixMilli(), CreatedAt: clock.Wall().UnixMilli(), Deadline: clock.Wall().Add(12 * time.Minute).UnixMilli(), Plan: operatorcaller.NewPlan(id.Phase, 240, id.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: id.RunID, Signaling: "https://signal.test/calls", Relay: runtime.Config.Parameters.Workers["w1"].Media.String(), DriftPPM: 1}}
+	m := operatorcaller.Manifest{Version: operatorcaller.ManifestVersion, Identity: id, ArmedAt: clock.Wall().UnixMilli(), CreatedAt: clock.Wall().UnixMilli(), Deadline: clock.Wall().Add(12 * time.Minute).UnixMilli(), Plan: operatorcaller.NewPlan(id.Phase, 240, id.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: id.RunID, Signaling: "https://signal.test/calls", Relay: runtime.Config.Parameters.Workers["w1"].Media.String(), DriftPPM: 1}}
 	boundaryStarted := false
 	store := budgetCallerStore{read: func(key string) operatorcaller.ReadResult {
 		var data []byte

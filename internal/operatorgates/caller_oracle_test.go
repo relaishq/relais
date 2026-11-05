@@ -12,6 +12,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -100,8 +101,8 @@ func (b *oracleCallerBox) Create(ctx context.Context, key string, data []byte) o
 			b.arms++
 		case "/record-events":
 			b.receipts++
-		case "/clock-probes":
-			*output.(*json.RawMessage) = json.RawMessage(`[]`)
+		case "/clock-probes?after=0":
+			*output.(*[]callharness.ClockProbe) = []callharness.ClockProbe{}
 		default:
 			b.t.Fatal("unexpected child API", path)
 		}
@@ -168,7 +169,7 @@ func TestComposedTrialOracle(t *testing.T) {
 					o.sync()
 					now := o.clock.Wall()
 					identity := operatorcaller.Identity{RunID: input.Broker.M.RunID, Gate: operator.Rollout, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: strings.Repeat("a", 40)}
-					manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: now.UnixMilli(), CreatedAt: now.UnixMilli(), Deadline: input.Deadline, Plan: operatorcaller.NewPlan(identity.Phase, 60, identity.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: identity.RunID, Signaling: "https://signal.test/calls", Relay: "192.0.2.1:24700", FrontendControlBoundNS: 1, FrontendWorkerBoundNS: 1, DriftPPM: 100}}
+					manifest := operatorcaller.Manifest{Version: operatorcaller.ManifestVersion, Identity: identity, ArmedAt: now.UnixMilli(), CreatedAt: now.UnixMilli(), Deadline: input.Deadline, Plan: operatorcaller.NewPlan(identity.Phase, 60, identity.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: identity.RunID, Signaling: "https://signal.test/calls", Relay: "192.0.2.1:24700", FrontendControlBoundNS: 1, FrontendWorkerBoundNS: 1, DriftPPM: 100}}
 					box := &oracleCallerBox{t: t, oracle: o, manifest: manifest, values: map[string][]byte{}}
 					broker, err := operatorcaller.NewBroker(manifest, operatorcaller.NewMailbox(box), oracleCallerClock{o.clock}, &oracleCallerFence{})
 					if err != nil {

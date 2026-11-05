@@ -157,7 +157,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	makeCaller := func(gate operator.Gate, phase operatorcaller.Phase, seconds int, callerEnd time.Duration) (*ResourcePorts, *operatorcaller.Broker, error) {
 		identity := operatorcaller.Identity{RunID: c.Endpoints.RunID, Gate: gate, Phase: phase, CallerID: strconv.FormatUint(next, 10), Attempt: "1", PublicSHA: s.scenario.Caller.SourceCommit}
 		next++
-		manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: s.Budget.armed, CreatedAt: s.clock.Wall().UnixMilli(), Deadline: wall(callerEnd).UnixMilli(), Plan: operatorcaller.NewPlan(phase, seconds, identity.PublicSHA), Endpoints: c.Endpoints}
+		manifest := operatorcaller.Manifest{Version: operatorcaller.ManifestVersion, Identity: identity, ArmedAt: s.Budget.armed, CreatedAt: s.clock.Wall().UnixMilli(), Deadline: wall(callerEnd).UnixMilli(), Plan: operatorcaller.NewPlan(phase, seconds, identity.PublicSHA), Endpoints: c.Endpoints}
 		port := &ResourcePorts{Session: s, Peer: peer, End: callerEnd, Manifest: manifest}
 		broker, err := operatorcaller.NewBroker(manifest, operatorcaller.NewMailbox(port), resourceCallerClock{s.clock, pause}, s)
 		return port, broker, err

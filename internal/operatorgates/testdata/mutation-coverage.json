@@ -330,7 +330,21 @@
     "batch-child-uncertainty-dropped",
     "batch-shared-host-parallel-probes",
     "measure-restoration-not-latched",
-    "measure-restoration-hides-call-loss"
+    "measure-restoration-hides-call-loss",
+    "probe-child-ignores-cursor",
+    "probe-feed-polls-full-list",
+    "probe-bridge-ignores-cursor",
+    "probe-arm-cursor-not-confirmed",
+    "probe-arm-cursor-skips",
+    "probe-arm-delta-unchecked",
+    "probe-continuity-not-latched",
+    "probe-delta-contract-optional",
+    "probe-changed-repeat-dropped",
+    "probe-exact-repeat-rejected",
+    "probe-order-unchecked",
+    "probe-partial-delta-confirmed",
+    "probe-delta-reencoded",
+    "caller-contract-version-unchecked"
   ],
   "killed": [
     {
@@ -2932,6 +2946,104 @@
       "id": "batch-shared-host-parallel-probes",
       "test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-child-ignores-cursor",
+      "test": "TestServeClockProbesAfterCursor",
+      "package": "./internal/loadgen",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-feed-polls-full-list",
+      "test": "TestProbeFramesUnderLimitAt16384",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-bridge-ignores-cursor",
+      "test": "TestProbeFramesUnderLimitAt16384",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-arm-cursor-not-confirmed",
+      "test": "TestIncrementalProbesMatchFullList",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-arm-cursor-skips",
+      "test": "TestIncrementalProbesMatchFullList",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-arm-delta-unchecked",
+      "test": "TestIncrementalProbesMatchFullList",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-continuity-not-latched",
+      "test": "TestProbeContinuityErrorLatches",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-delta-contract-optional",
+      "test": "TestAppendProbesContinuity",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-changed-repeat-dropped",
+      "test": "TestAppendProbesContinuity",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-exact-repeat-rejected",
+      "test": "TestLostProbeAckResendsFromConfirmedCursor",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-order-unchecked",
+      "test": "TestAppendProbesContinuity",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-partial-delta-confirmed",
+      "test": "TestAppendProbesContinuity",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "probe-delta-reencoded",
+      "test": "TestIncrementalProbesMatchFullList",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-contract-version-unchecked",
+      "test": "TestManifestVersionRefusesOtherContracts",
+      "package": "./internal/operatorcaller",
       "evidence": "killed",
       "guardFingerprint": ""
     }

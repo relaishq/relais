@@ -448,7 +448,7 @@ func (r *rehearsal) newCaller(ctx context.Context, g operator.Gate, seconds int,
 		deadline = maximum
 	}
 	identity := operatorcaller.Identity{RunID: r.run, Gate: g, Phase: operatorcaller.Survivor, CallerID: id, Attempt: "1", PublicSHA: ReleaseACommit}
-	manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: r.process.ArmedAt.UnixMilli(), CreatedAt: now.UnixMilli(), Deadline: deadline.UnixMilli(), Plan: operatorcaller.NewPlan(identity.Phase, seconds, ReleaseACommit), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
+	manifest := operatorcaller.Manifest{Version: operatorcaller.ManifestVersion, Identity: identity, ArmedAt: r.process.ArmedAt.UnixMilli(), CreatedAt: now.UnixMilli(), Deadline: deadline.UnixMilli(), Plan: operatorcaller.NewPlan(identity.Phase, seconds, ReleaseACommit), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
 	b, err := operatorcaller.NewBroker(manifest, r.box, operatorcaller.SystemClock{}, r.session)
 	if err != nil {
 		return err

@@ -59,14 +59,18 @@ func TestRegistrationAckNeedsMoreThanOneMinute(t *testing.T) {
 func TestCollectProbesUsesUnchangedLoaderCadence(t *testing.T) {
 	start := time.Now().Add(time.Hour)
 	clock := &testClock{start}
-	burst, err := CollectProbes(context.Background(), ClockBurstCount, start.Add(2*time.Minute), func(_ context.Context, _ string, _, value any) error {
+	burst, err := CollectProbes(context.Background(), ClockBurstCount, start.Add(2*time.Minute), func(_ context.Context, path string, _, value any) error {
 		n := min(ClockBurstCount, 1+int(clock.Now().Sub(start)/(10*time.Second)))
 		probes := make([]callharness.ClockProbe, n)
 		for i := range probes {
 			at := start.Add(time.Duration(i) * 10 * time.Second)
 			probes[i] = callharness.ClockProbe{CallerSend: at, CallerReceive: at.Add(time.Millisecond), ServerReceive: at.Add(time.Microsecond), ServerSend: at.Add(2 * time.Microsecond)}
 		}
-		*value.(*[]callharness.ClockProbe) = probes
+		after, err := strconv.Atoi(strings.TrimPrefix(path, "/clock-probes?after="))
+		if err != nil || after > n {
+			t.Fatal("probe cursor", path)
+		}
+		*value.(*[]callharness.ClockProbe) = probes[after:]
 		return nil
 	}, clock)
 	if err != nil || len(burst.Probes) != 10 || clock.Now().Sub(start) != 90*time.Second {

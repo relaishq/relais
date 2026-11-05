@@ -3677,5 +3677,150 @@
     "Test": "TestMeasureRestorationFailureStopsSuccessors/restoration-call-loss",
     "Marker": "MUTATION: measure-restoration-latch",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "probe-child-ignores-cursor",
+    "File": "internal/loadgen/distributed.go",
+    "Function": "ServeClockProbes",
+    "Old": "Encode(probes[after:])",
+    "New": "Encode(probes[after-after:])",
+    "Test": "TestServeClockProbesAfterCursor",
+    "Marker": "MUTATION: probe-cursor-ignored",
+    "Package": "./internal/loadgen"
+  },
+  {
+    "ID": "probe-feed-polls-full-list",
+    "File": "internal/operatorcaller/feed.go",
+    "Function": "CollectProbes",
+    "Old": "probesAfter(len(raw))",
+    "New": "probesAfter(0)",
+    "Test": "TestProbeFramesUnderLimitAt16384",
+    "Marker": "MUTATION: probe-feed-incremental",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-bridge-ignores-cursor",
+    "File": "internal/operatorcaller/feed.go",
+    "Function": "Deliver",
+    "Old": "delta := ProbeDelta{From: p.ClockProbesAfter}",
+    "New": "delta := ProbeDelta{}",
+    "Test": "TestProbeFramesUnderLimitAt16384",
+    "Marker": "MUTATION: probe-frame-size",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-arm-cursor-not-confirmed",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Arm",
+    "Receiver": "Broker",
+    "Old": "ClockProbesAfter: len(b.ClockProbes)",
+    "New": "ClockProbesAfter: 0",
+    "Test": "TestIncrementalProbesMatchFullList",
+    "Marker": "MUTATION: probe-confirmed-cursor",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-arm-cursor-skips",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Arm",
+    "Receiver": "Broker",
+    "Old": "ClockProbesAfter: len(b.ClockProbes)",
+    "New": "ClockProbesAfter: len(b.ClockProbes) + 1",
+    "Test": "TestIncrementalProbesMatchFullList",
+    "Marker": "MUTATION: probe-confirmed-cursor",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-arm-delta-unchecked",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Arm",
+    "Receiver": "Broker",
+    "Old": "b.ClockProbes, b.probeErr = AppendProbes(b.ClockProbes, ack.ClockProbes)\n\treturn b.probeErr",
+    "New": "return nil",
+    "Test": "TestIncrementalProbesMatchFullList",
+    "Marker": "MUTATION: probe-confirmed-cursor",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-continuity-not-latched",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Arm",
+    "Receiver": "Broker",
+    "Old": "if b.probeErr != nil {",
+    "New": "if false && b.probeErr != nil {",
+    "Test": "TestProbeContinuityErrorLatches",
+    "Marker": "MUTATION: probe-continuity-latch",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-delta-contract-optional",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "AppendProbes",
+    "Old": "observe.Contract{\"from\", \"probes\", ",
+    "New": "observe.Contract{\"from\", ",
+    "Test": "TestAppendProbesContinuity",
+    "Marker": "MUTATION: probe-continuity",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-changed-repeat-dropped",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "AppendProbes",
+    "Old": "if !bytes.Equal(old, repeat) {",
+    "New": "if false && !bytes.Equal(old, repeat) {",
+    "Test": "TestAppendProbesContinuity",
+    "Marker": "MUTATION: probe-continuity",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-exact-repeat-rejected",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "AppendProbes",
+    "Old": "d.From > len(confirmed)",
+    "New": "d.From != len(confirmed)",
+    "Test": "TestLostProbeAckResendsFromConfirmedCursor",
+    "Marker": "MUTATION: probe-retry-duplicates",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-order-unchecked",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "AppendProbes",
+    "Old": "if len(out) > 0 && !p.CallerSend.After(",
+    "New": "if false && len(out) > 0 && !p.CallerSend.After(",
+    "Test": "TestAppendProbesContinuity",
+    "Marker": "MUTATION: probe-continuity",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-partial-delta-confirmed",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "AppendProbes",
+    "Old": "return confirmed, errors.New(\"clock-probe-order\")",
+    "New": "return out, errors.New(\"clock-probe-order\")",
+    "Test": "TestAppendProbesContinuity",
+    "Marker": "MUTATION: probe-continuity",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "probe-delta-reencoded",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "AppendProbes",
+    "Old": "out = append(out, p)",
+    "New": "p.CallerSend = p.CallerSend.UTC()\n\t\tout = append(out, p)",
+    "Test": "TestIncrementalProbesMatchFullList",
+    "Marker": "MUTATION: probe-full-list-identity",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-contract-version-unchecked",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "Validate",
+    "Receiver": "Manifest",
+    "Old": "m.Version != ManifestVersion ||",
+    "New": "m.Version < 1 ||",
+    "Test": "TestManifestVersionRefusesOtherContracts",
+    "Marker": "MUTATION: caller-contract-version",
+    "Package": "./internal/operatorcaller"
   }
 ]

@@ -1,6 +1,7 @@
 package operatorcaller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +21,11 @@ import (
 )
 
 const maxSafeInteger = 9007199254740991
+
+// ManifestVersion is the caller/operator contract version. A bridge and an
+// operator on different versions refuse each other's manifest. Version 2 arm
+// acks carry only the probes after the operator's confirmed cursor.
+const ManifestVersion = 2
 
 const (
 	// CallerMaximum includes startup, media, evidence collection and stop.
@@ -135,7 +142,7 @@ func (m Manifest) Validate(i Identity, now time.Time) error {
 	if m.Gate == operator.Failover && m.Plan.DurationSeconds < 1020 {
 		return errors.New("insufficient-failover-duration")
 	}
-	if m.Version != 1 || m.Identity != i || m.PublicSHA != m.Plan.PublicSHA || m.Phase != m.Plan.Phase || m.ArmedAt < 0 || m.CreatedAt < m.ArmedAt || m.CreatedAt > now.UnixMilli() || m.Deadline <= now.UnixMilli() || m.Deadline-m.ArmedAt > int64(105*time.Minute/time.Millisecond) || m.Deadline-m.CreatedAt > int64(CallerMaximum/time.Millisecond) || int64(m.Plan.DurationSeconds)*1000+120000 > m.Deadline-now.UnixMilli() || m.Endpoints.RunID != i.RunID {
+	if m.Version != ManifestVersion || m.Identity != i || m.PublicSHA != m.Plan.PublicSHA || m.Phase != m.Plan.Phase || m.ArmedAt < 0 || m.CreatedAt < m.ArmedAt || m.CreatedAt > now.UnixMilli() || m.Deadline <= now.UnixMilli() || m.Deadline-m.ArmedAt > int64(105*time.Minute/time.Millisecond) || m.Deadline-m.CreatedAt > int64(CallerMaximum/time.Millisecond) || int64(m.Plan.DurationSeconds)*1000+120000 > m.Deadline-now.UnixMilli() || m.Endpoints.RunID != i.RunID {
 		return errors.New("invalid-caller-manifest")
 	}
 	e := m.Endpoints
@@ -186,6 +193,38 @@ func (b Burst) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ProbeDelta is an arm ack's clock probes: the caller's probes from index From.
+type ProbeDelta struct {
+	From   int                      `json:"from"`
+	Probes []callharness.ClockProbe `json:"probes"`
+}
+
+// AppendProbes joins one arm ack's delta to the confirmed probes. An overlap
+// with confirmed probes must repeat them exactly and is dropped. A gap, a
+// changed repeat, or a send time that does not increase is an error.
+func AppendProbes(confirmed []callharness.ClockProbe, raw json.RawMessage) ([]callharness.ClockProbe, error) {
+	var d ProbeDelta
+	if observe.DecodeLimit(raw, &d, observe.Contract{"from", "probes", "probes[].caller_send", "probes[].caller_receive", "probes[].server_receive", "probes[].server_send"}, operator.MaxBlobBytes) != nil || d.From < 0 || d.From > len(confirmed) {
+		return confirmed, errors.New("clock-probe-gap")
+	}
+	overlap := min(len(confirmed)-d.From, len(d.Probes))
+	for i, p := range d.Probes[:overlap] {
+		old, _ := json.Marshal(confirmed[d.From+i])
+		repeat, _ := json.Marshal(p)
+		if !bytes.Equal(old, repeat) {
+			return confirmed, errors.New("clock-probe-repeat")
+		}
+	}
+	out := slices.Clip(confirmed)
+	for _, p := range d.Probes[overlap:] {
+		if len(out) > 0 && !p.CallerSend.After(out[len(out)-1].CallerSend) {
+			return confirmed, errors.New("clock-probe-order")
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 type Registration struct {
@@ -247,6 +286,8 @@ type Payload struct {
 	Identities []callharness.OperationIdentity `json:"identities,omitempty"`
 	Receipts   []Receipt                       `json:"receipts,omitempty"`
 	Reason     string                          `json:"reason,omitempty"`
+	// ClockProbesAfter is the operator's confirmed probe count for an arm.
+	ClockProbesAfter int `json:"clockProbesAfter,omitempty"`
 }
 type Feed struct {
 	SchemaVersion int     `json:"schemaVersion"`

@@ -44,6 +44,7 @@ func TestOracleBrokerCallbacks(t *testing.T) {
 					if err = json.Unmarshal(e.Inputs[0], &m); err != nil {
 						t.Fatal(err)
 					}
+					currentVersion(&m)
 					break
 				}
 			}
@@ -60,6 +61,7 @@ func TestOracleBrokerCallbacks(t *testing.T) {
 				outcome operatorcaller.CreateState
 			}
 			var expected []publication
+			armAcks := map[string]bool{}
 			for _, e := range fixture.Events {
 				if e.Kind != "request" {
 					continue
@@ -72,7 +74,20 @@ func TestOracleBrokerCallbacks(t *testing.T) {
 					if r.Completion == "threw" {
 						state = operatorcaller.CreateUnknown
 					}
-					expected = append(expected, publication{key, e.Inputs[1], state})
+					value := e.Inputs[1]
+					if strings.HasSuffix(key, "/transport.json") {
+						var archived map[string]any
+						_ = json.Unmarshal(value, &archived)
+						if archived["version"] == 1.0 {
+							archived["version"] = operatorcaller.ManifestVersion
+						}
+						value, _ = json.Marshal(archived)
+					}
+					expected = append(expected, publication{key, value, state})
+					var feed operatorcaller.Feed
+					if strings.Contains(key, "/feed/") && json.Unmarshal(value, &feed) == nil && feed.Payload.Kind == "arm" {
+						armAcks[fmt.Sprintf("%s/acks/%05d.json", m.Job(), feed.Sequence)] = true
+					}
 				}
 				if e.Operation == "broker.PreviewBroker.wait" {
 					var key string
@@ -80,6 +95,14 @@ func TestOracleBrokerCallbacks(t *testing.T) {
 					r := results[e.ID]
 					if r.Completion == "returned" {
 						box.data[key] = oracleJSON(r.Value)
+						if armAcks[key] {
+							// Archived arm acks predate contract version 2 deltas.
+							// An empty delta keeps every archived cursor at zero.
+							var ack map[string]any
+							_ = json.Unmarshal(box.data[key], &ack)
+							ack["clockProbes"] = operatorcaller.ProbeDelta{Probes: []callharness.ClockProbe{}}
+							box.data[key], _ = json.Marshal(ack)
+						}
 					}
 				}
 			}
@@ -249,6 +272,7 @@ func TestOracleCallerManifests(t *testing.T) {
 			if len(req.Inputs) != 3 || json.Unmarshal(req.Inputs[0], &m) != nil || json.Unmarshal(req.Inputs[1], &i) != nil || json.Unmarshal(req.Inputs[2], &now) != nil {
 				t.Fatal("manifest fixture input")
 			}
+			currentVersion(&m)
 			err := m.Validate(i, time.UnixMilli(now))
 			wantError := e.Completion == "threw"
 			if name == "26b5fb0694a332d7.json" && e.ID == 7 {
@@ -270,6 +294,14 @@ func TestOracleCallerManifests(t *testing.T) {
 		t.Fatal("no manifests")
 	}
 	t.Log(fmt.Sprint("manifest assertions: ", count))
+}
+
+// The archive predates caller/operator contract version 2. Map only its
+// version 1 so any other archived version stays rejected.
+func currentVersion(m *operatorcaller.Manifest) {
+	if m.Version == 1 {
+		m.Version = operatorcaller.ManifestVersion
+	}
 }
 
 type testClock struct{ at time.Time }

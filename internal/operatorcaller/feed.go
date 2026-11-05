@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/relaishq/relais/internal/loadgen"
@@ -22,11 +23,13 @@ func CollectProbes(ctx context.Context, count int, end time.Time, local Local, c
 	}
 	ctx, cancel := context.WithDeadline(ctx, end)
 	defer cancel()
+	var raw []callharness.ClockProbe
 	for c.Now().Before(end) {
-		var raw []callharness.ClockProbe
-		if err := local(ctx, "/clock-probes", nil, &raw); err != nil {
+		var next []callharness.ClockProbe
+		if err := local(ctx, probesAfter(len(raw)), nil, &next); err != nil {
 			return Burst{}, err
 		}
+		raw = append(raw, next...)
 		probes := make([]Probe, 0, count)
 		for _, p := range raw[:min(count, len(raw))] {
 			if observe.Numbers(p) != nil {
@@ -52,6 +55,10 @@ func CollectProbes(ctx context.Context, count int, end time.Time, local Local, c
 	}
 	return Burst{}, errors.New("caller-probe-deadline")
 }
+
+// probesAfter reads only the child's probes from index n onward.
+func probesAfter(n int) string { return "/clock-probes?after=" + strconv.Itoa(n) }
+
 func Deliver(ctx context.Context, record Feed, sessions []string, local Local, hangup func(), c Clock) (Ack, error) {
 	ack := Ack{RunID: record.RunID, Job: "caller-1", Sequence: record.Sequence, OperationID: record.OperationID}
 	p := record.Payload
@@ -70,6 +77,9 @@ func Deliver(ctx context.Context, record Feed, sessions []string, local Local, h
 		if !c.Now().Before(p.Deadline) {
 			return ack, errors.New("expired-arm")
 		}
+		if p.ClockProbesAfter < 0 {
+			return ack, errors.New("invalid-probe-cursor")
+		}
 		for _, id := range p.Identities {
 			if !slices.Contains(sessions, id.SessionID) {
 				continue
@@ -82,9 +92,11 @@ func Deliver(ctx context.Context, record Feed, sessions []string, local Local, h
 			}
 			ack.Identities = append(ack.Identities, id)
 		}
-		if err := local(ctx, "/clock-probes", nil, &ack.ClockProbes); err != nil {
+		delta := ProbeDelta{From: p.ClockProbesAfter}
+		if err := local(ctx, probesAfter(delta.From), nil, &delta.Probes); err != nil {
 			return ack, err
 		}
+		ack.ClockProbes, _ = json.Marshal(delta)
 	case "receipt":
 		receipts := make([]Receipt, 0, len(p.Receipts))
 		for _, r := range p.Receipts {

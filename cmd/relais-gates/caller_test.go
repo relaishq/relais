@@ -97,7 +97,7 @@ func TestCallerBinaryUsesMailboxAdapter(t *testing.T) {
 			root := t.TempDir()
 			now := time.Now()
 			i := operatorcaller.Identity{RunID: "run-adapter", Gate: operator.Rollout, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: strings.Repeat("a", 40)}
-			manifest := operatorcaller.Manifest{Version: 1, Identity: i, ArmedAt: now.Add(-20 * time.Second).UnixMilli(), CreatedAt: now.Add(-20 * time.Second).UnixMilli(), Deadline: now.Add(5 * time.Minute).UnixMilli(), Plan: operatorcaller.NewPlan(i.Phase, 1, i.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: i.RunID, Signaling: "https://127.0.0.1:1/calls", Relay: "192.0.2.1:24780", FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000, DriftPPM: 10}}
+			manifest := operatorcaller.Manifest{Version: operatorcaller.ManifestVersion, Identity: i, ArmedAt: now.Add(-20 * time.Second).UnixMilli(), CreatedAt: now.Add(-20 * time.Second).UnixMilli(), Deadline: now.Add(5 * time.Minute).UnixMilli(), Plan: operatorcaller.NewPlan(i.Phase, 1, i.PublicSHA), Endpoints: operatorcaller.Endpoints{RunID: i.RunID, Signaling: "https://127.0.0.1:1/calls", Relay: "192.0.2.1:24780", FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000, DriftPPM: 10}}
 			if err := manifest.Validate(i, now); err != nil {
 				t.Fatal(err)
 			}

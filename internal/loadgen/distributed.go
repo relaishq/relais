@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,12 +117,27 @@ func registerDistributedFeed(mux *http.ServeMux, calls []*callharness.Call) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
 	})
-	mux.HandleFunc("GET /clock-probes", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /clock-probes", func(w http.ResponseWriter, r *http.Request) {
 		if len(calls) == 0 {
 			return
 		}
-		_ = json.NewEncoder(w).Encode(calls[0].ClockProbes())
+		ServeClockProbes(w, r, calls[0].ClockProbes())
 	})
+}
+
+// ServeClockProbes returns the probes from the optional after cursor onward,
+// so the operator bridge reads only probes the operator has not confirmed.
+func ServeClockProbes(w http.ResponseWriter, r *http.Request, probes []callharness.ClockProbe) {
+	after := 0
+	if r.URL.Query().Has("after") {
+		n, err := strconv.Atoi(r.URL.Query().Get("after"))
+		if err != nil || n < 0 || n > len(probes) {
+			http.Error(w, "invalid probe cursor", http.StatusBadRequest)
+			return
+		}
+		after = n
+	}
+	_ = json.NewEncoder(w).Encode(probes[after:])
 }
 
 // A missing transport sample leaves prior probes and their drift widening
