@@ -342,6 +342,9 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 			id, _, lease, err := a.CreateSessionAtRelay(context.Background(), "offer", "r1")
 			require.NoError(t, err)
 			p.calls[id] = &call{id: id, lease: lease, relayCapable: true, relaySlot: "r1", relayWake: make(chan struct{}, 1)}
+			// Without an accepted mode, begin refuses the episode and the call
+			// never dispatches, so the bound would time one call's queue position.
+			require.NoError(t, p.acceptRelayMode(context.Background(), p.calls[id], sessionstore.RelayConfirmDelivery))
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
