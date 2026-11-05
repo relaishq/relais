@@ -7,6 +7,10 @@
   "archive_layout": 1,
   "store_contract": 3,
   "scripts": {
+    "clearInvalidRelayConfirmationLua": {
+      "sha": "f657ebaf57aa1827c2200f90e629fb4c1f7a3d03",
+      "unchanged_tuples": "New cleanup operation deletes only invalid or absent confirmation fields. Valid persisted tuples and existing wire behaviour are unchanged."
+    },
     "componentCommitLua": {
       "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
     },
