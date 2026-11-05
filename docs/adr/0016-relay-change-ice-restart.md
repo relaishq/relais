@@ -1,10 +1,15 @@
 # ADR 0016: Move live calls to a new relay address through ICE restart
 
-Status: **Accepted** 2026-11-02 by the project lead (proposed 2026-10-29), including the 2026-11-01 amendment and its detail defaults.
+Status: **Accepted** 2026-11-02 by the project lead (proposed 2026-10-29), including the 2026-11-01 amendment and its detail defaults. The 2026-11-05 amendment was accepted by the owner on 2026-11-05.
 
 **Amended 2026-11-01 (owner decision A+C).** Receiver reports give a fast
 delivery signal; a capable caller reports decoded media through signaling.
 The amendment defines completion in sections 5, 7 and 10.
+
+**Amended 2026-11-05 (owner decision 2026-11-04, [#380](https://github.com/relaishq/relais/issues/380)).**
+Relay state that is in no release is not migrated. Section 10 rule 3 now
+refuses or discards it. The refusals in rules 5 and 6 do not change. See
+[the amendment in section 10](#amendment-2026-11-05-no-migration-for-unreleased-state).
 
 Part of [#278](https://github.com/relaishq/relais/issues/278), step 3 of the
 scale-to-zero map [#275](https://github.com/relaishq/relais/issues/275).
@@ -593,9 +598,9 @@ Preflight rules:
    as section 5 requires. There is no implicit C downgrade.
 3. Calls without `media_progress` use persisted `delivery` mode if
    `relay_change` is true, otherwise `none`. A call without a saved mode has
-   `none`. There is no in-place migration (owner decision 2026-11-04: relay
-   change is unreleased); records or journal entries in an unknown format are
-   refused and treated as stale.
+   `none`. Unreleased state is not migrated (amendment 2026-11-05 below). A
+   confirmation record in an unknown format is refused. A journal entry in an
+   unknown format is deleted as stale.
 4. Before acknowledging any A, control must persist the union of MIDs fenced
    against supersession, abort and timeout. A restart restores it before
    processing reports, retries or timeout. The write that supplies the last
@@ -622,6 +627,43 @@ Preflight rules:
    contract or an episode is unfinished. Signaling cannot roll back while an
    A-capable call exists. Drain or end such calls first; commit-only completion
    cannot substitute for either confirmation mode.
+
+### Amendment 2026-11-05: no migration for unreleased state
+
+Owner decision 2026-11-04, recorded for
+[#380](https://github.com/relaishq/relais/issues/380). It applies the
+[compatibility rule](../../CODING_STANDARDS.md#compatibility) for formats that
+are in no release.
+
+As accepted on 2026-11-02, rule 3 required a migration at upgrade:
+
+> Calls created by the upgraded control without `media_progress` use persisted
+> `delivery` mode if `relay_change` is true, otherwise `none`. At upgrade,
+> existing relay-capable calls with no stored mode are assigned `delivery`
+> before any further change; they do not remain commit-only. Calls without
+> `relay_change` get `none`. This migration never invents A support. Completed
+> historical commits are not relabelled as C proof. An unfinished episode keeps
+> its original detection time and must collect fresh C within the remaining
+> deadline. If its worker lacks C, apply section 7's unsupported-worker rule.
+
+That migration served only state that no release contains. Relay change
+(`d5735a6`), the confirmation record and the episode journal are not in
+`v0.3.0` or `v0.3.1`. The #278 confirmation change (`a524555`) replaced the
+migration text in rule 3 without a dated note. This amendment records that
+change and makes the refusal exact:
+
+- A call without a saved mode has mode `none`. Control does not start a relay
+  change for it, and relay loss ends it with `relay_lost`. It is never given
+  `delivery` mode after create.
+- A confirmation record in an unknown format is refused. It accepts no A or C
+  evidence and completes no attempt. An attempt without a saved store-clock
+  bound accepts no evidence.
+- At control restart, a `relay-recovery-unsupported` watchdog entry has no
+  `seq` and is restored. A journal entry with an unknown kind, or a
+  `relay-recovery` entry without `seq`, is deleted as stale.
+
+Rules 5 and 6 do not change. They refuse to move a call to, or roll back to, a
+version that cannot read its state. They are refusals, not migration paths.
 
 ### Implementation note (2026-11-04): confirmation choices left open
 

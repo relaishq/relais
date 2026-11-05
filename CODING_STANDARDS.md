@@ -37,3 +37,4 @@ Reviewers apply this checklist to each change. `make check` enforces the mechani
 ## Compatibility
 
 - Preserve legacy echo and demo behaviour, golden fixtures and documented guarantees unless the ticket says otherwise.
+- A format or contract that is in no release needs no migration and no mixed-version path. Check with `git tag --contains <commit>`. Refuse an unknown or old unreleased format cleanly: return an explicit error, or discard it as stale. Never guess what it means. Released contracts, golden fixtures, documented guarantees and ADR restrictions still apply. `compat check --base` checks only the generated manifest and how each contract changes. It does not prove that a live pool is safe; `relais-compat preflight` checks the running pool before each rollout step ([release compatibility](scripts/release/README.md)).
