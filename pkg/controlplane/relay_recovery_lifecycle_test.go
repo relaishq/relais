@@ -350,7 +350,7 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 		}
 		// The batch bound is loose on purpose. The memory store serializes all
 		// 200 calls behind one lock, so under -race the last calls can queue
-		// for seconds (5 of 400 local runs passed 4 s; Redis 0 of 400). The
+		// for seconds (5 of 400 local runs exceeded 4 s; Redis 0 of 400). The
 		// latency claim is the first-dispatch bound below.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
