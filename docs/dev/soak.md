@@ -315,7 +315,7 @@ The registered `load-calibration.yml` workflow has a separate `soak` job,
 90-minute job budget and 80-minute measurement budget. It does not invoke
 `crash-run`. Nightly uses six calls for 10m10s, giving 20 events. The exact
 95% rule tolerates one inconclusive event. It uses 30-second events, seed
-41, three workers, two callers per generator, ubuntu-latest, namespace LAN and
+41, three workers, two callers per generator, ubuntu-24.04, namespace LAN and
 measured worker/relay floors of eight. Runner metadata, report and every child
 log are uploaded always, including failure. Namespace cleanup is checked.
 
