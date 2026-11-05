@@ -35,6 +35,68 @@ return {1}
 
 var relayConfirmationScript = redis.NewScript(relayConfirmationLua)
 
+const clearInvalidRelayConfirmationLua = `
+local v=redis.call('HMGET',KEYS[1],'worker','expires','relay_confirmation','relay_confirmation_state','relay_episode')
+local t=redis.call('TIME')
+local now=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
+if not v[1] or tonumber(v[2])<=now then return 0 end
+if ARGV[4]~='' and now>tonumber(ARGV[4]) then return -4 end
+if (v[3] or '')~=ARGV[1] or (v[4] or '')~=ARGV[2] or (v[5] or '')~=ARGV[3] then return -3 end
+redis.call('HDEL',KEYS[1],'relay_confirmation','relay_confirmation_state','relay_episode')
+return 1
+`
+
+var clearInvalidRelayConfirmationScript = redis.NewScript(clearInvalidRelayConfirmationLua)
+
+func (r *Redis) ClearInvalidRelayConfirmation(ctx context.Context, id string, notAfter time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, transitionCommandLimit)
+	defer cancel()
+	key := r.keys(id)[0]
+	var fields []interface{}
+	err := r.observe("relay_confirmation_clear_read", func() error {
+		var err error
+		fields, err = r.client.HMGet(ctx, key, "relay_confirmation", "relay_confirmation_state", "relay_episode").Result()
+		return err
+	})
+	if err != nil {
+		return classify("relay_confirmation_clear_read", err)
+	}
+	var saved [3]string
+	for i, field := range fields {
+		if field != nil {
+			saved[i] = field.(string)
+		}
+	}
+	if _, err := decodeRelayConfirmation(saved[0], saved[1], saved[2]); !errors.Is(err, ErrRelayConfirmationInvalid) && saved != [3]string{} {
+		return ErrRelayConflict
+	}
+	bound := ""
+	if !notAfter.IsZero() {
+		bound = strconv.FormatInt(notAfter.UnixMilli(), 10)
+	}
+	var result int
+	err = r.observe("relay_confirmation_clear", func() error {
+		var err error
+		result, err = clearInvalidRelayConfirmationScript.Run(ctx, r.client, []string{key}, saved[0], saved[1], saved[2], bound).Int()
+		return err
+	})
+	if err != nil {
+		return classify("relay_confirmation_clear", err)
+	}
+	switch result {
+	case 1:
+		return nil
+	case 0:
+		return ErrNotFound
+	case -3:
+		return ErrRelayConflict
+	case -4:
+		return ErrRelayAttemptExpired
+	default:
+		return fmt.Errorf("sessionstore: unexpected relay confirmation clear result %v", result)
+	}
+}
+
 func (r *Redis) RelayConfirmation(ctx context.Context, id string) (RelayAssignment, RelayConfirmation, error) {
 	ctx, cancel := context.WithTimeout(ctx, transitionCommandLimit)
 	defer cancel()

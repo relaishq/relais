@@ -85,7 +85,7 @@ const (
 // relayRecoveryEpisode creates or joins the call's episode and journals its
 // proposal. The journal stores the first detection time, so a busy operation
 // or a repeated caller request cannot buy another 15 seconds. The proposal's
-// seq is read at detection; an unreadable seq creates nothing, so a proposal
+// seq is read at detection; an uncertain read creates nothing, so a proposal
 // is never rebased past a later success. The watcher starts only once the
 // journal is reconciled and the final proposal is journaled.
 func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time.Time, snapshot ...map[string]sessionstore.ControlIntent) (*relayEpisode, error) {
@@ -112,7 +112,12 @@ func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time
 			if err != nil {
 				return nil, err
 			}
-			intent.Kind, intent.Seq = relayIntentKind, seq+1
+			c.stateMu.Lock()
+			capable = c.relayCapable // an invalid record was cleared to mode none
+			c.stateMu.Unlock()
+			if capable {
+				intent.Kind, intent.Seq = relayIntentKind, seq+1
+			}
 		}
 		c.relayEpisode = newRelayEpisode(intent)
 	}
@@ -160,11 +165,11 @@ func deleteRelayProposal(ctx context.Context, journal sessionstore.ControlStore,
 
 // relaySeq reads the call's decision counter.
 func (p *Plane) relaySeq(ctx context.Context, c *call) (uint64, error) {
-	store, ok := p.store.(sessionstore.RelayConfirmations)
+	_, ok := p.store.(sessionstore.RelayConfirmations)
 	if !ok {
 		return 0, nil
 	}
-	_, rec, err := store.RelayConfirmation(ctx, c.id)
+	_, rec, err := p.relayConfirmationOrClear(ctx, c)
 	if err != nil || rec.Episode == nil {
 		return 0, err
 	}
@@ -187,6 +192,10 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 			return
 		}
 		outcome := p.armRelayEpisode(c, e)
+		if outcome == relayArmed && e.unsupported() {
+			p.watchUnsupportedEpisode(c, e)
+			return
+		}
 		if outcome == relayArmed {
 			timer := time.NewTimer(time.Until(e.deadline))
 			select {
@@ -201,8 +210,8 @@ func (p *Plane) watchRelayEpisode(c *call, e *relayEpisode) {
 		}
 		switch outcome {
 		case relayEnded:
-			p.publishRelayEnd(c)
-			p.finishRelayEnd(c, e)
+			p.publishRelayEnd(c, "relay_change_failed")
+			p.finishRelayEnd(c, e, "relay_change_failed")
 		case relayCompleted, relayGone, relayStale:
 			p.cleanupRelayEpisode(context.Background(), c, e)
 		case relayStandDown:
@@ -340,6 +349,9 @@ func (p *Plane) reproposeRelayEpisode(ctx context.Context, c *call, e *relayEpis
 	if err != nil {
 		return relayUncertain
 	}
+	if rec.Mode == "" || rec.Mode == sessionstore.RelayConfirmNone {
+		return relayStale
+	}
 	p.mu.Lock()
 	lost := p.relaySet[a.Slot].lost
 	p.mu.Unlock()
@@ -386,16 +398,30 @@ func (p *Plane) journalRelayProposal(ctx context.Context, c *call, e *relayEpiso
 // pending or switched, owned by no episode, and aimed at a live slot (an
 // in-flight switch to a live target is eligible even if its source is lost).
 func (p *Plane) beginRelayEpisode(ctx context.Context, c *call, e *relayEpisode) relayOutcome {
-	store, ok := p.store.(sessionstore.RelayConfirmations)
+	_, ok := p.store.(sessionstore.RelayConfirmations)
 	if !ok {
 		return relayStale
 	}
-	a, rec, err := store.RelayConfirmation(ctx, c.id)
+	a, rec, err := p.relayConfirmationOrClear(ctx, c)
 	if errors.Is(err, sessionstore.ErrNotFound) {
 		return relayGone
 	}
 	if err != nil {
 		return relayUncertain
+	}
+	if rec.Mode == "" || rec.Mode == sessionstore.RelayConfirmNone {
+		// Keep the token and detection time; a same-token journal rewrite is
+		// idempotent, and the existing driver and watcher follow mode none.
+		// The lock keeps detection from writing the old kind back.
+		c.relayEpisodeMu.Lock()
+		defer c.relayEpisodeMu.Unlock()
+		intent := e.proposal()
+		intent.Kind, intent.Seq = relayIntentKindUnsupported, 0
+		e.setProposal(intent)
+		if p.store.(sessionstore.ControlStore).PutControlIntent(ctx, intent) != nil {
+			return relayUncertain
+		}
+		return relayArmed
 	}
 	ep, token := rec.Episode, e.proposal().Token
 	if ep != nil && ep.Token == token {
@@ -546,9 +572,9 @@ func noteRelayEnd(c *call, rec sessionstore.RelayConfirmation) {
 
 // publishRelayEnd tells the caller after a definite end. It never waits for
 // the call lock, so a busy operation cannot delay it.
-func (p *Plane) publishRelayEnd(c *call) {
+func (p *Plane) publishRelayEnd(c *call, reason string) {
 	c.stateMu.Lock()
-	c.relayEndReason = "relay_change_failed"
+	c.relayEndReason = reason
 	select {
 	case c.relayWake <- struct{}{}:
 	default:
@@ -560,7 +586,7 @@ func (p *Plane) publishRelayEnd(c *call) {
 // finishRelayEnd cancels the running operation and ends the session under the
 // call lock. While authority is absent it releases the call and keeps
 // watching; a call that ends meanwhile closes the episode.
-func (p *Plane) finishRelayEnd(c *call, e *relayEpisode) {
+func (p *Plane) finishRelayEnd(c *call, e *relayEpisode, reason string) {
 	c.controlMu.Lock()
 	if c.relayCancel != nil {
 		c.relayCancel()
@@ -576,7 +602,7 @@ func (p *Plane) finishRelayEnd(c *call, e *relayEpisode) {
 			c.stateMu.Lock()
 			lease := c.lease
 			c.stateMu.Unlock()
-			p.endRelayFailure(c, lease, "relay_change_failed")
+			p.endRelayFailure(c, lease, reason)
 			c.mu.Unlock()
 			p.cleanupRelayEpisode(context.Background(), c, e)
 			return
@@ -594,7 +620,7 @@ func (p *Plane) finishRelayEnd(c *call, e *relayEpisode) {
 
 // watchUnsupportedEpisode is the detection-based watchdog for calls without
 // relay change (mode none). Such calls write no confirmation record and have
-// no success path, so the deadline ends them directly, without begin.
+// no success path, so the deadline ends them without a confirmation decision.
 func (p *Plane) watchUnsupportedEpisode(c *call, e *relayEpisode) {
 	timer := time.NewTimer(time.Until(e.deadline))
 	select {
@@ -609,8 +635,8 @@ func (p *Plane) watchUnsupportedEpisode(c *call, e *relayEpisode) {
 		}
 		return
 	}
-	p.publishRelayEnd(c)
-	p.finishRelayEnd(c, e)
+	p.publishRelayEnd(c, "relay_lost")
+	p.finishRelayEnd(c, e, "relay_lost")
 }
 
 // relayWatchHooks is a test barrier for watcher transitions; unset in
@@ -929,7 +955,7 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 		cancelEnd()
 		switch outcome {
 		case relayEnded:
-			p.publishRelayEnd(c)
+			p.publishRelayEnd(c, "relay_change_failed")
 			p.endRelayFailure(c, lease, "relay_change_failed")
 			p.cleanupRelayEpisode(ctx, c, e)
 			return errRelayEpisodeEnded

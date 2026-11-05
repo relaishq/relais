@@ -595,7 +595,9 @@ Preflight rules:
    `relay_change` is true, otherwise `none`. A call without a saved mode has
    `none`. There is no in-place migration (owner decision 2026-11-04: relay
    change is unreleased); records or journal entries in an unknown format are
-   refused and treated as stale.
+   refused and treated as stale. Control deletes an undecodable confirmation
+   record and its journal entry. It logs the session ID and reason. The call
+   then has no saved mode.
 4. Before acknowledging any A, control must persist the union of MIDs fenced
    against supersession, abort and timeout. A restart restores it before
    processing reports, retries or timeout. The write that supplies the last
