@@ -134,6 +134,10 @@ func ProbeClock(ctx context.Context, client *http.Client, endpoint string) (Cloc
 	return p, err
 }
 
+// maxClockProbes leaves room for event-adjacent bursts (at most 63 probes per
+// event) beside the 10 s background cadence. Reaching it invalidates the run.
+const maxClockProbes = 16384
+
 // ClockTracker retains timestamp probes. A detected jump invalidates the run,
 // including earlier events; accepting a later sample cannot repair clock trust.
 type ClockTracker struct {
@@ -201,7 +205,7 @@ func (c *ClockTracker) Add(p ClockProbe) error {
 		c.invalid = err
 		return err
 	}
-	if len(c.probes) >= 4096 {
+	if len(c.probes) >= maxClockProbes {
 		c.invalid = errors.New("clock probe capacity exceeded")
 		return c.invalid
 	}

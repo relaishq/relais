@@ -90,13 +90,14 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	if err != nil {
 		return err
 	}
+	var bursts *eventBursts
 	if o.Distributed != nil {
 		clock, err := startDistributedClock(ctx, o.Topology.SignalingURL, o.Topology.HTTPClient, *o.Distributed)
 		if err != nil {
 			return err
 		}
 		defer clock.stop()
-		o.Topology.Distributed = clock.options
+		o.Topology.Distributed, bursts = clock.options, clock.bursts
 	}
 	if o.ParentPID == 0 {
 		o.ParentPID = os.Getppid()
@@ -180,7 +181,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	started := false
 	mux := http.NewServeMux()
 	if o.Distributed != nil {
-		registerDistributedFeed(mux, calls)
+		registerDistributedFeed(mux, calls, bursts)
 	}
 	if o.Soak {
 		registerMemoryDiagnostics(mux, calls)

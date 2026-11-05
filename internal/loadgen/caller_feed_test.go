@@ -40,7 +40,8 @@ func TestDistributedFeedWithVideoPacers(t *testing.T) {
 		require.NoError(t, err)
 	}
 	mux := http.NewServeMux()
-	registerDistributedFeed(mux, calls)
+	bursts := newEventBursts()
+	registerDistributedFeed(mux, calls, bursts)
 	post := func(path string, body any) {
 		data, e := json.Marshal(body)
 		require.NoError(t, e)
@@ -63,6 +64,15 @@ func TestDistributedFeedWithVideoPacers(t *testing.T) {
 		}
 		post("/record-events", events)
 		time.Sleep(30 * time.Millisecond)
+	}
+	// Each accepted arm started a burst; each recorded receipt left only the
+	// trailing probes. A rejected arm starts nothing.
+	unknown := httptest.NewRecorder()
+	mux.ServeHTTP(unknown, httptest.NewRequest(http.MethodPost, "/arm-event", bytes.NewReader([]byte(`{"run_id":"feed-test","operation_id":"x","session_id":"none","worker":"0","epoch":1}`))))
+	require.Equal(t, http.StatusBadRequest, unknown.Code)
+	require.Len(t, bursts.due, 30)
+	for _, due := range bursts.due {
+		require.Equal(t, burstTrailingProbes, due)
 	}
 	handling := time.Since(began)
 	for range calls {
