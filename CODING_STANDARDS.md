@@ -1,6 +1,6 @@
 # Coding standards
 
-Reviewers apply this checklist to each change. `make check` enforces the mechanical rules: shipped-code example dependencies, behaviour names, shared Redis test endpoints, workflow Redis ports, local paths in Markdown, lint version parity, and configured formatting.
+Reviewers apply this checklist to each change. `make check` enforces the mechanical rules: shipped-code example dependencies, behaviour names, shared Redis test endpoints, workflow Redis ports, versioned runner labels, local paths in Markdown, lint version parity, and configured formatting.
 
 ## Claims match evidence
 
@@ -17,6 +17,7 @@ Reviewers apply this checklist to each change. `make check` enforces the mechani
 - Use typed errors on move, takeover and placement paths. Classify definite and uncertain outcomes. Bound each retry and end it with a typed outcome. See [ADR 0002](docs/adr/0002-checkpoint-age-envelope.md) on uncertain ownership and terminal accounting, and [ADR 0008](docs/adr/0008-store-outage-budget.md) on command and retry bounds.
 - Never drop input and report that nothing happened. Never report a refusal as success. Preserve accepted input and explicit outcomes as described in [ADR 0010](docs/adr/0010-pluggable-agents.md).
 - A fail-closed path must not turn a survivable fault into a dropped call. Preserve live calls through transient store faults under [ADR 0008](docs/adr/0008-store-outage-budget.md). A successful hang-up is a terminal end, not a loss ([ADR 0002](docs/adr/0002-checkpoint-age-envelope.md)).
+- Decide competing terminal outcomes in the store. When more than one path can write a terminal outcome (for example, end versus success), one durable atomic decision chooses it: a compare-and-set or an equivalent store transaction. Every effect the caller can see follows the stored outcome. An in-memory lock cannot order store writes. See the episode decision in [ADR 0016](docs/adr/0016-relay-change-ice-restart.md#implementation-note-2026-11-04-confirmation-choices-left-open).
 
 ## Repeating defect classes
 
@@ -36,3 +37,4 @@ Reviewers apply this checklist to each change. `make check` enforces the mechani
 ## Compatibility
 
 - Preserve legacy echo and demo behaviour, golden fixtures and documented guarantees unless the ticket says otherwise.
+- A format or contract that is in no release needs no migration and no mixed-version path. Check with `git tag --contains <commit>`. Refuse an unknown or old unreleased format cleanly: return an explicit error, or discard it as stale. Never guess what it means. Released contracts, golden fixtures, documented guarantees and ADR restrictions still apply. `compat check --base` checks only the generated manifest and how each contract changes. It does not prove that a live pool is safe; `relais-compat preflight` checks the running pool before each rollout step ([release compatibility](scripts/release/README.md)).

@@ -106,7 +106,7 @@ check-quality: ## Run every PR quality gate in CI order
 	$(MAKE) test-operator
 	$(MAKE) check-rules
 
-check-rules: ## Enforce behaviour names, Redis safety, doc paths and lint version
+check-rules: ## Enforce behaviour names, Redis safety, runner labels, doc paths and lint version
 	python3 scripts/ci/check_rules.py
 
 test-external-module: ## Build the supported external-module API without CGO

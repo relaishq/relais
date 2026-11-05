@@ -1,0 +1,28 @@
+[
+  {
+    "ID": "ufrag-zero-prefix-accepted",
+    "File": "internal/iceufrag/ufrag.go",
+    "Function": "Parse",
+    "Old": "suffix == \"\" || suffix[0] == '0'",
+    "New": "suffix == \"\"",
+    "Test": "TestGenerationUfragRejectsAmbiguousSuffix",
+    "Marker": "Should be false",
+    "Package": "./internal/iceufrag"
+  },
+  {
+    "ID": "ufrag-generation-zero-suffixed",
+    "File": "internal/iceufrag/ufrag.go",
+    "Old": "\tif generation == 0 {\n\t\treturn id\n\t}\n",
+    "New": "",
+    "Test": "TestGenerationUfragRoundTrip",
+    "Marker": "Should be true",
+    "Package": "./internal/iceufrag"
+  },
+  {
+    "ID": "ufrag-colon-id-accepted",
+    "Patch": "iceufrag-colon-id.patch",
+    "Test": "TestGenerationUfragRejectsAmbiguousSuffix",
+    "Marker": "Should be false",
+    "Package": "./internal/iceufrag"
+  }
+]

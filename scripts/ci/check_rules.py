@@ -15,6 +15,7 @@ PROCESS_WORDS = {'review', 'reviews', 'reviewer', 'reviewers', 'reviewed', 'revi
 REDIS_VARS = {'RELAIS_TEST_REDIS_ADDR', 'RELAIS_TEST_REDIS_CLUSTER_ADDRS'}
 GO_TOKEN = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|`[^`]*`|\'(?:\\.|[^\'\\])*\'|[^\W\d]\w*|[^\s]')
 HOME_PATH = re.compile(r'/(?:Users|home)/(?!\$)[^/\s`\"\'<>]+(?:/|(?=$|[\s`\"\'<>]))|/private/tmp/|/var/folders/')
+FLOATING_RUNNER = re.compile(r'(?<![\w.-])(?:ubuntu|macos|windows)-latest(?:-[\w-]+)?(?![\w.-])', re.I)
 URL = re.compile(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>`\"\']+')
 
 
@@ -134,6 +135,12 @@ def workflow_errors(path, source):
             active = False
         if active and re.search(r':0*6379(?:\b|/)', clean):
             errors.append(f'{path}:{line}: Redis address uses 6379; set a dedicated test endpoint')
+    # A runner label can reach runs-on through matrix values, dispatch inputs
+    # and expression fallbacks, so reject the alias anywhere outside comments.
+    for line, text in enumerate(source.splitlines(), 1):
+        for match in FLOATING_RUNNER.finditer(strip_yaml_comment(text)):
+            errors.append(f'{path}:{line}: floating runner label {match[0]}; '
+                          'select a versioned image label, such as ubuntu-24.04 or macos-26')
     return errors
 
 
@@ -204,7 +211,7 @@ def main():
     if errors:
         print('\n'.join(errors), file=sys.stderr)
         return 1
-    print('Repository rules passed (behaviour names, Redis endpoints, workflow ports, doc paths, lint version, release binaries).')
+    print('Repository rules passed (behaviour names, Redis endpoints, workflow ports, runner labels, doc paths, lint version, release binaries).')
     return 0
 
 

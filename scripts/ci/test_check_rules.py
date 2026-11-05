@@ -82,6 +82,46 @@ class RedisEndpoints(unittest.TestCase):
             self.assertFalse(source_errors(path, good), good)
 
 
+class RunnerLabels(unittest.TestCase):
+    path = '.github/workflows/ci.yml'
+
+    def assertFloating(self, workflow):
+        errors = source_errors(self.path, workflow)
+        self.assertTrue(errors, workflow)
+        self.assertIn('ubuntu-24.04', errors[0])
+
+    def test_direct_label_fails(self):
+        self.assertFloating('jobs:\n  test:\n    runs-on: ubuntu-latest')
+        self.assertFloating('runs-on: macos-latest-xlarge')
+
+    def test_quoted_label_fails(self):
+        self.assertFloating('runs-on: "macos-latest"')
+        self.assertFloating("runs-on: 'Windows-Latest'")
+
+    def test_list_label_fails(self):
+        self.assertFloating('runs-on: [self-hosted, ubuntu-latest]')
+        self.assertFloating('runs-on:\n  - ubuntu-latest')
+
+    def test_matrix_value_fails(self):
+        self.assertFloating('strategy:\n  matrix:\n    include:\n      - runner: macos-latest\nruns-on: ${{ matrix.runner }}')
+        self.assertFloating('matrix:\n  os: [ubuntu-24.04, windows-latest]')
+
+    def test_dispatch_input_default_fails(self):
+        self.assertFloating('on:\n  workflow_dispatch:\n    inputs:\n      runner_label:\n        default: ubuntu-latest\n'
+                            'jobs:\n  soak:\n    runs-on: ${{ inputs.runner_label }}')
+
+    def test_expression_fallback_fails(self):
+        self.assertFloating("runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}")
+
+    def test_comment_is_ignored(self):
+        self.assertFalse(source_errors(self.path, 'runs-on: ubuntu-24.04 # not ubuntu-latest\n# runs-on: macos-latest'))
+
+    def test_versioned_labels_pass(self):
+        for label in ('ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-15', 'macos-26', 'windows-2025',
+                      "${{ inputs.runner_label || 'ubuntu-24.04' }}", '[self-hosted, linux]'):
+            self.assertFalse(source_errors(self.path, 'runs-on: ' + label), label)
+
+
 class PortableDocs(unittest.TestCase):
     def test_local_paths_fail(self):
         for path in ('/Users/someone/work/', '/home/someone/work/',
