@@ -339,21 +339,24 @@ func TestEndedEpisodeRefusesAcknowledgement(t *testing.T) {
 	}
 }
 
-// ambiguousStore applies a confirmation write and then reports an uncertain
-// error, as a timeout after the write would. With drift set it applies a
-// record whose episode differs from the requested one.
+// ambiguousStore, while lose is set, applies a confirmation write and then
+// reports an uncertain error, as a timeout after the write would. With drift
+// set it applies a record whose episode differs from the requested one.
 type ambiguousStore struct {
-	*sessionstore.Memory
-	drift atomic.Bool
+	relayStore
+	lose, drift atomic.Bool
 }
 
 func (s *ambiguousStore) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	if !s.lose.Load() {
+		return s.relayStore.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+	}
 	if s.drift.Load() && to.Episode != nil {
 		episode := *to.Episode
 		episode.Detail = "drifted"
 		to.Episode = &episode
 	}
-	if err := s.Memory.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter); err != nil {
+	if err := s.relayStore.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter); err != nil {
 		return err
 	}
 	return errors.New("store reply lost")
@@ -363,19 +366,55 @@ func (s *ambiguousStore) CASRelayConfirmation(ctx context.Context, id string, at
 // the episode included.
 func TestReadBackComparesWholeEpisode(t *testing.T) {
 	for _, drift := range []bool{false, true} {
-		store := &ambiguousStore{Memory: sessionstore.NewMemory()}
-		p, _, _, id := relayFailurePlane(t, store)
-		a, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
-		require.NoError(t, err)
-		next := rec
-		next.Episode = &sessionstore.RelayEpisode{Seq: 1, Token: "t", StoreDeadline: time.Now().Add(time.Minute), Outcome: sessionstore.RelayEpisodeOpen}
-		store.drift.Store(drift)
-		err = p.decisionCAS(context.Background(), id, a, rec, next, time.Time{}, time.Time{})
-		if drift {
-			require.Error(t, err, "an episode-only difference is a different record")
-		} else {
-			require.NoError(t, err, "the read-back proves an exact write")
-		}
+		t.Run(map[bool]string{false: "exact", true: "drift"}[drift], func(t *testing.T) {
+			forBudgetRetryStores(t, func(t *testing.T, backing sessionstore.Store) {
+				store := &ambiguousStore{relayStore: backing.(relayStore)}
+				p, _, _, id := relayFailurePlane(t, store)
+				a, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+				require.NoError(t, err)
+				next := rec
+				next.Episode = &sessionstore.RelayEpisode{Seq: 1, Token: "t", StoreDeadline: time.Now().Add(time.Minute), Outcome: sessionstore.RelayEpisodeOpen}
+				store.lose.Store(true)
+				store.drift.Store(drift)
+				err = p.decisionCAS(context.Background(), id, a, rec, next, time.Time{}, time.Time{})
+				if drift {
+					require.Error(t, err, "an episode-only difference is a different record")
+				} else {
+					require.NoError(t, err, "the read-back proves an exact write")
+				}
+			})
+		})
+	}
+}
+
+// An end write that lands but loses its reply is settled by its read-back:
+// the end is definite at once. A record that differs from the requested end
+// stays uncertain.
+func TestUncertainEndWriteIsReadBack(t *testing.T) {
+	for _, drift := range []bool{false, true} {
+		t.Run(map[bool]string{false: "exact", true: "drift"}[drift], func(t *testing.T) {
+			forBudgetRetryStores(t, func(t *testing.T, backing sessionstore.Store) {
+				store := &ambiguousStore{relayStore: backing.(relayStore)}
+				p, _, _, id := relayFailurePlane(t, store)
+				stopRelayRecoveries(t, p)
+				c, err := p.lookup(id)
+				require.NoError(t, err)
+				a, rec, err := store.RelayConfirmation(context.Background(), id)
+				require.NoError(t, err)
+				open := rec
+				open.Episode = &sessionstore.RelayEpisode{Seq: 1, Token: randomEpisodeToken(), StoreDeadline: time.Now().Add(time.Minute), Outcome: sessionstore.RelayEpisodeOpen}
+				require.NoError(t, store.CASRelayConfirmation(context.Background(), id, a, rec, open, time.Time{}, time.Time{}))
+				store.lose.Store(true)
+				store.drift.Store(drift)
+				outcome := p.endRelayEpisode(context.Background(), c, open.Episode.Token, "relay_change_failed", false)
+				require.Equal(t, sessionstore.RelayEpisodeEnded, episodeOf(t, store, id).Outcome, "the end write landed")
+				if drift {
+					require.Equal(t, relayUncertain, outcome, "a different stored end is not this write")
+				} else {
+					require.Equal(t, relayEnded, outcome, "the read-back proves the uncertain end write")
+				}
+			})
+		})
 	}
 }
 
@@ -820,12 +859,12 @@ func TestImmediateEndFollowsCompletedEpisode(t *testing.T) {
 // lostReplyJournal applies one journal Put and then reports an error, as a
 // write whose reply was lost.
 type lostReplyJournal struct {
-	*sessionstore.Memory
+	relayStore
 	drop atomic.Bool
 }
 
 func (s *lostReplyJournal) PutControlIntent(ctx context.Context, intent sessionstore.ControlIntent) error {
-	if err := s.Memory.PutControlIntent(ctx, intent); err != nil {
+	if err := s.relayStore.PutControlIntent(ctx, intent); err != nil {
 		return err
 	}
 	if s.drop.CompareAndSwap(true, false) {
@@ -838,37 +877,39 @@ func (s *lostReplyJournal) PutControlIntent(ctx context.Context, intent sessions
 // error is retried with the same token, so the episode still arms and is
 // decided at its deadline instead of minting tokens the journal refuses.
 func TestUncertainReproposalWriteStillArms(t *testing.T) {
-	store := &lostReplyJournal{Memory: sessionstore.NewMemory()}
-	p, _, _, id := relayFailurePlane(t, store)
-	stopRelayRecoveries(t, p)
-	c, err := p.lookup(id)
-	require.NoError(t, err)
-	markLost(p, "r1")
-	events := watchEvents(t, c)
-	c.stateMu.Lock()
-	lease := c.lease
-	c.stateMu.Unlock()
-	stale := sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKind, Started: time.Now().Add(time.Second - relayRecoveryLimit), Lease: lease, Seq: 7}
-	require.NoError(t, store.PutControlIntent(context.Background(), stale))
-	store.drop.Store(true) // the replacement's Put lands, its reply is lost
-	e := p.installRelayEpisode(c, stale)
-	awaitEvent(t, events, "reproposed")
-	select {
-	case <-e.armed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the episode never armed after an uncertain proposal write")
-	}
-	ep := episodeOf(t, store, id)
-	require.True(t, ep.Open())
-	require.Equal(t, e.proposal().Token, ep.Token)
-	records, err := store.ControlIntents(context.Background())
-	require.NoError(t, err)
-	var journaled []string
-	for _, r := range records {
-		if r.ID == stale.ID {
-			journaled = append(journaled, r.Token)
+	forBudgetRetryStores(t, func(t *testing.T, backing sessionstore.Store) {
+		store := &lostReplyJournal{relayStore: backing.(relayStore)}
+		p, _, _, id := relayFailurePlane(t, store)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		markLost(p, "r1")
+		events := watchEvents(t, c)
+		c.stateMu.Lock()
+		lease := c.lease
+		c.stateMu.Unlock()
+		stale := sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKind, Started: time.Now().Add(time.Second - relayRecoveryLimit), Lease: lease, Seq: 7}
+		require.NoError(t, store.PutControlIntent(context.Background(), stale))
+		store.drop.Store(true) // the replacement's Put lands, its reply is lost
+		e := p.installRelayEpisode(c, stale)
+		awaitEvent(t, events, "reproposed")
+		select {
+		case <-e.armed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the episode never armed after an uncertain proposal write")
 		}
-	}
-	require.Equal(t, []string{ep.Token}, journaled, "the journal holds the token that began")
-	require.Eventually(t, func() bool { return endReason(c) == "relay_change_failed" }, 5*time.Second, 5*time.Millisecond, "the episode is decided at its deadline")
+		ep := episodeOf(t, store, id)
+		require.True(t, ep.Open())
+		require.Equal(t, e.proposal().Token, ep.Token)
+		records, err := store.ControlIntents(context.Background())
+		require.NoError(t, err)
+		var journaled []string
+		for _, r := range records {
+			if r.ID == stale.ID {
+				journaled = append(journaled, r.Token)
+			}
+		}
+		require.Equal(t, []string{ep.Token}, journaled, "the journal holds the token that began")
+		require.Eventually(t, func() bool { return endReason(c) == "relay_change_failed" }, 5*time.Second, 5*time.Millisecond, "the episode is decided at its deadline")
+	})
 }

@@ -191,10 +191,16 @@ func TestLateEvidenceNeverCompletes(t *testing.T) {
 	})
 }
 
-type flakyConfirmations struct {
+// relayStore is the store surface the fault wrappers below forward to, so
+// each wrapper runs over the memory and the Redis store alike.
+type relayStore interface {
 	sessionstore.Store
 	sessionstore.RelayConfirmations
 	sessionstore.ControlStore
+}
+
+type flakyConfirmations struct {
+	relayStore
 	fail  atomic.Bool
 	allow atomic.Int32 // reads that still succeed while fail is set
 }
@@ -203,7 +209,7 @@ func (s *flakyConfirmations) RelayConfirmation(ctx context.Context, id string) (
 	if s.fail.Load() && s.allow.Add(-1) < 0 {
 		return sessionstore.RelayAssignment{}, sessionstore.RelayConfirmation{}, sessionstore.ErrTransient
 	}
-	return s.RelayConfirmations.RelayConfirmation(ctx, id)
+	return s.relayStore.RelayConfirmation(ctx, id)
 }
 
 // Finding 6: unavailable store state is uncertain, never expiry: the
@@ -214,7 +220,7 @@ func TestStoreUncertaintyNeverEndsCall(t *testing.T) {
 		stopRelayRecoveries(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		flaky := &flakyConfirmations{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
+		flaky := &flakyConfirmations{relayStore: store.(relayStore)}
 		flaky.fail.Store(true)
 		p.store = flaky
 		require.Equal(t, relayUncertain, p.endRelayEpisode(context.Background(), c, "any", "relay_change_failed", false))
@@ -400,7 +406,7 @@ func TestWatchdogRechecksAuthorityBeforeEnding(t *testing.T) {
 		authorizeTestControl(t, p)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		flaky := &flakyConfirmations{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
+		flaky := &flakyConfirmations{relayStore: store.(relayStore)}
 		flaky.fail.Store(true)
 		flaky.allow.Store(1) // the seq read at detection succeeds; begin cannot read
 		p.store = flaky
@@ -434,7 +440,7 @@ func TestHangupStopsUncertainWatchdog(t *testing.T) {
 		p, _, _, id := relayFailurePlane(t, store)
 		c, err := p.lookup(id)
 		require.NoError(t, err)
-		flaky := &flakyConfirmations{Store: store, RelayConfirmations: store.(sessionstore.RelayConfirmations), ControlStore: store.(sessionstore.ControlStore)}
+		flaky := &flakyConfirmations{relayStore: store.(relayStore)}
 		flaky.fail.Store(true)
 		flaky.allow.Store(1) // the seq read at detection succeeds; begin cannot read
 		p.store = flaky
