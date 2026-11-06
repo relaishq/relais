@@ -168,11 +168,12 @@ def tracking_evidence(cursor=None, run_start_unix_ms=0):
                     skip_line = not fragment.endswith(b'\n') and discard_line(log, info.st_size)
                     position = log.tell()
                 # Either cap loses nothing: the next read resumes at the cursor.
-            if not cursor and info.st_size > READ_LIMIT and run_start_unix_ms > 0:
+            if not cursor and run_start_unix_ms > 0:
                 if rows and not rows[0]['beforeRun']:
                     record('cursor-gap', rows[0]['unixSeconds'], run_start_unix_ms // 1000)
                 elif not rows and wall > run_start_unix_ms * 10**6:
                     record('cursor-gap', since=run_start_unix_ms // 1000)
+                breaks.sort(key=lambda b: b['fromUnixSeconds'])
             log.seek(max(0, position - 256))
             anchor = hashlib.sha256(log.read(min(position, 256))).hexdigest()
         result['cursor'] = dict(file=identity, position=position, anchor=anchor, daemon=daemon,
@@ -192,6 +193,7 @@ def read_clock(cursor=None, run_start_unix_ms=0):
         prior = cursor.get('lastRow') if isinstance(cursor, dict) else None
         now = int(result['measuredUnixNs']) // 10**9
         since = prior['unixSeconds'] if isinstance(prior, dict) else timeline['rows'][0]['unixSeconds'] if timeline['rows'] else now
+        since = min([since] + [b['fromUnixSeconds'] for b in timeline['breaks'] if not b['beforeRun']])
         timeline['rows'] = []
         timeline['breaks'] = [dict(kind='cursor-gap', fromUnixSeconds=min(since, now), unixSeconds=max(since, now), beforeRun=False)]
     return result
