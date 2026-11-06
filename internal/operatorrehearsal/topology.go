@@ -239,7 +239,7 @@ func (d *Deployment) Boot(ctx context.Context) error {
 			return x
 		}
 		bundle["store-ca.pem"] = ca
-		bundle["chrony.conf"] = []byte("server " + TimeIP + " prefer iburst minpoll 0 maxpoll 0\ndriftfile /var/lib/chrony/drift\n")
+		bundle["chrony.conf"] = []byte("server " + TimeIP + " prefer iburst minpoll 0 maxpoll 0\ndriftfile /var/lib/chrony/drift\nlog tracking\nlogdir /var/log/chrony\nmaxclockerror 1\n")
 		bundle["chronyd.conf"] = []byte(chronyDropIn)
 		dir := filepath.Join(d.Work, "hosts", slot)
 		if x = writeFiles(dir, bundle); x != nil {

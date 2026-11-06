@@ -93,16 +93,29 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 
 func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds, end time.Duration) (clocks.Evidence, error) {
 	rows := map[string]clocks.Sample{}
-	err := s.observeHosts(ctx, p, "clock", end, func(string) (string, error) { return host.Clock(), nil }, func(slot, stdout string) error {
-		data, err := host.Unpack(stdout, 16000)
+	err := s.observeHosts(ctx, p, "clock", end, func(slot string) (string, error) {
+		s.mu.Lock()
+		cursor := s.clockCursors[slot]
+		s.mu.Unlock()
+		return host.Clock(cursor, s.Budget.armed), nil
+	}, func(slot, stdout string) error {
+		data, err := host.Unpack(stdout, 256000)
 		if err != nil {
 			return err
 		}
 		rows[slot], err = clocks.Parse(data)
+		if err == nil && rows[slot].TrackingLog != nil {
+			s.mu.Lock()
+			if s.clockCursors == nil {
+				s.clockCursors = map[string]json.RawMessage{}
+			}
+			s.clockCursors[slot] = rows[slot].TrackingLog.Cursor
+			s.mu.Unlock()
+		}
 		return err
 	})
 	if err != nil {
-		return clocks.Evidence{}, err
+		return clocks.Evidence{Version: clocks.EvidenceVersion, At: s.clock.Wall(), Clocks: rows}, err
 	}
 	evidence, err := clocks.Check(rows, bounds)
 	evidence.At = s.clock.Wall()

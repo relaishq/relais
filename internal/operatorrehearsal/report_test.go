@@ -10,6 +10,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -233,5 +234,30 @@ func TestReportRefusesMissingScenarioIdentity(t *testing.T) {
 		if _, err := os.Stat(name); !os.IsNotExist(err) {
 			t.Fatal("identity refusal left a report artifact", err)
 		}
+	}
+}
+
+func TestReportRecordsTrackingWithoutChangingVerdict(t *testing.T) {
+	r := passingReport()
+	r.Evaluate()
+	before, _ := json.Marshal(r.Verdict)
+	r.Clocks = []clocks.Evidence{{Version: clocks.EvidenceVersion, Clocks: map[string]clocks.Sample{"relay": {TrackingLog: &clocks.TrackingLog{
+		Cursor: json.RawMessage(`{"position":1,"anchor":"abc","private-label":true}`),
+		Rows:   []clocks.TrackingRow{{Reference: "private-label", LeapStatus: "+", MaxErrorSeconds: 0.000009}},
+		Breaks: []clocks.TrackingBreak{{Kind: "leap-status", UnixSeconds: 2}},
+	}}}}}
+	r.Evaluate()
+	after, _ := json.Marshal(r.Verdict)
+	var out bytes.Buffer
+	if err := r.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	var saved Report
+	if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	log := saved.Clocks[0].Clocks["relay"].TrackingLog
+	if !bytes.Equal(before, after) || log == nil || len(log.Rows) != 1 || len(log.Breaks) != 1 || strings.Contains(out.String(), "private-label") {
+		t.Fatal("tracking changed policy or was lost", out.String())
 	}
 }

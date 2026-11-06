@@ -62,7 +62,7 @@ func (r *TimingRecorder) RecordClocks(e clocks.Evidence) {
 	rows := map[string]clocks.Sample{}
 	for _, slot := range []string{"relay", "shared", "w1", "w2"} {
 		if sample, ok := e.Clocks[slot]; ok {
-			sample.Tracking = ""
+			sample = clocks.PublicSample(sample)
 			rows[slot] = sample
 		}
 	}

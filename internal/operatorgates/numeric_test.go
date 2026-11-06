@@ -83,3 +83,23 @@ func TestNumericTimingRecorderCapsSnapshotsAndClockRefreshes(t *testing.T) {
 		t.Fatal("numeric retention or redaction failed", r.Err())
 	}
 }
+
+func TestClockRecorderRetainsTrackingTimeline(t *testing.T) {
+	var out bytes.Buffer
+	r := TimingRecorder{Writer: &out}
+	r.RecordClocks(clocks.Evidence{Version: clocks.EvidenceVersion, Clocks: map[string]clocks.Sample{"relay": {TrackingLog: &clocks.TrackingLog{
+		Cursor: json.RawMessage(`{"position":123,"anchor":"abc"}`),
+		Rows:   []clocks.TrackingRow{{UnixSeconds: 1, Reference: "private-label", MaxErrorSeconds: 0.000009, LeapStatus: "N"}},
+		Breaks: []clocks.TrackingBreak{{Kind: "self-consistency", UnixSeconds: 2}},
+	}}}})
+	var got struct {
+		Evidence clocks.Evidence `json:"evidence"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	log := got.Evidence.Clocks["relay"].TrackingLog
+	if r.Err() != nil || log == nil || len(log.Rows) != 1 || len(log.Breaks) != 1 || strings.Contains(out.String(), "private-label") || got.Evidence.Version != 2 {
+		t.Fatal("lost recorded timeline", out.String(), r.Err())
+	}
+}

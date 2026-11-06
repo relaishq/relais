@@ -81,6 +81,21 @@ func TestBootPlanUsesTLSActualTemplateAndServiceAffinity(t *testing.T) {
 	if err = d.Boot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	for _, slot := range Slots {
+		config, err := os.ReadFile(filepath.Join(dir, "work", "hosts", slot, "chrony.conf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, directive := range []string{"log tracking\n", "logdir /var/log/chrony\n", "maxclockerror 1\n"} {
+			if !strings.Contains(string(config), directive) {
+				t.Fatal("tracking log configuration missing", slot, directive)
+			}
+		}
+		dropIn, err := os.ReadFile(filepath.Join(dir, "work", "hosts", slot, "chronyd.conf"))
+		if err != nil || !strings.Contains(string(dropIn), "chronyd -x ") {
+			t.Fatal("rehearsal may adjust the host clock", err)
+		}
+	}
 	booted := map[string]bool{}
 	storeSeen := false
 	proxySeen := false

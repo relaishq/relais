@@ -2,6 +2,8 @@
 package clocks
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -12,17 +14,93 @@ import (
 )
 
 type Sample struct {
-	Tracking       string  `json:"tracking,omitempty"`
-	ErrorBoundNS   int64   `json:"errorBoundNs"`
-	RateErrorPPM   float64 `json:"rateErrorPpm"`
-	MeasuredUnixNS string  `json:"measuredUnixNs"`
+	TrackingLog    *TrackingLog `json:"trackingLog,omitempty"`
+	Tracking       string       `json:"tracking,omitempty"`
+	ErrorBoundNS   int64        `json:"errorBoundNs"`
+	RateErrorPPM   float64      `json:"rateErrorPpm"`
+	MeasuredUnixNS string       `json:"measuredUnixNs"`
 }
+
+// EvidenceVersion covers recorded clock diagnostics, including the optional
+// falsification evidence added in the next slice. It does not version verdicts.
+const EvidenceVersion = 2
+
+type TrackingRow struct {
+	BeforeRun                  bool    `json:"beforeRun"`
+	CombinedSources            int     `json:"combinedSources"`
+	OffsetSDSeconds            float64 `json:"offsetSdSeconds"`
+	RemainingCorrectionSeconds float64 `json:"remainingCorrectionSeconds"`
+	UnixSeconds                int64   `json:"unixSeconds"`
+	Reference                  string  `json:"reference,omitempty"`
+	Stratum                    int     `json:"stratum"`
+	FrequencyPPM               float64 `json:"frequencyPpm"`
+	SkewPPM                    float64 `json:"skewPpm"`
+	OffsetSeconds              float64 `json:"offsetSeconds"`
+	RootDelaySeconds           float64 `json:"rootDelaySeconds"`
+	RootDispersionSeconds      float64 `json:"rootDispersionSeconds"`
+	MaxErrorSeconds            float64 `json:"maxErrorSeconds"`
+	LeapStatus                 string  `json:"leapStatus"`
+}
+type TrackingBreak struct {
+	BeforeRun       bool   `json:"beforeRun"`
+	FromUnixSeconds int64  `json:"fromUnixSeconds"`
+	Kind            string `json:"kind"`
+	UnixSeconds     int64  `json:"unixSeconds"`
+}
+type TrackingLog struct {
+	Cursor         json.RawMessage `json:"cursor"`
+	Rows           []TrackingRow   `json:"rows"`
+	Breaks         []TrackingBreak `json:"breaks"`
+	RunStartUnixMS int64           `json:"runStartUnixMs"`
+}
+
+// PublicSample retains numeric tracking evidence without exposing source identities.
+func PublicSample(s Sample) Sample {
+	s.Tracking = ""
+	if s.TrackingLog == nil {
+		return s
+	}
+	log := *s.TrackingLog
+	log.Rows = append([]TrackingRow{}, log.Rows...)
+	for i := range log.Rows {
+		log.Rows[i].Reference = ""
+		switch log.Rows[i].LeapStatus {
+		case "N", "+", "-", "?":
+		default:
+			log.Rows[i].LeapStatus = "unavailable"
+		}
+	}
+	log.Breaks = append([]TrackingBreak{}, log.Breaks...)
+	for i := range log.Breaks {
+		switch log.Breaks[i].Kind {
+		case "cursor-gap", "log-rotation", "log-loss", "clock-step", "daemon-restart", "source-change", "leap-status", "self-consistency":
+		default:
+			log.Breaks[i].Kind = "unavailable"
+		}
+	}
+	// The live cursor stays in the session. Public evidence retains only its file
+	// position and content anchor, never an opaque host-supplied JSON object.
+	var cursor struct {
+		Position int64  `json:"position"`
+		Anchor   string `json:"anchor"`
+	}
+	if len(log.Cursor) > 0 && string(log.Cursor) != "null" && json.Unmarshal(log.Cursor, &cursor) == nil {
+		cursor.Anchor = fmt.Sprintf("%x", sha256.Sum256([]byte(cursor.Anchor)))
+		log.Cursor, _ = json.Marshal(cursor)
+	} else {
+		log.Cursor = nil
+	}
+	s.TrackingLog = &log
+	return s
+}
+
 type Bounds struct {
 	FrontendControlBoundNS int64   `json:"frontendControlBoundNs"`
 	FrontendWorkerBoundNS  int64   `json:"frontendWorkerBoundNs"`
 	DriftPPM               float64 `json:"driftPpm"`
 }
 type Evidence struct {
+	Version         int `json:"version"`
 	At              time.Time
 	Clocks          map[string]Sample
 	Control, Worker int64
@@ -43,7 +121,7 @@ func Parse(data []byte) (s Sample, err error) {
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
 func Check(rows map[string]Sample, bounds Bounds) (Evidence, error) {
-	e := Evidence{Clocks: rows}
+	e := Evidence{Version: EvidenceVersion, Clocks: rows}
 	if bounds.FrontendControlBoundNS < 0 || bounds.FrontendWorkerBoundNS < 0 || !finite(bounds.DriftPPM) || bounds.DriftPPM < 0 {
 		return e, fmt.Errorf("invalid clock assumptions")
 	}

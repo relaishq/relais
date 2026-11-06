@@ -367,3 +367,73 @@ func TestRuntimeClockCacheOracle(t *testing.T) {
 		t.Fatal("MUTATION: clock-cache refresh and numeric retention")
 	}
 }
+
+func TestTrackingCursorFollowsEachHostAndBreaksStayRecorded(t *testing.T) {
+	s, _ := fixtureSession(t)
+	round := 0
+	peer := &observationPeer{respond: func(req operator.Request) operator.Reply {
+		script := string(req.Script)
+		if !strings.Contains(script, ", 1000000)") {
+			t.Fatal("run start was not sent")
+		}
+		cursor := `{"position":1}`
+		if round > 0 {
+			if !strings.Contains(script, base64.StdEncoding.EncodeToString([]byte(cursor))) {
+				t.Fatal("host cursor was not sent", req.Target)
+			}
+			cursor = `{"position":2}`
+		}
+		return hostReply(t, []byte(`{"errorBoundNs":0,"rateErrorPpm":0,"measuredUnixNs":"1792886400000000000","trackingLog":{"cursor":`+cursor+`,"rows":[],"breaks":[{"kind":"self-consistency","unixSeconds":1792886400}],"runStartUnixMs":1000000}}`))
+	}}
+	for round = 0; round < 2; round++ {
+		e, err := s.FreshClocks(context.Background(), peer, clocks.Bounds{}, time.Minute)
+		if err != nil || len(e.Clocks) != 4 {
+			t.Fatal("tracking changed clock verdict", err)
+		}
+		for _, sample := range e.Clocks {
+			if sample.TrackingLog == nil || len(sample.TrackingLog.Breaks) != 1 {
+				t.Fatal("lost tracking break")
+			}
+		}
+	}
+}
+
+func TestTrackingFailedBatchRefreshIsRecordedAndCountsTowardCap(t *testing.T) {
+	s, _ := fixtureSession(t)
+	s.capabilities[operator.HostReadBatch] = true
+	var output bytes.Buffer
+	recorder := &TimingRecorder{Writer: &output}
+	peer := &observationPeer{respond: func(req operator.Request) operator.Reply {
+		if req.Operation != operator.HostReadBatch {
+			t.Fatal("expected batch read")
+		}
+		var args operator.HostReadBatchArgs
+		if err := json.Unmarshal(req.Args, &args); err != nil {
+			t.Fatal(err)
+		}
+		batch := operator.HostReadBatchOutput{}
+		for _, read := range args.Reads {
+			child := hostReply(t, []byte(`{"errorBoundNs":0,"rateErrorPpm":0,"measuredUnixNs":"1792886400000000000","trackingLog":{"cursor":{"position":1},"rows":[],"breaks":[]}}`))
+			child.ID = read.Target
+			if read.Target == "shared" {
+				child.ExitCode = new(1)
+				child.Payload = oracleJSON(operator.HostOutput{Stdout: "CLOCK_UNKNOWN"})
+			}
+			batch.Replies = append(batch.Replies, child)
+		}
+		return operator.Reply{Transport: operator.Succeeded, ExitCode: new(0), Payload: oracleJSON(batch)}
+	}}
+	r := &ProcessRuntime{Session: s, Peer: peer, Bounds: &clocks.Bounds{}, ClockObserved: recorder.RecordClocks}
+	if err := r.VerifyClocks(context.Background(), time.Minute); err == nil {
+		t.Fatal("failed batch became a successful refresh")
+	}
+	var record struct {
+		Evidence clocks.Evidence `json:"evidence"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Evidence.At.IsZero() || record.Evidence.Clocks["w1"].TrackingLog == nil || recorder.refreshes != 1 || len(r.ClockSamples) != 0 || s.Latched() || peer.sent != 1 {
+		t.Fatal("failed refresh lost partial evidence, changed the cap, or changed failure semantics", output.String())
+	}
+}
