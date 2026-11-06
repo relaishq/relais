@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http/httptest"
 	"net/netip"
@@ -19,11 +21,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pion/logging"
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/relaytrace"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
 )
@@ -92,6 +96,15 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		return err
 	}
 	defer store.Close()
+	// Workers and control run in this process; child relay logs are already
+	// retained by Manager.Start. Keep control output in the trial artifact too.
+	controlLog, err := os.OpenFile(filepath.Join(dir, "control.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	previousLog := log.Writer()
+	log.SetOutput(io.MultiWriter(previousLog, controlLog))
+	defer func() { log.SetOutput(previousLog); _ = controlLog.Close() }()
 	var children []*clusterprocess.Child
 	defer func() {
 		for i := len(children) - 1; i >= 0; i-- {
@@ -127,24 +140,27 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		return err
 	}
 	children = append(children, standby)
-	w, err := mediaworker.New(mediaworker.Config{Relay: &mediaworker.RelayConfig{Owners: store, Addr: bindings[0].Slot.Leg, PublicAddr: bindings[0].Slot.Public}})
-	if err != nil {
-		return err
-	}
-	defer w.Close()
 	p := controlplane.New(bindings[0].Relay, store)
-	if err = p.Register("0", w.LocalAddr(), w); err != nil {
-		return err
+	var workers []*mediaworker.Worker
+	for i := range 2 {
+		workerLog, e := os.OpenFile(filepath.Join(dir, fmt.Sprintf("worker-%d.log", i)), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if e != nil {
+			return e
+		}
+		defer workerLog.Close()
+		// Fix the level explicitly: environment-enabled Pion debug/trace logs
+		// can contain credentials and must not enter uploaded artifacts.
+		factory := &logging.DefaultLoggerFactory{Writer: workerLog, DefaultLogLevel: logging.LogLevelInfo}
+		worker, e := mediaworker.New(mediaworker.Config{LoggerFactory: factory, Relay: &mediaworker.RelayConfig{Owners: store, Addr: bindings[0].Slot.Leg, PublicAddr: bindings[0].Slot.Public}})
+		if e != nil {
+			return e
+		}
+		defer worker.Close()
+		if err = p.Register(fmt.Sprint(i), worker.LocalAddr(), worker); err != nil {
+			return err
+		}
+		workers = append(workers, worker)
 	}
-	second, err := mediaworker.New(mediaworker.Config{Relay: &mediaworker.RelayConfig{Owners: store, Addr: bindings[0].Slot.Leg, PublicAddr: bindings[0].Slot.Public}})
-	if err != nil {
-		return err
-	}
-	defer second.Close()
-	if err = p.Register("1", second.LocalAddr(), second); err != nil {
-		return err
-	}
-	workers := []*mediaworker.Worker{w, second}
 	for _, b := range bindings {
 		for _, worker := range workers {
 			if err = b.Relay.(*controlplane.RemoteRelay).AddWorker(ctx, worker.LocalAddr()); err != nil {
@@ -265,6 +281,8 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	var cutoff atomic.Bool
 	var oldInput, oldOutput atomic.Uint64
 	oldLeg := bindings[0].Slot.Leg.String()
+	// Both workers are in-process, so this observer sees their successful
+	// leg writes directly, independently of the child relay's receive queue.
 	stopTrace := relaytrace.Observe(func(_ time.Time, name, path string, _ []byte) {
 		if path == oldLeg && name == "worker-relay-cutoff" {
 			cutoff.Store(true)
@@ -325,9 +343,11 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		if err = standby.Signal(syscall.SIGCONT); err != nil {
 			return err
 		}
-		before, e := remote.Status(ctx)
+		// SIGSTOP leaves pre-cut-off worker datagrams queued in r1's UDP
+		// socket. Its HTTP status can answer before that backlog drains.
+		before, e := lossStableStatus(ctx, remote.Status)
 		if e != nil {
-			return e
+			return fmt.Errorf("%w; oldInput=%d oldOutput=%d cutoff=%t", e, oldInput.Load(), oldOutput.Load(), cutoff.Load())
 		}
 		target := net.UDPAddrFromAddrPort(bindings[0].Slot.Public)
 		for _, probe := range oldProbes {
@@ -352,8 +372,8 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		if e != nil {
 			return e
 		}
-		if last.Stats.WorkerPackets != before.Stats.WorkerPackets {
-			return fmt.Errorf("worker sent packets to resumed old slot")
+		if last.Stats.WorkerPackets != before.Stats.WorkerPackets || oldOutput.Load() != 0 {
+			return fmt.Errorf("resumed old slot worker fence failed: worker_packets_delta=%d r1_before=%+v r1_after=%+v oldInput=%d oldOutput=%d cutoff=%t", last.Stats.WorkerPackets-before.Stats.WorkerPackets, before.Stats, last.Stats, oldInput.Load(), oldOutput.Load(), cutoff.Load())
 		}
 	}
 	select {
@@ -389,12 +409,44 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		}
 	}
 	if oldInput.Load() != 0 || oldOutput.Load() != 0 {
-		return fmt.Errorf("old slot accepted=%d sent=%d", oldInput.Load(), oldOutput.Load())
+		return fmt.Errorf("old slot oldInput=%d oldOutput=%d cutoff=%t", oldInput.Load(), oldOutput.Load(), cutoff.Load())
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
 	fmt.Printf("RELAY_LOSS freeze=%t n=8 decoded_upper_bounds p50=%s p95=%s max=%s samples=%v old_accepted=0 old_sent=0 auth=0 duplicates=0\n", freeze, gaps[3], gaps[7], gaps[7], gaps)
 	return nil
 }
+
+// lossStableStatus waits for the resumed relay to drain pre-cut-off output
+// before choosing the replay baseline. Only WorkerPackets must settle.
+func lossStableStatus(ctx context.Context, status func(context.Context) (relay.RelayStatus, error)) (relay.RelayStatus, error) {
+	const quiet = 200 * time.Millisecond
+	const limit = 3 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	var last relay.RelayStatus
+	var stableSince time.Time
+	for {
+		next, err := status(ctx)
+		if err != nil {
+			return last, fmt.Errorf("resumed old relay worker packets did not settle (limit %s, last=%+v): %w", limit, last.Stats, err)
+		}
+		if stableSince.IsZero() || next.Stats.WorkerPackets != last.Stats.WorkerPackets {
+			stableSince = time.Now()
+		}
+		last = next
+		if time.Since(stableSince) >= quiet {
+			return last, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, fmt.Errorf("resumed old relay worker packets did not settle (limit %s, last=%+v): %w", limit, last.Stats, ctx.Err())
+		case <-tick.C:
+		}
+	}
+}
+
 func lossWait(ctx context.Context, ready func() bool) error {
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
