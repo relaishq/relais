@@ -57,7 +57,7 @@ func TestTestWorkerAllowlistFlags(t *testing.T) {
 func TestTestRegistrationDisabledByDefault(t *testing.T) {
 	for _, demo := range []bool{false, true} {
 		plane := controlplane.New(nil, sessionstore.NewMemory())
-		handler := controlHandler(plane, nil, demo, nil, testWorkerClient())
+		handler := controlHandler(plane, nil, demo, nil, testWorkerClient(), false)
 		for _, path := range []string{"/private/test/register", "/demo/register"} {
 			req := httptest.NewRequest(http.MethodPost, path, nil)
 			reply := httptest.NewRecorder()
@@ -134,7 +134,7 @@ func TestTestRegistrationBoundsAndUniqueIdentities(t *testing.T) {
 		return (&net.Dialer{}).DialContext(ctx, network, workerServer.Listener.Addr().String())
 	}
 	t.Cleanup(client.CloseIdleConnections)
-	server := httptest.NewServer(controlHandler(plane, remoteRelay, false, allowed, client))
+	server := httptest.NewServer(controlHandler(plane, remoteRelay, false, allowed, client, false))
 	t.Cleanup(server.Close)
 	request := func(name, endpoint, address string) testRegistrationRequest {
 		return testRegistrationRequest{Name: name, URL: endpoint, Address: netip.MustParseAddrPort(address)}
@@ -270,7 +270,7 @@ func TestTestRegistrationClientRefusesRedirectsAndProxies(t *testing.T) {
 	t.Cleanup(relayServer.Close)
 	remoteRelay := &controlplane.RemoteRelay{URL: relayServer.URL}
 	plane := controlplane.New(remoteRelay, sessionstore.NewMemory())
-	server := httptest.NewServer(controlHandler(plane, remoteRelay, false, allowed, client))
+	server := httptest.NewServer(controlHandler(plane, remoteRelay, false, allowed, client, false))
 	t.Cleanup(server.Close)
 	err := privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/test/register", testRegistrationRequest{
 		Name: "redirect", URL: "http://10.0.0.10:9300", Address: netip.MustParseAddrPort("10.0.0.10:41010"),

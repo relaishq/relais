@@ -26,6 +26,7 @@ func run() error {
 	relayURL := flag.String("relay", processrun.Env("RELAIS_RELAY_URL", ""), "relay control HTTP URL")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_CONTROL_HTTP", "127.0.0.1:0"), "WHIP and private heartbeat HTTP address")
 	demoRegister := flag.Bool("demo-register", false, "enable loopback demo replacement registration")
+	clockProber := flag.Bool("clock-prober", false, "enable private GET /clock for recorded frontend probes")
 	var testWorkers testWorkerAllowlist
 	flag.Var(&testWorkers, "test-register-worker", "enable private test registration for IP=HTTP-first-last,UDP-first-last (repeat per host)")
 	var registered workers
@@ -82,7 +83,7 @@ func run() error {
 		}
 	}
 	links := plane.ConfigureDialOut(dialOut, r)
-	handler := links.Handler(controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient()))
+	handler := links.Handler(controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient(), *clockProber))
 	var handlers sync.WaitGroup
 	tracked := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		handlers.Add(1)

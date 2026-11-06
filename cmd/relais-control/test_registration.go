@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/relaishq/relais/internal/clockprobe"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/metrics"
@@ -140,11 +141,12 @@ func testWorkerClient() *http.Client {
 
 // controlHandler preserves demo defaults. The separate test route is absent
 // without an allowlist. Like other private control routes, it has no auth.
-func controlHandler(plane *controlplane.Plane, relay *controlplane.RemoteRelay, demo bool, allowed testWorkerAllowlist, client *http.Client) http.Handler {
+func controlHandler(plane *controlplane.Plane, relay *controlplane.RemoteRelay, demo bool, allowed testWorkerAllowlist, client *http.Client, clockProber bool) http.Handler {
 	base := plane.ProcessHandler()
 	if demo {
 		base = demoHandler(plane, relay)
 	}
+	base = clockprobe.Wrap(base, clockProber)
 	if len(allowed) == 0 {
 		return base
 	}
