@@ -347,7 +347,7 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		// socket. Its HTTP status can answer before that backlog drains.
 		before, e := lossStableStatus(ctx, remote.Status)
 		if e != nil {
-			return e
+			return fmt.Errorf("%w; oldInput=%d oldOutput=%d cutoff=%t", e, oldInput.Load(), oldOutput.Load(), cutoff.Load())
 		}
 		target := net.UDPAddrFromAddrPort(bindings[0].Slot.Public)
 		for _, probe := range oldProbes {
