@@ -83,7 +83,7 @@ func TestTestRegistrationAndDemoAllowImmediatePlannedMove(t *testing.T) {
 	t.Cleanup(client.CloseIdleConnections)
 	var allowed testWorkerAllowlist
 	require.NoError(t, allowed.Set("10.0.0.10=9300-9300,41010-41010"))
-	server := httptest.NewServer(controlHandler(plane, remoteRelay, true, allowed, client))
+	server := httptest.NewServer(controlHandler(plane, remoteRelay, true, allowed, client, false))
 	t.Cleanup(server.Close)
 	require.NoError(t, privateapi.Do(ctx, server.Client(), server.URL, http.MethodPost, "/demo/register", map[string]string{
 		"name": "source", "url": sourceServer.URL,
@@ -145,7 +145,7 @@ func TestTestRegistrationRelayFailurePreventsSelection(t *testing.T) {
 	t.Cleanup(client.CloseIdleConnections)
 	var allowed testWorkerAllowlist
 	require.NoError(t, allowed.Set("10.0.0.10=9300-9300,41010-41010"))
-	server := httptest.NewServer(controlHandler(plane, remoteRelay, false, allowed, client))
+	server := httptest.NewServer(controlHandler(plane, remoteRelay, false, allowed, client, false))
 	t.Cleanup(server.Close)
 	err := privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/test/register", testRegistrationRequest{
 		Name: "fresh", URL: "http://10.0.0.10:9300", Address: address,

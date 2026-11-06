@@ -18,6 +18,7 @@ type workerFlags struct {
 	bridgeURL, bridgeToken                                           *string
 	name, listen, leg, public, control, httpAddr, agentName, connect *string
 	cacheOff, cryptoTrace, split, version                            *bool
+	clockProber                                                      *bool
 	drainTimeout, taskBudget, moveReserve                            *time.Duration
 }
 
@@ -34,6 +35,7 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 	f.public = flags.String("relay-media", processrun.Env("RELAIS_RELAY_MEDIA", ""), "relay advertised public UDP address")
 	f.control = flags.String("control", processrun.Env("RELAIS_CONTROL_URL", ""), "control-plane HTTP URL for heartbeats")
 	f.httpAddr = flags.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
+	f.clockProber = flags.Bool("clock-prober", false, "enable private GET /clock for recorded frontend probes")
 	f.cacheOff = flags.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
 	f.cryptoTrace = flags.Bool("srtp-diagnostics", false, "log sent SRTP/SRTCP ciphertext metadata for fault investigations")
 	defaultAgent := options.DefaultAgent

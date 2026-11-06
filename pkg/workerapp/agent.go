@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/relaishq/relais/internal/clockprobe"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/agent"
 	agentdemo "github.com/relaishq/relais/pkg/agent/demo"
@@ -83,8 +84,8 @@ func (w *observedResponse) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
-func agentHandler(worker *mediaworker.Worker, name string) http.Handler {
-	base := worker.PrivateHandler()
+func agentHandler(worker *mediaworker.Worker, name string, clockProber bool) http.Handler {
+	base := clockprobe.Wrap(worker.PrivateHandler(), clockProber)
 	if name != "demo" {
 		return base
 	}

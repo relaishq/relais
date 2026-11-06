@@ -186,10 +186,13 @@ func Run(ctx context.Context, args []string, options Options) error {
 		running.Go(func() { done <- processrun.Serve(serving, bridgeListener, bridge) })
 	}
 	if listener != nil {
-		handler := agentHandler(worker, *agentName)
+		handler := agentHandler(worker, *agentName, *f.clockProber)
 		if *f.connect == "dial-out" {
 			mux := http.NewServeMux()
 			mux.Handle("GET /metrics", handler)
+			if *f.clockProber {
+				mux.Handle("GET /clock", handler)
+			}
 			handler = mux
 		}
 		running.Go(func() { done <- processrun.Serve(serving, listener, handler) })
@@ -199,7 +202,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 		ready["http"] = "http://" + listener.Addr().String()
 	}
 	if *f.connect == "dial-out" {
-		d := &controlplane.DialOut{URL: *control, Name: *name, Worker: worker, Handler: agentHandler(worker, *agentName), Ready: make(chan struct{})}
+		d := &controlplane.DialOut{URL: *control, Name: *name, Worker: worker, Handler: agentHandler(worker, *agentName, *f.clockProber), Ready: make(chan struct{})}
 		running.Go(func() { done <- d.Run(serving) })
 		running.Go(func() { worker.KeepRelayBinding(serving) })
 		select {

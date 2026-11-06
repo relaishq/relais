@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/relaishq/relais/internal/clockprobe"
 	"github.com/relaishq/relais/pkg/buildinfo"
 )
 
@@ -27,6 +28,9 @@ type config struct {
 	Listen, Control, AdvertiseIPs string
 	TokenEnv, TokenFile           string
 	CertFile, KeyFile, CertOut    string
+	ClockProber                   bool
+	ClockTargets                  clockprobe.Targets
+	ClockProbeFile                string
 }
 
 func parseConfig(args []string) (config, error) {
@@ -41,6 +45,9 @@ func parseConfig(args []string) (config, error) {
 	flags.StringVar(&c.CertFile, "cert", "", "existing PEM certificate chain; requires -key")
 	flags.StringVar(&c.KeyFile, "key", "", "existing PEM private key; requires -cert")
 	flags.StringVar(&c.CertOut, "cert-out", "", "write the generated public certificate PEM here for caller trust")
+	flags.BoolVar(&c.ClockProber, "clock-prober", false, "record frontend-to-host clock probes without changing timing judgments")
+	flags.Var(&c.ClockTargets, "clock-probe-target", "private clock probe target: control|w1|w2=HTTP(S) origin (repeat for all three)")
+	flags.StringVar(&c.ClockProbeFile, "clock-probe-file", "", "append clock probes to this bounded run-local file")
 	if err := flags.Parse(args); err != nil {
 		return c, err
 	}
@@ -55,6 +62,9 @@ func privateIP(ip netip.Addr) bool {
 	return ip.IsValid() && (ip.IsPrivate() || ip.IsLoopback()) && ip.Zone() == ""
 }
 func (c config) validate() (*url.URL, error) {
+	if err := c.ClockTargets.Validate(c.ClockProber, c.ClockProbeFile); err != nil {
+		return nil, err
+	}
 	bind, err := netip.ParseAddrPort(c.Listen)
 	if err != nil || !privateIP(bind.Addr()) || bind.Port() == 0 {
 		return nil, errors.New("-listen requires a specific private or loopback IP and nonzero port")
@@ -161,6 +171,13 @@ func run(ctx context.Context, c config, output io.Writer) error {
 		return err
 	}
 	server := newServer(handler, cert)
+	if c.ClockProber {
+		stopProbes, err := startClockProber(ctx, c, clockprobe.Run)
+		if err != nil {
+			return err
+		}
+		defer stopProbes()
+	}
 	done := make(chan error, 1)
 	go func() { done <- server.ServeTLS(listener, "", "") }()
 	if _, err := fmt.Fprintf(output, "https=%s certificate_sha256=%s\n", listener.Addr(), fingerprint); err != nil {

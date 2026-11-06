@@ -120,6 +120,34 @@ A deployment either colocates the frontend with control or supplies a measured
 inter-host clock bound, for example through chrony or a cloud time service.
 A configured time source alone is not proof of the bound.
 
+### Optional frontend-to-host clock recording
+
+To record an independent clock cross-check, start control and both workers
+with `-clock-prober`. Their private HTTP listeners then register `GET /clock`
+with the same `received_at` and `sent_at` UTC shape. The route is absent (404)
+by default. This does not change signal's existing authenticated `/clock`.
+
+Start signal with `-clock-prober`, `-clock-probe-file=<run-local path>` and all
+three repeatable targets: `-clock-probe-target=control=<origin>`,
+`-clock-probe-target=w1=<origin>` and `-clock-probe-target=w2=<origin>`.
+Origins must use literal private or loopback IPs and HTTP(S), without
+credentials, paths, queries or fragments. Duplicate/unknown targets, missing
+targets/file, or targets/file without `-clock-prober` are startup errors.
+The process must be able to create or append the file in its parent directory.
+Use a new file for each run; process restarts append to that run's file.
+
+Each target gets one immediate probe and then one per second, with a 750 ms
+deadline, 1 KiB response limit, no redirects and no retries. Normal HTTPS
+certificate verification stays enabled. The send timestamp is captured after
+TCP/TLS setup, before the request is written, so setup does not widen the clock
+interval. The deadline still includes setup. The prober uses no environment proxy
+and sends no caller credentials. Its loops stop and join when signal stops.
+The bounded file records request failures and invalid samples too; a runtime
+file-write failure stops recording and logs one warning with a sanitized error
+reason while signaling stays available. Capacity stops probing after one marker. These records
+do not change clock bounds or media judgments. See the
+[probe line format](operator-gates.md) for the file contract and limits.
+
 For example, in a separate shell with the same token and trusted certificate:
 
 ```sh

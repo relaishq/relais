@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relaishq/relais/internal/clockprobe"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/controlplane"
 )
@@ -340,10 +341,7 @@ func writeJSON(w http.ResponseWriter, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-type clockSample struct {
-	ReceivedAt time.Time `json:"received_at"`
-	SentAt     time.Time `json:"sent_at"`
-}
+type clockSample = clockprobe.Sample
 
 // Numeric worker generations stay compatible with caller polling. Other names
 // become stable opaque identifiers, so an address used as a name cannot leak.

@@ -72,7 +72,7 @@ func startDemoSystem(t *testing.T, store sessionstore.Store, buffer *relay.Buffe
 		require.NoError(t, err)
 		sys.workers = append(sys.workers, w)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
-		server := httptest.NewServer(agentHandler(w, "demo"))
+		server := httptest.NewServer(agentHandler(w, "demo", false))
 		sys.servers = append(sys.servers, server)
 		t.Cleanup(server.Close)
 		r.AddWorker(w.LocalAddr())

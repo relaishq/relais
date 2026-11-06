@@ -104,6 +104,23 @@ timeline covering the run including its tail, no in-run breaks, and zero
 `omitted_refreshes`. An empty batch or a non-zero `At` alone proves no coverage.
 Coverage enforcement and bound selection remain later slices.
 
+The opt-in frontend clock prober writes an append-only run-local file, capped
+at 4 MiB including one capacity marker. Each complete ASCII line is exactly
+84 bytes: `T FFFFFFFFFFFFFFFFFFF HHHHHHHHHHHHHHHHHHH SSSSSSSSSSSSSSSSSSS RRRRRRRRRRRRRRRRRRR C`
+followed by LF, with one space between fields. `T` is `0` (control), `1` (w1)
+or `2` (w2); the four zero-padded 19-digit decimal fields are frontend send,
+host receive, host send and frontend receive wall-clock Unix nanoseconds. `C`
+is `0` (valid sample), `1` (request failure) or `2` (invalid sample); unavailable
+host timestamps are zero. Frontend send is sampled after connection setup and
+is zero when no connection became ready. The capacity marker has `T=3`, `C=3` and four zero
+timestamps; it is file-wide, not a pre-run sample. Later lost-attempt counts
+are unknown; the marker stops further probing. Restarts append, completing
+a partial capacity marker or terminating another partial tail as one malformed
+line. Readers wait at an unfinished last line without advancing its cursor;
+the Go reference parser is `internal/clockprobe.ParseLine`. This slice only
+produces the file: operator collection, falsification checks and histogram
+evidence follow separately. Pinned rehearsal services receive no new flags.
+
 Each event retains at most two gap rows and eight probes per endpoint (the
 first six plus the binding probes) and 16 candidate states shared across `first_content` and
 `first_new_content`. Each snapshot retains the latest rows in pool traversal
