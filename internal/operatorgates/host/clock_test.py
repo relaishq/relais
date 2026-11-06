@@ -136,6 +136,44 @@ class TrackingTests(unittest.TestCase):
         result = self.read(start=1792886400500)
         self.assertFalse(result['rows'][0]['beforeRun'])  # Straddling second is in-run.
 
+    def test_cursorless_tail_records_one_in_run_gap(self):
+        self.log.write_text(''.join(self.row(s) for s in range(1200)))
+        self.assertGreater(self.log.stat().st_size, clock.READ_LIMIT)
+        result = self.read(start=1792886400500)
+        self.assertGreater(result['rows'][0]['unixSeconds'], 1792886400)
+        self.assertEqual(result['breaks'], [dict(kind='cursor-gap', fromUnixSeconds=1792886400,
+                         unixSeconds=result['rows'][0]['unixSeconds'], beforeRun=False)])
+
+    def test_cursorless_tail_before_run_records_no_gap(self):
+        self.log.write_text(''.join(self.row(s) for s in range(1200)))
+        self.assertGreater(self.log.stat().st_size, clock.READ_LIMIT)
+        result = self.read(start=1792887400000)
+        self.assertTrue(result['rows'][0]['beforeRun'])
+        self.assertFalse(result['rows'][-1]['beforeRun'])
+        self.assertEqual(result['breaks'], [])
+
+    def test_cursorless_small_log_records_gap_only_for_in_run_first_row(self):
+        self.assertLess(self.log.stat().st_size, clock.READ_LIMIT)
+        result = self.read(start=1792886401000)
+        self.assertTrue(result['rows'][0]['beforeRun'])
+        self.assertEqual(result['breaks'], [])
+        result = self.read(start=1792886400500)
+        self.assertFalse(result['rows'][0]['beforeRun'])
+        self.assertEqual(result['breaks'], [dict(kind='cursor-gap', fromUnixSeconds=1792886400,
+                         unixSeconds=1792886400, beforeRun=False)])
+
+    def test_cursorless_empty_read_records_gap_only_after_run_start(self):
+        for text, losses in (('', []), ('# banner\n' * clock.READ_LIMIT, []), ('x' * (clock.READ_LIMIT + 100), ['log-loss'])):
+            self.log.write_text(text)
+            for start in (0, self.wall // 10**6, self.wall // 10**6 + 1):
+                self.assertEqual([b['kind'] for b in self.read(start=start)['breaks']], losses)
+            start = self.wall // 10**6 - 1500
+            result = self.read(start=start)
+            self.assertEqual(result['rows'], [])
+            self.assertEqual([b['kind'] for b in result['breaks']], ['cursor-gap'] + losses)
+            self.assertEqual(result['breaks'][0], dict(kind='cursor-gap', fromUnixSeconds=start // 1000,
+                             unixSeconds=self.wall // 10**9, beforeRun=False))
+
     def test_missing_malformed_partial_and_rewritten_log(self):
         first = self.read()['cursor']
         self.log.write_text(self.row(1))
@@ -178,12 +216,40 @@ class TrackingTests(unittest.TestCase):
         rng = random.Random(7)
         first = self.read()['cursor']
         self.append(''.join(self.row(s, reference=''.join(rng.choices(string.ascii_letters, k=220))) for s in range(1, 161)), seconds=160)
-        timeline = self.read(first)
+        timeline = self.read(first, start=1792886396500)
         sample = dict(errorBoundNs=12, rateErrorPpm=0.5, measuredUnixNs=str(self.wall))
         self.assertGreater(len(clock.base64.b64encode(clock.gzip.compress(clock.json.dumps(dict(sample, trackingLog=timeline)).encode()))), 23998)
-        with patch.object(clock, 'clock_evidence', return_value=sample), patch.object(clock, 'tracking_evidence', return_value=timeline):
-            result = clock.read_clock(first)
-        self.assertLessEqual(len(clock.base64.b64encode(clock.gzip.compress(clock.json.dumps(result).encode()))), 23998)
-        self.assertEqual(result['errorBoundNs'], 12)
+        for expected in (1792886400, 1792886397):
+            if expected < 1792886400:
+                timeline['breaks'].extend(dict(kind='clock-step', fromUnixSeconds=at, unixSeconds=at + 1, beforeRun=history)
+                                          for at, history in ((1792886390, True), (1792886398, False), (1792886397, False)))
+            with patch.object(clock, 'clock_evidence', return_value=dict(sample)), patch.object(clock, 'tracking_evidence', return_value=clock.json.loads(clock.json.dumps(timeline))):
+                result = clock.read_clock(first, 1792886396500)
+            self.assertLessEqual(len(clock.base64.b64encode(clock.gzip.compress(clock.json.dumps(result).encode()))), 23998)
+            self.assertEqual(result['errorBoundNs'], 12)
+            self.assertEqual(result['trackingLog']['rows'], [])
+            self.assertEqual(result['trackingLog']['breaks'][0]['fromUnixSeconds'], expected)
+
+    def test_cursorless_wire_limit_preserves_run_start_gap(self):
+        import random
+        rng = random.Random(1)
+        lines = []
+        for s in range(1200):
+            columns = self.row(s * 16, maximum='9.9e-01').split()
+            columns[4:7] = [f'{rng.uniform(-5, 5):.3f}', f'{rng.random():.3f}', f'{rng.uniform(-1e-5, 1e-5):.3e}']
+            columns[9:13] = [f'{rng.uniform(1e-7, 1e-3):.3e}' for _ in range(4)]
+            lines.append(' '.join(columns) + '\n')
+        self.log.write_text(''.join(lines))
+        self.wall += 1200 * 16 * 10**9
+        start = (1792886400 + 100 * 16) * 1000
+        timeline = self.read(start=start)
+        self.assertGreater(self.log.stat().st_size, clock.READ_LIMIT)
+        self.assertGreater(timeline['rows'][0]['unixSeconds'], start // 1000)
+        sample = dict(errorBoundNs=12, rateErrorPpm=0.5, measuredUnixNs=str(self.wall))
+        self.assertGreater(len(clock.base64.b64encode(clock.gzip.compress(clock.json.dumps(dict(sample, trackingLog=timeline)).encode()))), 23998)
+        with patch.object(clock, 'TRACKING_LOG', self.log), patch.object(clock, 'daemon_identity', return_value=self.daemon), patch.object(clock.time, 'time_ns', return_value=self.wall), patch.object(clock, 'clock_evidence', return_value=sample):
+            result = clock.read_clock(run_start_unix_ms=start)
         self.assertEqual(result['trackingLog']['rows'], [])
-        self.assertEqual(result['trackingLog']['breaks'][0]['fromUnixSeconds'], 1792886400)
+        self.assertEqual(result['trackingLog']['breaks'], [dict(kind='cursor-gap', fromUnixSeconds=start // 1000,
+                         unixSeconds=self.wall // 10**9, beforeRun=False)])
+        self.assertLessEqual(len(clock.base64.b64encode(clock.gzip.compress(clock.json.dumps(result).encode()))), 23998)
