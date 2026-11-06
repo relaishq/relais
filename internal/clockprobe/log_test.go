@@ -16,8 +16,11 @@ func TestLogCapWritesOneMarkerAndSurvivesRestart(t *testing.T) {
 	log, err := OpenLog(path)
 	require.NoError(t, err)
 	r := Record{Target: WorkerTwo, FrontendSend: 1, FrontendReceive: 2, Result: RequestFailed}
-	for range MaxFileBytes/LineBytes + 10 {
+	for range MaxFileBytes/LineBytes - 1 {
 		require.NoError(t, log.Append(r))
+	}
+	for range 10 {
+		require.ErrorIs(t, log.Append(r), ErrFull)
 	}
 	require.NoError(t, log.Close())
 	before, err := os.ReadFile(path)
@@ -39,7 +42,7 @@ func TestLogCapWritesOneMarkerAndSurvivesRestart(t *testing.T) {
 	require.Equal(t, 1, markers)
 	log, err = OpenLog(path)
 	require.NoError(t, err)
-	require.NoError(t, log.Append(r))
+	require.ErrorIs(t, log.Append(r), ErrFull)
 	require.NoError(t, log.Close())
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -113,7 +116,7 @@ func TestLogRestartCompletesPartialCapacityMarkerOnce(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, marker[:n], 0600))
 		log, err := OpenLog(path)
 		require.NoError(t, err)
-		require.NoError(t, log.Append(Record{}))
+		require.ErrorIs(t, log.Append(Record{}), ErrFull)
 		require.NoError(t, log.Close())
 		data, err := os.ReadFile(path)
 		require.NoError(t, err)

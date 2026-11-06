@@ -2,6 +2,7 @@ package clockprobe
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,9 @@ import (
 )
 
 const MaxFileBytes = 4 << 20
+
+// ErrFull means the capacity marker is present and no more probes can be saved.
+var ErrFull = errors.New("clock probe log full")
 
 // Log serializes appends from the three targets and reserves one capacity line.
 type Log struct {
@@ -77,8 +81,11 @@ func (l *Log) Append(r Record) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.err != nil || l.full {
+	if l.err != nil {
 		return l.err
+	}
+	if l.full {
+		return ErrFull
 	}
 	if l.size+2*LineBytes > MaxFileBytes {
 		l.full = true
@@ -86,6 +93,10 @@ func (l *Log) Append(r Record) error {
 			return fmt.Errorf("clock probe file has no room for capacity marker")
 		}
 		line, _ = (Record{Target: capacityTarget, Result: CapacityReached}).MarshalLine()
+		if err := l.write(line); err != nil {
+			return err
+		}
+		return ErrFull
 	}
 	return l.write(line)
 }

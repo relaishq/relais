@@ -6,7 +6,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,7 +16,7 @@ const probeTimeout = 750 * time.Millisecond
 const maxBodyBytes = 1024
 
 // Run joins all target loops before returning. Request failures are records;
-// only a log write failure stops recording. Callers keep signaling available.
+// a full log or write failure stops recording. Callers keep signaling available.
 func Run(ctx context.Context, targets Targets, log *Log) error {
 	transport := &http.Transport{
 		Proxy: nil,
@@ -73,26 +75,29 @@ func probe(ctx context.Context, client *http.Client, target Peer) Record {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	r := Record{Target: target.Target, Result: RequestFailed}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.Origin+"/clock", nil)
-	r.FrontendSend = time.Now().UnixNano()
-	if err != nil {
-		r.FrontendReceive = time.Now().UnixNano()
-		return r
-	}
+	var frontendSend atomic.Int64
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) {
+		// Exclude connection setup, including TLS, but precede request writes.
+		frontendSend.Store(time.Now().UnixNano())
+	}})
+	// Startup validated the origin; the method and non-nil context are fixed.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.Origin+"/clock", nil)
 	resp, err := client.Do(req)
 	if err != nil {
+		r.FrontendSend = frontendSend.Load()
 		r.FrontendReceive = time.Now().UnixNano()
 		return r
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
+	r.FrontendSend = frontendSend.Load()
 	r.FrontendReceive = time.Now().UnixNano()
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return r
 	}
 	r.Result = InvalidSample
 	var sample Sample
-	if len(body) > maxBodyBytes || json.Unmarshal(body, &sample) != nil || sample.ReceivedAt.IsZero() || sample.SentAt.IsZero() {
+	if r.FrontendSend == 0 || len(body) > maxBodyBytes || json.Unmarshal(body, &sample) != nil || sample.ReceivedAt.IsZero() || sample.SentAt.IsZero() {
 		return r
 	}
 	received, sent := sample.ReceivedAt.UnixNano(), sample.SentAt.UnixNano()

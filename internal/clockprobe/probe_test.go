@@ -1,13 +1,17 @@
 package clockprobe
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,7 +26,19 @@ import (
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	if trace := httptrace.ContextClientTrace(r.Context()); trace != nil && trace.GotConn != nil {
+		trace.GotConn(httptrace.GotConnInfo{})
+	}
+	return f(r)
+}
+
+// No ready-connection trace: model a failure during dialing instead of sending.
+type failedDialTransport struct{}
+
+func (failedDialTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: errors.New("unreachable")}
+}
 
 type countingBody struct {
 	reader io.Reader
@@ -148,6 +164,144 @@ func TestSamplerLogFailureCancelsAndJoinsOtherRequests(t *testing.T) {
 		})
 		err := run(context.Background(), testTargets(t), func(Record) error { return failure }, probeClient(transport))
 		require.ErrorIs(t, err, failure)
+	})
+}
+
+func TestSamplerSerializesSlowRequestsAndAppends(t *testing.T) {
+	for _, slowAppend := range []bool{false, true} {
+		name := "slow-request"
+		if slowAppend {
+			name = "slow-append"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var mu sync.Mutex
+				active, peak, calls := map[Target]int{}, map[Target]int{}, map[Target]int{}
+				slow := func(target Target) {
+					mu.Lock()
+					active[target]++
+					peak[target] = max(peak[target], active[target])
+					calls[target]++
+					mu.Unlock()
+					// Deliberately outlast both the 750 ms timeout and 1 s tick.
+					// The transport case ignores cancellation, like blocked I/O.
+					time.Sleep(1500 * time.Millisecond)
+					mu.Lock()
+					active[target]--
+					mu.Unlock()
+				}
+				transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if !slowAppend {
+						i, _ := strconv.Atoi(r.URL.Port())
+						slow(Target(i - 1))
+					}
+					return &http.Response{StatusCode: 503, Header: make(http.Header), Body: http.NoBody}, nil
+				})
+				appendRecord := func(r Record) error {
+					if slowAppend {
+						slow(r.Target)
+					}
+					return nil
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				done := make(chan error, 1)
+				go func() { done <- run(ctx, testTargets(t), appendRecord, probeClient(transport)) }()
+				synctest.Wait()
+				time.Sleep(3500 * time.Millisecond)
+				cancel()
+				require.NoError(t, <-done)
+				for _, target := range []Target{Control, WorkerOne, WorkerTwo} {
+					require.GreaterOrEqual(t, calls[target], 2)
+					require.Equal(t, 1, peak[target], "overlap on target %s", target)
+					require.Zero(t, active[target], "unjoined target %s", target)
+				}
+			})
+		})
+	}
+}
+
+func TestProbeSendStartsAfterConnectionSetup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		setup := 200 * time.Millisecond
+		serverDone := make(chan error, 1)
+		transport := &http.Transport{DisableKeepAlives: true, DialContext: func(context.Context, string, string) (net.Conn, error) {
+			time.Sleep(setup)
+			client, server := net.Pipe()
+			go func() {
+				defer func() { _ = server.Close() }()
+				req, err := http.ReadRequest(bufio.NewReader(server))
+				if err != nil {
+					serverDone <- err
+					return
+				}
+				defer func() { _ = req.Body.Close() }()
+				time.Sleep(time.Millisecond)
+				rw := httptest.NewRecorder()
+				Handler(time.Now).ServeHTTP(rw, req)
+				response := rw.Result()
+				defer func() { _ = response.Body.Close() }()
+				time.Sleep(time.Millisecond)
+				serverDone <- response.Write(server)
+			}()
+			return client, nil
+		}}
+		defer transport.CloseIdleConnections()
+		start := time.Now()
+		r := probe(context.Background(), probeClient(transport), Peer{Control, "http://127.0.0.1"})
+		require.NoError(t, <-serverDone)
+		require.Equal(t, Success, r.Result)
+		require.Equal(t, start.Add(setup).UnixNano(), r.FrontendSend)
+		require.Equal(t, int64(2*time.Millisecond), r.FrontendReceive-r.FrontendSend)
+		require.Equal(t, setup+2*time.Millisecond, time.Since(start))
+	})
+}
+
+func TestSamplerFullLogStopsEveryTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "full")
+	marker, err := (Record{Target: capacityTarget, Result: CapacityReached}).MarshalLine()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, marker, 0600))
+	log, err := OpenLog(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, log.Close()) }()
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		requests := 0
+		client := probeClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+			mu.Lock()
+			requests++
+			mu.Unlock()
+			return &http.Response{StatusCode: 503, Header: make(http.Header), Body: http.NoBody}, nil
+		}))
+		err := run(context.Background(), testTargets(t), log.Append, client)
+		require.ErrorIs(t, err, ErrFull)
+		require.GreaterOrEqual(t, requests, 1)
+		require.LessOrEqual(t, requests, 3)
+		finished := requests
+		time.Sleep(10 * time.Second)
+		require.Equal(t, finished, requests)
+	})
+}
+
+func TestDialURLFailuresStayInRecords(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var mu sync.Mutex
+		var records []Record
+		err := run(ctx, testTargets(t), func(r Record) error {
+			mu.Lock()
+			records = append(records, r)
+			mu.Unlock()
+			cancel()
+			return nil
+		}, probeClient(failedDialTransport{}))
+		require.NoError(t, err, "URL errors must not escape to the signaling warning")
+		require.NotEmpty(t, records)
+		for _, r := range records {
+			require.Equal(t, RequestFailed, r.Result)
+			require.Zero(t, r.FrontendSend, "no connection was ready")
+		}
 	})
 }
 

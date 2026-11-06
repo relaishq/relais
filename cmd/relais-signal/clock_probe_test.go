@@ -2,8 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"testing/synctest"
 
@@ -84,5 +90,51 @@ func TestClockProberLifetimeJoinsBeforeClosingFile(t *testing.T) {
 		r, err := clockprobe.ParseLine(data)
 		require.NoError(t, err)
 		require.Equal(t, clockprobe.RequestFailed, r.Result)
+	}
+}
+
+func TestClockProberFullLogIsNonFatalAndWarnsOnce(t *testing.T) {
+	warning, err := os.Create(filepath.Join(t.TempDir(), "warning"))
+	require.NoError(t, err)
+	oldStderr := os.Stderr
+	os.Stderr = warning
+	t.Cleanup(func() {
+		os.Stderr = oldStderr
+		require.NoError(t, warning.Close())
+	})
+	synctest.Test(t, func(t *testing.T) {
+		c := config{ClockProbeFile: filepath.Join(t.TempDir(), "probes")}
+		stop, err := startClockProber(context.Background(), c, func(context.Context, clockprobe.Targets, *clockprobe.Log) error {
+			return clockprobe.ErrFull
+		})
+		require.NoError(t, err, "capacity is a recording outcome, not a signaling startup failure")
+		synctest.Wait()
+		stop()
+	})
+	require.NoError(t, warning.Sync())
+	data, err := os.ReadFile(warning.Name())
+	require.NoError(t, err)
+	require.Equal(t, "relais-signal: clock probe recording stopped: "+clockprobe.ErrFull.Error()+"\n", string(data))
+}
+
+func TestClockProbeWarningKeepsReasonsAndRedactsPrivateDetails(t *testing.T) {
+	const origin = "http://10.0.0.7:8765/clock"
+	requestError := &url.Error{Op: "Get", URL: origin, Err: &net.OpError{
+		Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.7"), Port: 8765}, Err: syscall.ECONNREFUSED,
+	}}
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{clockprobe.ErrFull, clockprobe.ErrFull.Error()},
+		{io.ErrShortWrite, io.ErrShortWrite.Error()},
+		{&os.PathError{Op: "write", Path: origin, Err: syscall.ENOSPC}, syscall.ENOSPC.Error()},
+		{fmt.Errorf("recording: %w", requestError), "HTTP request failed"},
+		{&os.PathError{Op: "write", Path: "private-file", Err: requestError}, "HTTP request failed"},
+	} {
+		got := clockProbeWarning(tc.err)
+		require.Equal(t, tc.want, got)
+		require.False(t, strings.Contains(got, "10.0.0.7"))
+		require.False(t, strings.Contains(got, "private-file"))
 	}
 }

@@ -138,11 +138,13 @@ Use a new file for each run; process restarts append to that run's file.
 
 Each target gets one immediate probe and then one per second, with a 750 ms
 deadline, 1 KiB response limit, no redirects and no retries. Normal HTTPS
-certificate verification stays enabled. The prober uses no environment proxy
+certificate verification stays enabled. The send timestamp is captured after
+TCP/TLS setup, before the request is written, so setup does not widen the clock
+interval. The deadline still includes setup. The prober uses no environment proxy
 and sends no caller credentials. Its loops stop and join when signal stops.
 The bounded file records request failures and invalid samples too; a runtime
-file-write failure stops recording and logs a fixed warning while signaling
-stays available. Capacity stops further writes after one marker. These records
+file-write failure stops recording and logs one warning with a sanitized error
+reason while signaling stays available. Capacity stops probing after one marker. These records
 do not change clock bounds or media judgments. See the
 [probe line format](operator-gates.md) for the file contract and limits.
 

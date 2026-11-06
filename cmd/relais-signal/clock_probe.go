@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/relaishq/relais/internal/clockprobe"
@@ -20,7 +22,7 @@ func startClockProber(ctx context.Context, c config, runner func(context.Context
 	go func() {
 		defer close(done)
 		if err := runner(probeCtx, c.ClockTargets, log); err != nil {
-			_, _ = fmt.Fprintln(os.Stderr, "relais-signal: clock probe recording stopped")
+			_, _ = fmt.Fprintf(os.Stderr, "relais-signal: clock probe recording stopped: %s\n", clockProbeWarning(err))
 		}
 	}()
 	return func() {
@@ -28,4 +30,19 @@ func startClockProber(ctx context.Context, c config, runner func(context.Context
 		<-done
 		_ = log.Close()
 	}, nil
+}
+
+func clockProbeWarning(err error) string {
+	// Run consumes HTTP failures as records. Its returned errors are ErrFull,
+	// fixed record errors, short writes, or local file errors. Strip file paths;
+	// also redact URL errors defensively at the injected runner boundary.
+	var pathError *os.PathError
+	if errors.As(err, &pathError) {
+		err = pathError.Err
+	}
+	var urlError *url.Error
+	if errors.As(err, &urlError) {
+		return "HTTP request failed"
+	}
+	return err.Error()
 }

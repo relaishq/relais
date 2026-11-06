@@ -19,7 +19,8 @@ const (
 )
 
 // Record contains wall-clock nanoseconds, including invalid samples verbatim.
-// Zero host timestamps mean that no usable response was available.
+// Zero host timestamps mean that no usable response was available. A zero
+// frontend send means the attempt failed before a connection became ready.
 type Record struct {
 	Target                                               Target
 	FrontendSend, HostReceive, HostSend, FrontendReceive int64
