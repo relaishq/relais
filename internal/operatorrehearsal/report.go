@@ -55,6 +55,10 @@ type Report struct {
 	Failures        []string                  `json:"failures"`
 	Exemptions      []string                  `json:"exemptions"`
 	Limitations     []string                  `json:"limitations"`
+
+	// CallerTiming and HeadCaller are diagnostics; Evaluate never reads them.
+	CallerTiming []CallerTiming    `json:"callerTiming"`
+	HeadCaller   *HeadCallerReport `json:"headCaller,omitempty"`
 }
 
 // Evaluate applies the free-rehearsal rule. The pinned media status remains

@@ -121,9 +121,21 @@ func (r *Report) sanitize() {
 		}
 		r.Clocks[i].Clocks = rows
 	}
-	r.Gates = append([]GateReport{}, r.Gates...)
-	for i := range r.Gates {
-		g := &r.Gates[i]
+	r.Gates = sanitizeGates(r.Gates)
+	r.CallerTiming = sanitizeCallerTiming(r.CallerTiming)
+	if r.HeadCaller != nil {
+		head := r.HeadCaller.sanitized()
+		r.HeadCaller = &head
+	}
+	r.Errors = append([]string{}, r.Errors...)
+	for i, s := range r.Errors {
+		r.Errors[i] = publicCode(s)
+	}
+}
+func sanitizeGates(gates []GateReport) []GateReport {
+	gates = append([]GateReport{}, gates...)
+	for i := range gates {
+		g := &gates[i]
 		if !g.Gate.Valid() {
 			g.Gate = "unavailable"
 		}
@@ -143,8 +155,5 @@ func (r *Report) sanitize() {
 			g.Media = &m
 		}
 	}
-	r.Errors = append([]string{}, r.Errors...)
-	for i, s := range r.Errors {
-		r.Errors[i] = publicCode(s)
-	}
+	return gates
 }

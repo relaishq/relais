@@ -98,5 +98,6 @@ jobs:
             runtime/operator-report/report.json
             runtime/operator-report/host-diagnostics.log
             runtime/operator-report/media-evidence.json
+            runtime/operator-report/head-caller-evidence.json
           if-no-files-found: warn
           retention-days: 14

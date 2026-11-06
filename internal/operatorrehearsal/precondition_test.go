@@ -43,7 +43,9 @@ func (*idlePeer) Poll() (operator.Frame, error, bool)                      { ret
 func (*idlePeer) Close() error                                             { return nil }
 func (*idlePeer) Finish(context.Context, func(error) operator.Frame) error { return nil }
 
-func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
+// idleInventory returns each slot's parsed native inventory and the matching
+// x86_64 release pins from the public inventory oracle.
+func idleInventory(t *testing.T) (map[string]json.RawMessage, []inventory.Pin) {
 	fixtures := map[string]json.RawMessage{}
 	var pins []inventory.Pin
 	for _, c := range oracletest.Cases(t, "inventory.parseInventory") {
@@ -74,6 +76,21 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 		pins[i].Architecture = "x86_64"
 		pins[i].BootSHA256 = strings.Repeat("d", 64)
 	}
+	return fixtures, pins
+}
+
+// hostReply is a successful host step; stdout carries data gzip and base64
+// encoded, as host steps return it.
+func hostReply(t *testing.T, data []byte) operator.Reply {
+	var compressed bytes.Buffer
+	z := gzip.NewWriter(&compressed)
+	_, _ = z.Write(data)
+	_ = z.Close()
+	return operator.Reply{Transport: operator.Succeeded, ExitCode: code(0), Payload: oracletest.Marshal(t, operator.HostOutput{Stdout: base64.StdEncoding.EncodeToString(compressed.Bytes())})}
+}
+
+func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
+	fixtures, pins := idleInventory(t)
 	for _, mode := range []string{"idle", "calls", "reservations", "worker-calls", "dead", "draining", "local-sessions", "inventory-unknown", "inventory-architecture", "status-shape", "repair-draining", "missing-unit-sequence"} {
 		t.Run(mode, func(t *testing.T) {
 			clock := operatorgates.NewRealClock()
@@ -196,11 +213,7 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 					}
 					data = oracletest.Marshal(t, map[string]any{"kind": "ok", "started": now, "ended": now, "data": product})
 				}
-				var compressed bytes.Buffer
-				z := gzip.NewWriter(&compressed)
-				_, _ = z.Write(data)
-				_ = z.Close()
-				return operator.Reply{Transport: operator.Succeeded, ExitCode: code(0), Payload: oracletest.Marshal(t, operator.HostOutput{Stdout: base64.StdEncoding.EncodeToString(compressed.Bytes())})}
+				return hostReply(t, data)
 			}}
 			r.runtime = &operatorgates.ProcessRuntime{Session: session, Peer: peer, Config: r.process, Pins: pins, Architecture: "x86_64", Bounds: &clocks.Bounds{FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000}}
 			session.SetObservationFailureSink(r.preconditionDiagnostic)

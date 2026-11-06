@@ -229,8 +229,17 @@ func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string
 	out.Write(encoded)
 	return nil
 }
-func saveMediaEvidence(output string, pool operatorevidence.Pool, judgeSHA string) error {
-	if !fullCommit.MatchString(pool.SourceCommit) || !fullDigest.MatchString(judgeSHA) {
+
+// headCallerBuild names the head-built caller in head-caller-evidence.json with
+// the field names of report.json's headCaller section.
+type headCallerBuild struct {
+	Commit       string `json:"commit"`
+	CallerSHA256 string `json:"callerSha256"`
+}
+
+// saveMediaEvidence writes the judge input. head is nil for the pinned caller.
+func saveMediaEvidence(output, file string, pool operatorevidence.Pool, judgeSHA string, head *headCallerBuild) error {
+	if !fullCommit.MatchString(pool.SourceCommit) || !fullDigest.MatchString(judgeSHA) || head != nil && (!fullCommit.MatchString(head.Commit) || !fullDigest.MatchString(head.CallerSHA256)) {
 		return fmt.Errorf("invalid-evidence-provenance")
 	}
 	raw, err := SanitizeMediaEvidence(pool)
@@ -238,16 +247,17 @@ func saveMediaEvidence(output string, pool operatorevidence.Pool, judgeSHA strin
 		return err
 	}
 	artifact := struct {
-		SchemaVersion int             `json:"schemaVersion"`
-		SourceCommit  string          `json:"sourceCommit"`
-		JudgeSHA256   string          `json:"judgeSha256"`
-		Pool          json.RawMessage `json:"pool"`
-	}{1, pool.SourceCommit, judgeSHA, raw}
+		SchemaVersion int              `json:"schemaVersion"`
+		SourceCommit  string           `json:"sourceCommit"`
+		JudgeSHA256   string           `json:"judgeSha256"`
+		HeadCaller    *headCallerBuild `json:"headCaller,omitempty"`
+		Pool          json.RawMessage  `json:"pool"`
+	}{1, pool.SourceCommit, judgeSHA, head, raw}
 	data, err := json.Marshal(artifact)
 	if err != nil {
 		return err
 	}
-	name := filepath.Join(output, "media-evidence.json")
+	name := filepath.Join(output, file)
 	if err = os.WriteFile(name+".tmp", append(data, '\n'), 0600); err != nil {
 		return err
 	}

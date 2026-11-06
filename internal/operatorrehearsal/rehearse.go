@@ -56,6 +56,7 @@ type recordingJudge struct {
 	pinned      operatorevidence.PinnedJudge
 	last        *operatorevidence.Summary
 	cpu         []Calibration
+	timing      []CallerTiming
 	retain      func(operatorevidence.Pool) error
 	diagnostics io.Writer
 }
@@ -67,6 +68,7 @@ func (j *recordingJudge) Judge(ctx context.Context, p operatorevidence.Pool) (op
 			return operatorevidence.Summary{}, errors.New("media-evidence-save-failed")
 		}
 	}
+	j.timing = callerTiming(p)
 	s, e := j.pinned.Judge(ctx, p)
 	if e != nil && j.note != nil {
 		end, _ := ctx.Deadline()
@@ -238,20 +240,27 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		r.recordError("calibration-cleanup-failed", e)
 		return report, errors.New("calibration-cleanup-failed")
 	}
-	if e = r.runResourceSequence(ctx, init); e != nil {
+	if e = r.runResourceSequence(ctx, init, r.pinnedSequence()); e != nil {
 		r.recordError("operator-session-incomplete", e)
 		return report, e
 	}
 	report.Pool = r.judge.last
 	report.CPU.Phases = r.judge.cpu
+	report.CallerTiming = r.judge.timing
+	// The pinned verdict inputs are final here. The head-caller phase only adds
+	// its own diagnostic section; Evaluate never reads it.
+	report.HeadCaller = r.runHeadCaller(ctx, scenario)
 	return report, nil
 }
 func (r *rehearsal) recordSequence(sequence operatorgates.SequenceResult, stops map[operator.Gate]bool) {
+	r.report.Gates = gateRows(r.report.Gates, sequence, stops)
+}
+func gateRows(prior []GateReport, sequence operatorgates.SequenceResult, stops map[operator.Gate]bool) []GateReport {
 	completed := map[operator.Gate]GateReport{}
-	for _, g := range r.report.Gates {
+	for _, g := range prior {
 		completed[g.Gate] = g
 	}
-	r.report.Gates = nil
+	var rows []GateReport
 	for i, g := range sequence.Gates {
 		row := completed[g.Gate]
 		row.Gate = g.Gate
@@ -265,8 +274,9 @@ func (r *rehearsal) recordSequence(sequence operatorgates.SequenceResult, stops 
 		if stopped, attempted := stops[g.Gate]; attempted {
 			row.CallerStopped = stopped
 		}
-		r.report.Gates = append(r.report.Gates, row)
+		rows = append(rows, row)
 	}
+	return rows
 }
 
 func (r *rehearsal) recordError(stage string, err error) {
@@ -369,7 +379,9 @@ func (r *rehearsal) setup(ctx context.Context) error {
 		}
 		r.report.JudgeSHA256 = append(r.report.JudgeSHA256, pinned.SHA256)
 		if i == 0 {
-			r.judge = &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error { return saveMediaEvidence(r.c.Output, p, pinned.SHA256) }}
+			r.judge = &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error {
+				return saveMediaEvidence(r.c.Output, "media-evidence.json", p, pinned.SHA256, nil)
+			}}
 		}
 	}
 	r.report.ReleaseCommits = []string{ReleaseACommit, ReleaseBCommit}
@@ -453,20 +465,24 @@ func (r *rehearsal) newCaller(ctx context.Context, g operator.Gate, seconds int,
 	if err != nil {
 		return err
 	}
-	if err = r.configureCaller(ctx, manifest, r.session); err != nil {
+	if err = r.configureCaller(ctx, manifest, r.session, callerBinary{r.load, r.report.CallerSHA256}); err != nil {
 		return err
 	}
 	r.active = b
 	return nil
 }
-func (r *rehearsal) configureCaller(ctx context.Context, manifest operatorcaller.Manifest, fence operatorcaller.Fence) error {
+
+// callerBinary is the relais-load executable one sequence launches.
+type callerBinary struct{ path, sha256 string }
+
+func (r *rehearsal) configureCaller(ctx context.Context, manifest operatorcaller.Manifest, fence operatorcaller.Fence, load callerBinary) error {
 	if err := r.ensureCallerBind(ctx); err != nil {
 		return err
 	}
 
 	identity := manifest.Identity
 	deadline := time.UnixMilli(manifest.Deadline)
-	config := operatorcaller.BridgeConfig{Identity: identity, Bind: r.callerBind, CertificateFile: filepath.Join(r.deployment.Work, "tls/signal/server.crt"), LoadSHA256: r.report.CallerSHA256}
+	config := operatorcaller.BridgeConfig{Identity: identity, Bind: r.callerBind, CertificateFile: filepath.Join(r.deployment.Work, "tls/signal/server.crt"), LoadSHA256: load.sha256}
 	raw, e := json.Marshal(config)
 	if e != nil {
 		return e
@@ -475,7 +491,7 @@ func (r *rehearsal) configureCaller(ctx context.Context, manifest operatorcaller
 	if e = os.WriteFile(path, raw, 0600); e != nil {
 		return e
 	}
-	launch := operatorcaller.LaunchConfig{BridgePath: r.bridge, BridgeSHA256: r.report.BinarySHA256, LoadPath: r.load, LoadSHA256: r.report.CallerSHA256, ConfigPath: path, ConfigSHA256: hash(raw), MailboxPath: filepath.Join(r.work, "mailbox"), WorkRoot: r.work, Architecture: "x86_64", RuntimeDeadline: deadline, CPUAffinity: strings.ReplaceAll(CPUList(r.report.CPU.Layout.Caller), ",", " ")}
+	launch := operatorcaller.LaunchConfig{BridgePath: r.bridge, BridgeSHA256: r.report.BinarySHA256, LoadPath: load.path, LoadSHA256: load.sha256, ConfigPath: path, ConfigSHA256: hash(raw), MailboxPath: filepath.Join(r.work, "mailbox"), WorkRoot: r.work, Architecture: "x86_64", RuntimeDeadline: deadline, CPUAffinity: strings.ReplaceAll(CPUList(r.report.CPU.Layout.Caller), ",", " ")}
 	r.launcher, e = operatorcaller.NewFixedLauncher(map[operatorcaller.Identity]operatorcaller.LaunchConfig{identity: launch}, callerExecutor{r}, r.box, fence)
 	if e != nil {
 		return e

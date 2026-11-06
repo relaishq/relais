@@ -45,7 +45,7 @@ func TestEvidenceArtifactScrubsTextWithoutFillingMissingFields(t *testing.T) {
 		t.Fatal("duplicate members disappeared")
 	}
 	output := t.TempDir()
-	if err = saveMediaEvidence(output, pool, strings.Repeat("b", 64)); err != nil {
+	if err = saveMediaEvidence(output, "media-evidence.json", pool, strings.Repeat("b", 64), nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(output, "media-evidence.json"))
@@ -59,6 +59,22 @@ func TestEvidenceArtifactScrubsTextWithoutFillingMissingFields(t *testing.T) {
 	}
 	if err = json.Unmarshal(raw, &artifact); err != nil || artifact.SchemaVersion != 1 || artifact.SourceCommit != ReleaseACommit || len(artifact.Pool.Phases) != 1 {
 		t.Fatal("artifact not rejudgeable", err)
+	}
+	if strings.Contains(string(raw), "headCaller") {
+		t.Fatal("pinned evidence names a head caller build")
+	}
+}
+
+func TestHeadEvidenceRefusesAnUnnamedBuild(t *testing.T) {
+	pool := operatorevidence.Pool{SourceCommit: ReleaseACommit}
+	for _, head := range []*headCallerBuild{{"abc", strings.Repeat("c", 64)}, {strings.Repeat("a", 40), "c"}} {
+		output := t.TempDir()
+		if err := saveMediaEvidence(output, HeadCallerEvidence, pool, strings.Repeat("b", 64), head); err == nil || err.Error() != "invalid-evidence-provenance" {
+			t.Fatal("unnamed head build accepted", head, err)
+		}
+		if _, err := os.Stat(filepath.Join(output, HeadCallerEvidence)); !os.IsNotExist(err) {
+			t.Fatal("refused evidence was written", err)
+		}
 	}
 }
 func TestEvidenceArtifactPreservesNumbersAndTimestampDifferences(t *testing.T) {
@@ -99,7 +115,7 @@ func TestRecordingJudgeRetainsInputAndLogsPublicContract(t *testing.T) {
 	retained := false
 	judge := recordingJudge{pinned: operatorevidence.PinnedJudge{Commit: ReleaseACommit, Binary: binary, SHA256: hex.EncodeToString(sum[:])}, diagnostics: &log, retain: func(p operatorevidence.Pool) error {
 		retained = true
-		return saveMediaEvidence(output, p, hex.EncodeToString(sum[:]))
+		return saveMediaEvidence(output, "media-evidence.json", p, hex.EncodeToString(sum[:]), nil)
 	}}
 	if _, err = judge.Judge(context.Background(), operatorevidence.Pool{SourceCommit: ReleaseACommit, RunID: "private-run"}); err != nil {
 		t.Fatal(err)

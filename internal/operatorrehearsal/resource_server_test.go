@@ -55,7 +55,7 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err = r.runResourceSequence(ctx, init); err != nil {
+	if err = r.runResourceSequence(ctx, init, r.pinnedSequence()); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 || r.session == nil || !r.session.Latched() || len(r.report.Gates) != 1 || r.report.Gates[0].Reason != "command-result-unknown" || r.report.Gates[0].ProcedureCompleted {

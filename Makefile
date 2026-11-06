@@ -217,8 +217,9 @@ test-operator-rehearsal-container: ## Runner only: boot actual template units an
 .PHONY: operator-rehearsal-build operator-rehearsal
 OPERATOR_REHEARSAL_FLAGS ?=
 OPERATOR_REHEARSAL_RUNNER ?=
-operator-rehearsal-build: ensure_bin_dir ## Build the public gate/bridge executable before rehearsal media
+operator-rehearsal-build: ensure_bin_dir ## Build the gate/bridge and the diagnostic head caller before rehearsal media
 	CGO_ENABLED=0 $(GOBUILD) -trimpath -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
+	CGO_ENABLED=0 $(GOBUILD) -trimpath -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
 
 operator-rehearsal: operator-rehearsal-build ## Run the fixed four-gate Linux Docker profile; needs root systemd and four allowed CPUs
 	$(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)
