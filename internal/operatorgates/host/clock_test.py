@@ -58,6 +58,17 @@ class TrackingTests(unittest.TestCase):
         for reference in ('203.0.113.15', '2001:db8::15', 'GPS0'):
             self.assertEqual(clock.tracking_row(self.row(0, reference=reference))['reference'], reference)
 
+    def test_read_complete_requires_the_entire_snapshot(self):
+        self.assertTrue(self.read()['readComplete'])
+        self.append(self.row(1)[:-1])
+        self.assertFalse(self.read()['readComplete'])
+        self.append('\n')
+        self.assertTrue(self.read()['readComplete'])
+        self.log.write_text(''.join(self.row(s) for s in range(1200)))
+        first = self.read()
+        self.assertFalse(first['readComplete'])
+        self.assertTrue(self.read(first['cursor'])['readComplete'])
+
     def test_recorded_break_fixtures(self):
         for kind in ('cursor-gap', 'log-rotation', 'log-loss', 'clock-step', 'daemon-restart', 'source-change', 'leap-status', 'self-consistency'):
             with self.subTest(kind=kind):

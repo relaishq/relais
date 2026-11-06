@@ -180,6 +180,7 @@ func (r *rehearsal) pinnedSequence() resourceSequence {
 			if result.PoolError {
 				r.report.Errors = append(r.report.Errors, "media-judge-failed")
 			}
+			r.report.ClockCoverage = result.ClockCoverage
 			r.report.Clocks = result.Clocks
 			if r.runtime != nil {
 				r.report.Clocks = append(append([]clocks.Evidence{}, r.runtime.ClockSamples...), result.Clocks...)
@@ -204,7 +205,7 @@ func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init,
 	init.Capabilities = adapter.Capabilities()
 	config := operatorgates.ResourceConfig{Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: seq.judge.pinned.Binary, CallerIDBase: uint64(len(r.units) + 1), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
 	var session *operatorgates.Session
-	runner := operatorgates.ResourceRunner{Config: config, Judge: seq.judge, Timing: &operatorgates.TimingRecorder{Writer: r.diagnostics}, Started: func(s *operatorgates.Session) {
+	runner := operatorgates.ResourceRunner{Config: config, Judge: seq.judge, CoverageRead: adapter.readCoverageClock, Timing: &operatorgates.TimingRecorder{Writer: r.diagnostics}, Started: func(s *operatorgates.Session) {
 		session = s
 		seq.started(s)
 		seq.judge.note = s.RecordUncertainty

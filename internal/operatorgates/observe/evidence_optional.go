@@ -46,6 +46,7 @@ func EvidenceOptionalLedger() map[string]string {
 }
 
 var evidenceOptional = map[string]string{
+	"operatorevidence.Pool.ClockCoverage":              "Recorded-only coverage diagnostics never qualify media and are omitted from pinned judge transport in slice 4a.",
 	"callharness.ClassificationCandidate.StartRange":   "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
 	"callharness.ClassificationCandidate.EndRange":     "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
 	"callharness.TimingEvidence.PlannedSpan":           "Only planned moves apply the shared control-clock span allowance.",

@@ -116,10 +116,11 @@ type MediaInput struct {
 	Missing bool `json:"missing,omitempty"`
 }
 type Pool struct {
-	SourceCommit string       `json:"-"`
-	RunID        string       `json:"runId"`
-	Phases       []MediaInput `json:"phases"`
-	Missing      bool         `json:"missing"`
+	ClockCoverage *clocks.CoverageEvidence `json:"clockCoverage,omitempty"`
+	SourceCommit  string                   `json:"-"`
+	RunID         string                   `json:"runId"`
+	Phases        []MediaInput             `json:"phases"`
+	Missing       bool                     `json:"missing"`
 }
 
 func ReadPool(run string, phases []Phase, missing bool) (Pool, string, error) {

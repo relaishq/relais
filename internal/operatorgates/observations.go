@@ -98,7 +98,8 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 	return pool, nil
 }
 
-func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds, end time.Duration) (clocks.Evidence, error) {
+func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds, end time.Duration) (evidence clocks.Evidence, resultErr error) {
+	defer func() { s.retainClockAttempt(evidence) }()
 	rows := map[string]clocks.Sample{}
 	s.mu.Lock()
 	probeFile := s.clockProbeFile
@@ -158,7 +159,7 @@ func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds,
 	if err != nil {
 		return clocks.Evidence{Version: clocks.EvidenceVersion, At: s.clock.Wall(), Clocks: rows, Falsification: probes}, err
 	}
-	evidence, err := clocks.Check(rows, bounds, frontend, control)
+	evidence, err = clocks.Check(rows, bounds, frontend, control)
 	evidence.At = s.clock.Wall()
 	evidence.Falsification = probes
 	return evidence, err

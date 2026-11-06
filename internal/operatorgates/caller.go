@@ -11,6 +11,7 @@ import (
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/controlplane"
 )
@@ -24,11 +25,12 @@ type MediaJudge interface {
 // EvidenceRuntime retains survivor phases for one release pin. Collection can
 // append while a measurement retains telemetry; finalization only reads evidence.
 type EvidenceRuntime struct {
-	RunID   string
-	Judge   MediaJudge
-	mu      sync.Mutex
-	phases  []operatorevidence.Phase
-	missing bool
+	RunID    string
+	Judge    MediaJudge
+	Coverage func([]observe.CoverageWindow) *clocks.CoverageEvidence
+	mu       sync.Mutex
+	phases   []operatorevidence.Phase
+	missing  bool
 }
 
 func (r *EvidenceRuntime) Add(phase operatorevidence.Phase, missing bool) {
@@ -47,6 +49,9 @@ func (r *EvidenceRuntime) Media(ctx context.Context) (*MediaSummary, error) {
 	pool, _, err := operatorevidence.ReadPool(r.RunID, phases, missing)
 	if err != nil {
 		return nil, fault("precondition-failed:media-pool")
+	}
+	if r.Coverage != nil {
+		pool.ClockCoverage = r.Coverage(operatorevidence.CoverageWindows(pool))
 	}
 	summary, err := r.Judge.Judge(ctx, pool)
 	return procedureMedia(summary), err

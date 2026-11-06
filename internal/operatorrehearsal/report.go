@@ -47,6 +47,7 @@ type Report struct {
 	CPU             CPUReport                 `json:"cpu"`
 	Gates           []GateReport              `json:"gates"`
 	Pool            *operatorevidence.Summary `json:"pooledMedia"`
+	ClockCoverage   *clocks.CoverageEvidence  `json:"clockCoverage,omitempty"`
 	Clocks          []clocks.Evidence         `json:"clocks"`
 	Errors          []string                  `json:"errors"`
 	Latched         bool                      `json:"latched"`

@@ -49,6 +49,7 @@ type TrackingBreak struct {
 	UnixSeconds     int64  `json:"unixSeconds"`
 }
 type TrackingLog struct {
+	ReadComplete   bool            `json:"readComplete"`
 	Cursor         json.RawMessage `json:"cursor"`
 	Rows           []TrackingRow   `json:"rows"`
 	Breaks         []TrackingBreak `json:"breaks"`
