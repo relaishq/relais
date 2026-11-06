@@ -64,7 +64,7 @@ func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 		c.stateMu.Lock()
 		reason := c.relayEndReason
 		c.stateMu.Unlock()
-		require.Equal(t, "relay_change_failed", reason)
+		require.Equal(t, "relay_lost", reason)
 		select {
 		case <-c.relayWake:
 		default:
@@ -79,7 +79,7 @@ func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 		// Further failed cut-offs must not start a second terminal episode.
 		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
 		p.mu.Lock()
-		losses := p.lossesByCause["relay_change_failed"]
+		losses := p.lossesByCause["relay_lost"]
 		replaceable := b.observation.canReplace(b.reserved)
 		p.mu.Unlock()
 		require.False(t, replaceable, "deadline must not depend on dead-worker recovery")
@@ -390,7 +390,7 @@ func TestRelayLossUnsupportedDeadOwnerDeadline(t *testing.T) {
 		}, 4*time.Second, time.Millisecond)
 		p.mu.Lock()
 		terminal, cleanup := c.terminal, c.cleanupPending
-		losses, replaceable := p.lossesByCause["relay_change_failed"], owner.observation.canReplace(owner.reserved)
+		losses, replaceable := p.lossesByCause["relay_lost"], owner.observation.canReplace(owner.reserved)
 		p.mu.Unlock()
 		require.True(t, terminal)
 		require.True(t, cleanup, "unreachable owner must leave fenced cleanup pending")

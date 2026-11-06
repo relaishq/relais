@@ -599,8 +599,10 @@ Preflight rules:
 3. Calls without `media_progress` use persisted `delivery` mode if
    `relay_change` is true, otherwise `none`. A call without a saved mode has
    `none`. Unreleased state is not migrated (amendment 2026-11-05 below). A
-   confirmation record in an unknown format is refused. A journal entry in an
-   unknown format is deleted as stale.
+   confirmation record in an unknown format is refused. Control deletes it and
+   logs the session ID and reason; the call then has no saved mode, and relay
+   loss ends it with `relay_lost`. A journal entry in an unknown format is
+   deleted as stale.
 4. Before acknowledging any A, control must persist the union of MIDs fenced
    against supersession, abort and timeout. A restart restores it before
    processing reports, retries or timeout. The write that supplies the last
@@ -658,6 +660,11 @@ change and makes the refusal exact:
 - A confirmation record in an unknown format is refused. It accepts no A or C
   evidence and completes no attempt. An attempt without a saved store-clock
   bound accepts no evidence.
+- Control deletes such a record and logs it; the call then has mode `none`
+  ([#392](https://github.com/relaishq/relais/issues/392)). While control runs,
+  the call's recovery proposal becomes a `relay-recovery-unsupported` entry
+  with the same detection time. At restart the proposal is deleted, so the
+  next loss detection starts a new deadline.
 - At control restart, a `relay-recovery-unsupported` watchdog entry has no
   `seq` and is restored. A journal entry with an unknown kind, or a
   `relay-recovery` entry without `seq`, is deleted as stale.

@@ -89,7 +89,7 @@ func TestRestartRestoresUnsupportedWatchdog(t *testing.T) {
 		intent := sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKindUnsupported, Started: time.Now().Add(200*time.Millisecond - relayRecoveryLimit), Lease: lease}
 		require.NoError(t, store.(sessionstore.ControlStore).PutControlIntent(context.Background(), intent))
 		require.NoError(t, p.restoreRelayEpisode(context.Background(), c, intent))
-		require.Eventually(t, func() bool { return endReason(c) == "relay_change_failed" }, 5*time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool { return endReason(c) == "relay_lost" }, 5*time.Second, 10*time.Millisecond)
 		require.Eventually(t, func() bool { p.mu.Lock(); defer p.mu.Unlock(); return c.terminal }, 5*time.Second, 10*time.Millisecond)
 	})
 }

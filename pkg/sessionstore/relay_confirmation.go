@@ -166,6 +166,10 @@ type RelayConfirmations interface {
 	// Non-zero notBefore and notAfter are store-clock times, enforced inside
 	// the same atomic write.
 	CASRelayConfirmation(ctx context.Context, id string, at RelayAssignment, from, to RelayConfirmation, notBefore, notAfter time.Time) error
+	// ClearInvalidRelayConfirmation deletes only an undecodable record (or
+	// an already empty one). It compares the raw fields and enforces the
+	// control authority's store-clock notAfter inside the atomic write.
+	ClearInvalidRelayConfirmation(ctx context.Context, id string, notAfter time.Time) error
 }
 
 func sameCommit(a, b RelayCommit) bool {
@@ -386,3 +390,25 @@ func (m *Memory) CASRelayConfirmation(ctx context.Context, id string, at RelayAs
 
 var _ RelayConfirmations = (*Memory)(nil)
 var _ RelayConfirmations = (*Redis)(nil)
+
+func (m *Memory) ClearInvalidRelayConfirmation(ctx context.Context, id string, notAfter time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lease, ok := m.leases[id]
+	now := time.Now()
+	if !ok || !now.Before(lease.ExpiresAt) {
+		return ErrNotFound
+	}
+	if !notAfter.IsZero() && now.After(notAfter) {
+		return ErrRelayAttemptExpired
+	}
+	saved := m.relayConfirmations[id]
+	if _, err := decodeRelayConfirmation(saved[0], saved[1], saved[2]); !errors.Is(err, ErrRelayConfirmationInvalid) && saved != [3]string{} {
+		return ErrRelayConflict
+	}
+	delete(m.relayConfirmations, id)
+	return nil
+}

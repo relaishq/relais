@@ -890,16 +890,19 @@ func (p *Plane) restoreRelayEpisode(ctx context.Context, c *call, intent session
 	if intent.Kind != relayIntentKind || intent.Seq == 0 {
 		return discard() // unknown format: the stall and end paths remain
 	}
-	store, ok := p.store.(sessionstore.RelayConfirmations)
+	_, ok := p.store.(sessionstore.RelayConfirmations)
 	if !ok {
 		return discard()
 	}
-	_, rec, err := store.RelayConfirmation(ctx, c.id)
+	_, rec, err := p.relayConfirmationOrClear(ctx, c)
 	if errors.Is(err, sessionstore.ErrNotFound) {
 		return discard()
 	}
 	if err != nil {
 		return err
+	}
+	if rec.Mode == "" || rec.Mode == sessionstore.RelayConfirmNone {
+		return discard()
 	}
 	ep := rec.Episode
 	switch {
@@ -924,6 +927,34 @@ func (p *Plane) restoreRelayEpisode(ctx context.Context, c *call, intent session
 	}
 	p.installRelayEpisode(c, intent) // its watcher begins it
 	return nil
+}
+
+// relayConfirmationOrClear treats an undecodable record as no saved mode.
+// Its raw-field deletion uses the same authority deadline as confirmation CAS.
+func (p *Plane) relayConfirmationOrClear(ctx context.Context, c *call) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	store := p.store.(sessionstore.RelayConfirmations)
+	a, rec, err := store.RelayConfirmation(ctx, c.id)
+	if errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) {
+		var notAfter time.Time
+		if authority, ok := p.authorityDeadline(); ok {
+			var e error
+			notAfter, e = p.storeTime(ctx, c.id, authority)
+			if e != nil {
+				return a, rec, e
+			}
+		}
+		if e := store.ClearInvalidRelayConfirmation(ctx, c.id, notAfter); e != nil {
+			return a, rec, e
+		}
+		log.Printf("controlplane: discarded relay confirmation session_id=%q reason=%q", c.id, err.Error())
+		rec, err = sessionstore.RelayConfirmation{}, nil
+	}
+	if err == nil && (rec.Mode == "" || rec.Mode == sessionstore.RelayConfirmNone) {
+		c.stateMu.Lock()
+		c.relayMode, c.relayCapable = sessionstore.RelayConfirmNone, false
+		c.stateMu.Unlock()
+	}
+	return a, rec, err
 }
 
 // journalDurableEpisode re-journals an episode that the session record holds
