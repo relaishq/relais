@@ -112,7 +112,7 @@ func (r *Report) sanitize() {
 		rows := map[string]clocks.Sample{}
 		for _, slot := range Slots {
 			if s, ok := e.Clocks[slot]; ok {
-				s.Tracking = ""
+				s = clocks.PublicSample(s)
 				if !regexp.MustCompile(`^[0-9]{19}$`).MatchString(s.MeasuredUnixNS) {
 					s.MeasuredUnixNS = "unavailable"
 				}

@@ -125,13 +125,14 @@ PY
 `, name, data, running, arch), nil
 }
 
-func Clock() string {
-	return "python3 - <<'PY'\n" + source("clock.py") + `
+func Clock(cursor json.RawMessage, runStartUnixMS int64) string {
+	data, _ := encoded(cursor)
+	return "python3 - <<'PY'\n" + source("clock.py") + fmt.Sprintf(`
 import json,gzip,base64
 try:
- print(base64.b64encode(gzip.compress(json.dumps(clock_evidence()).encode())).decode())
+ print(base64.b64encode(gzip.compress(json.dumps(read_clock(json.loads(base64.b64decode('%s')), %d)).encode())).decode())
 except Exception:
  print('CLOCK_UNKNOWN')
 PY
-`
+`, data, runStartUnixMS)
 }

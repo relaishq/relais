@@ -44,8 +44,65 @@ membership flags and explicit witness-change flags show which boundary changed
 when labels disagree. Change flags compare with the first row for that metric.
 They are representative cells, not a full replay history. `host-clocks` records retain
 error/rate measurements and measurement times for each actual four-host refresh;
-raw tracking text is removed. Only fixed host slots and content labels survive
-this projection. No deployment identities or addresses are included.
+raw tracking text is removed. Clock evidence now writes `version: 2` (the
+previous unversioned shape is version 1). Version 2 covers recorded diagnostics;
+the next slice can add optional falsification records under this same version.
+Protocol, result, numeric media timing and judge input formats are unchanged.
+Only fixed host slots and content labels survive this projection. No deployment
+identities or addresses are included.
+
+Each host sample also retains `trackingLog`: newly read rows, a cursor, the
+session's armed time (`runStartUnixMs`) and break records. A session keeps each
+host's live cursor and sends it on the next read. The cursor binds device/inode,
+byte position, a trailing-content hash, daemon boot/PID/start identity, the
+previous row and wall/monotonic read brackets. The first read returns recent
+complete rows from at most 64 KiB of log history. Later reads resume at the
+cursor and read through EOF up to 64 KiB. An additional encoded-size budget
+keeps rows and breaks below the host unpack limit. A read stopped by either
+limit records nothing; the next read resumes at the cursor. A batch exceeding
+the existing compressed wire limit drops its rows and records a gap instead of
+failing the clock read; the cursor still advances, so those rows are not read
+again. Partial final lines wait for the next read. An oversized line
+records one loss break and is discarded through its newline or the current EOF;
+the cursor remembers whether later bytes still belong to that discarded line.
+
+Continuity uses row timestamp gaps greater than 60 s, inode, anchor and size
+checks. Time between host reads alone does not create a break. Rotation, loss,
+restart, wall steps, source changes, non-Normal leap status and inconsistent
+bounds also produce recorded breaks. Wall steps use the change in realtime
+minus monotonic time, allowing both read widths plus 1 us for read resolution.
+Public rows omit `reference` entirely; a source change is retained as a break.
+Only byte position and a hashed anchor survive from the private cursor.
+
+Chrony's `chrony.conf(5)`, `log tracking` format has 14 whitespace-separated
+columns: UTC date, UTC time, reference (server IPv4/IPv6 address or refclock
+name), stratum, frequency (ppm), skew (ppm), offset (s), leap letter, combined
+source count, offset standard deviation (s), remaining correction (s), root
+delay (s), root dispersion (s), and maximum error (s). Repeated banners and
+column headers are skipped. There is no residual-frequency column. Column 14
+is chrony's error bound since the preceding update, including remaining
+correction and frequency uncertainty. Self-consistency records a break when
+`abs(offset_k) > maxerror_k`; the reader does not age a previous row or parse
+`maxclockerror` from configuration. The rehearsal config enables `log tracking`
+in `/var/log/chrony`, sets `maxclockerror 1`, and retains `chronyd -x`.
+
+Rows and breaks have `beforeRun`: true only when the row's entire timestamp
+second, or a break's entire interval, precedes the session armed time. A second
+that straddles that time counts as in-run. Breaks overlapping the run count as
+in-run even if they start earlier. Undated loss records conservatively count
+in-run. Historical rows and breaks remain recorded; rehearsal acceptance counts
+only breaks with `beforeRun: false` and checks coverage of in-run timestamps.
+
+These diagnostics do not enter clock admission, event verdicts, causes,
+thresholds or pooling. Attempted refreshes with a failing host also retain a
+non-zero `At` and available host timelines, including in batch mode. Such
+failed refreshes count toward the recorder's 256-refresh cap, but do not enter
+the runtime's successful sample cache or make a failed gate succeed.
+For rehearsal acceptance, inspect all four slots in `host-clocks` JSONL or
+report `clocks`: require version 2, usable per-host cursors, a continuous row
+timeline covering the run including its tail, no in-run breaks, and zero
+`omitted_refreshes`. An empty batch or a non-zero `At` alone proves no coverage.
+Coverage enforcement and bound selection remain later slices.
 
 Each event retains at most two gap rows and eight probes per endpoint (the
 first six plus the binding probes) and 16 candidate states shared across `first_content` and
@@ -58,8 +115,8 @@ reached; omitted earlier snapshots are counted. Omitted gap rows, probes,
 candidate observations, events, snapshots and refreshes have explicit counters. A malformed caller stream has
 an `unavailable_streams` count. Older caller evidence can omit the optional
 section; mapping/duration fields already present are still projected. No
-protocol, result or existing evidence schema version changes. The optional
-section is not used by classifier agreement, thresholds or pooled policy.
+protocol or result schema changes come from this optional media timing section.
+It is not used by classifier agreement, thresholds or pooled policy.
 `TimingEvidence.Version` owns its inner schema. Version 1 fields stay fixed;
 future additions must use version-aware optionality so older evidence does not
 become incomplete.

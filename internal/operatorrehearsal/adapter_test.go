@@ -278,14 +278,15 @@ func TestSessionUsesSameAdapterThroughLocalPeerAndPipes(t *testing.T) {
 }
 
 type p2ClockRunner struct {
-	t      *testing.T
-	sample clocks.Sample
-	calls  int
+	t              *testing.T
+	sample         clocks.Sample
+	runStartUnixMS int64
+	calls          int
 }
 
 func (r *p2ClockRunner) Run(_ context.Context, c Command) CommandResult {
 	r.t.Helper()
-	if string(c.Input) != host.Clock() {
+	if string(c.Input) != host.Clock(nil, r.runStartUnixMS) {
 		r.t.Fatal("adapter did not execute P2's clock script")
 	}
 	r.calls++
@@ -306,7 +307,7 @@ func (r *p2ClockRunner) Run(_ context.Context, c Command) CommandResult {
 func TestP2ClockObservationsUseSharedHostOutput(t *testing.T) {
 	now := time.Now()
 	init := operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: []operator.Gate{operator.Rollout}}, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostExecute}}
-	runner := &p2ClockRunner{t: t, sample: clocks.Sample{ErrorBoundNS: 1, RateErrorPPM: 1, MeasuredUnixNS: strconv.FormatInt(now.UnixNano(), 10)}}
+	runner := &p2ClockRunner{t: t, runStartUnixMS: now.UnixMilli(), sample: clocks.Sample{ErrorBoundNS: 1, RateErrorPPM: 1, MeasuredUnixNS: strconv.FormatInt(now.UnixNano(), 10)}}
 	adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner}
 	peer := NewLocalPeer(adapter, "fixture", init)
 	run := func(ctx context.Context, s *operatorgates.Session, p operatorgates.Peer, g operator.Gate) operator.GateResult {

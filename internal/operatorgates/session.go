@@ -55,6 +55,7 @@ type Session struct {
 	uncertainties   []operator.Uncertainty
 	uncertaintySink func(operator.Uncertainty)
 
+	clockCursors           map[string]json.RawMessage
 	observationFailureSink func(string, string, error)
 }
 
