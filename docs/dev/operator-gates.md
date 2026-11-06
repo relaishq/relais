@@ -134,7 +134,7 @@ records unavailable evidence. The existing clock admission check is unchanged.
 
 Each existing clock refresh reads complete lines with a separate file cursor.
 The reader uses the existing 64 KiB read window. It packs the tracking baseline
-first, including its existing wire fallback. It then adds the largest probe
+first, including its existing wire fallback. It then adds a probe
 prefix that fits 23998 bytes of base64(gzip) and 256000 unpacked bytes. Deferred
 lines keep their cursor position. An unfinished last line waits for the next
 read. File loss, replacement or an invalid anchor records a cursor gap and
@@ -142,8 +142,16 @@ resumes at the current file end; it does not replay old attempts. File errors
 and invalid optional payloads only add diagnostic counts. They do not change
 tracking rows, measured error/rate, read success, admission, causes or verdicts.
 Concurrent refreshes do not wait for a probe reader. They keep their normal
-tracking reads and count the skipped probe collection as a read failure.
+tracking reads. A skipped probe collection is not a read failure.
 The startup read excludes attempts ending more than one second before arm.
+
+Prefix packing uses at most 13 compression checks per read. A failure diagnostic
+can add one check. The baseline and final output each use one more compression.
+Packing can defer a fitting prefix instead of finding the largest prefix.
+Deferred lines keep their cursor position for the next read. The probe path
+must be absolute and must not contain a NUL or newline. The reader opens only a
+direct regular file. It rejects symlinks and uses a nonblocking open so a FIFO
+cannot delay the clock read.
 
 Version 2 adds optional `falsification`: `frontendSlot`, `records`,
 `countsByStatus`, `countsByReason`, `rttHistogram` and `lossCounts`. Each record
@@ -179,9 +187,11 @@ counted. Rehearsal probe acceptance waits for release pins with the prober.
 Its nine disjoint buckets end at 0.1, 0.25, 0.5, 1, 2, 5, 10 and 50 ms; the
 last bucket has no upper limit. It includes valid RTTs even without tracking
 coverage. `lossCounts` has `readFailures`, `malformedLines`, `cursorGaps`,
-`capacityEvents` and `omittedRecords`. Missing inventory or optional metadata
-also counts as a read failure. A capacity event or cursor gap means the number
-of missing attempts is unknown. These diagnostics add no gate or pass rule.
+`capacityEvents` and `omittedRecords`. Missing optional metadata from an
+attempted probe read counts as a read failure. Missing inventory and skipped
+concurrent probe reads do not count as read failures. Keep the last successful
+inventory when a refresh fails; the topology is fixed for the session. A capacity
+event or cursor gap means the number of missing attempts is unknown. These diagnostics add no gate or pass rule.
 
 Each event retains at most two gap rows and eight probes per endpoint (the
 first six plus the binding probes) and 16 candidate states shared across `first_content` and

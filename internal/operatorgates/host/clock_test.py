@@ -334,7 +334,7 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(self.read(gap['cursor'])['probeLog']['lines'].encode(), self.line(2))
         self.assertNotIn('probeLog', self.read(path=''))
 
-    def test_combined_wire_pressure_defers_the_largest_prefix_without_loss(self):
+    def test_combined_wire_pressure_defers_a_prefix_without_loss(self):
         import random
         import string
         rng = random.Random(31)
@@ -351,13 +351,6 @@ class ProbeTests(unittest.TestCase):
         self.assertLess(count, len(lines))
         self.assertEqual(first['cursor']['position'], count * 84)
         self.assertEqual(first['lines'].encode(), b''.join(lines[:count]))
-        more = clock.json.loads(clock.json.dumps(first))
-        more['lines'] += lines[count].decode()
-        more['cursor']['position'] += 84
-        with self.path.open('rb') as f:
-            f.seek(max(0, more['cursor']['position']-256))
-            more['cursor']['anchor'] = clock.hashlib.sha256(f.read(min(more['cursor']['position'],256))).hexdigest()
-        self.assertFalse(clock.probe_fits(self.baseline(), more))
         seen, cursor = first['lines'], first['cursor']
         for _ in range(20):
             result = self.read(cursor)
@@ -372,6 +365,50 @@ class ProbeTests(unittest.TestCase):
             if cursor['position'] == self.path.stat().st_size:
                 break
         self.assertEqual(seen.encode(), b''.join(lines))
+
+    def test_full_window_has_bounded_compression_calls(self):
+        # Wire pressure forces deferral. Include baseline compression, normal
+        # records, and the maximum number of malformed lines in one window.
+        import random
+        import string
+        self.sample['tracking'] = ''.join(random.Random(31).choices(string.ascii_letters + string.digits, k=22000))
+        for data in (b''.join(self.line(i) for i in range(781))[:clock.READ_LIMIT], b'\n' * clock.READ_LIMIT):
+            self.path.write_bytes(data)
+            with patch.object(clock.gzip, 'compress', wraps=clock.gzip.compress) as compress:
+                result = self.read()
+            self.assertLessEqual(compress.call_count, 15)
+            self.assertGreater(result['probeLog']['cursor']['position'], 0)
+            result.pop('probeLog')
+            self.assertEqual(result, self.baseline())
+
+    def test_fifo_and_symlink_leave_baseline_intact(self):
+        import os
+        fifo = self.path.with_suffix('.fifo')
+        os.mkfifo(fifo)
+        link = self.path.with_suffix('.link')
+        link.symlink_to(self.path)
+        # A subprocess timeout makes a blocking-open regression fail promptly.
+        import subprocess
+        import sys
+        for path in (fifo, link):
+            completed = subprocess.run([sys.executable, '-B', '-c',
+                "import clock,json,sys; print(json.dumps(clock.add_probe_evidence(json.load(sys.stdin),sys.argv[1],None,0)))", str(path)],
+                input=clock.json.dumps(self.baseline()), text=True, capture_output=True, check=True, timeout=2)
+            result = clock.json.loads(completed.stdout)
+            self.assertEqual(result.pop('probeLog')['lossCounts']['readFailures'], 1)
+            self.assertEqual(result, self.baseline())
+
+    def test_unexpected_probe_exception_leaves_baseline_intact(self):
+        self.path.write_bytes(self.line())
+        with patch.object(clock, 'probe_line', side_effect=RuntimeError('injected')):
+            result = self.read()
+        batch = result.pop('probeLog')
+        self.assertEqual(batch['lossCounts']['readFailures'], 1)
+        self.assertIsNone(batch['cursor'])
+        self.assertEqual(result, self.baseline())
+        # Even an exception in diagnostic packing cannot escape this boundary.
+        with patch.object(clock, 'probe_fits', side_effect=RuntimeError('injected')):
+            self.assertEqual(self.read(), self.baseline())
 
     def test_unpack_budget_and_tracking_fallback_are_unchanged(self):
         self.path.write_bytes(self.line())

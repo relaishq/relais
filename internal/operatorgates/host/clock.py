@@ -232,7 +232,9 @@ def add_probe_evidence(baseline, path, cursor, run_start_unix_ms):
     losses = dict(readFailures=0, malformedLines=0, cursorGaps=0, capacityEvents=0, omittedRecords=0)
     evidence = dict(lines='', cursor=cursor, lossCounts=dict(losses))
     try:
-        with pathlib.Path(path).open('rb') as log:
+        # Probe output must be a direct regular file. Never wait for a FIFO or
+        # follow a substituted symlink on this optional read.
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), 'rb') as log:
             info = os.fstat(log.fileno())
             require(info.st_size <= 4 * 1024 * 1024 and stat.S_ISREG(info.st_mode), 'Invalid probe file')
             identity = str(info.st_dev) + ':' + str(info.st_ino)
@@ -279,20 +281,36 @@ def add_probe_evidence(baseline, path, cursor, run_start_unix_ms):
                     except (ValueError, TypeError):
                         losses['malformedLines'] += 1
                 steps.append((consumed, skip, length, dict(losses)))
-            # Try the largest prefix first. Compression is not strictly monotone,
-            # so binary search alone cannot establish the largest fitting prefix.
-
+            # Compression is not strictly monotone. A fitting chronological
+            # prefix is sufficient; never spend unbounded time finding the max.
             text = ''.join(chunks)
-            for end, skip_line, text_end, counts in reversed(steps):
+            best = None
+            low, high = 0, len(steps) - 1
+            for _ in range(13):
+                if low > high:
+                    break
+                middle = (low + high) // 2
+                end, skip_line, text_end, counts = steps[middle]
                 log.seek(max(0, end - 256))
                 next_cursor = dict(file=identity, position=end, anchor=hashlib.sha256(log.read(min(end, 256))).hexdigest(), skipLine=skip_line)
                 candidate = dict(lines=text[:text_end], cursor=next_cursor, lossCounts=counts)
                 if probe_fits(baseline, candidate):
-                    return dict(baseline, probeLog=candidate)
-    except (OSError, ValueError, KeyError, TypeError):
+                    best = candidate
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if best is not None:
+                return dict(baseline, probeLog=best)
+    except Exception:
+        # The baseline is complete. Optional failures must not fail this read,
+        # including unexpected decoder or packing exceptions.
         evidence['lossCounts']['readFailures'] += 1
-        if probe_fits(baseline, evidence):
-            return dict(baseline, probeLog=evidence)
+        try:
+            if probe_fits(baseline, evidence):
+                return dict(baseline, probeLog=evidence)
+        except Exception:
+            pass
+
     return baseline
 
 

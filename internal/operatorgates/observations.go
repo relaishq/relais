@@ -86,18 +86,15 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 		}
 		return err
 	})
-	s.mu.Lock()
-	s.inventoryComponents = nil
-	if err == nil {
-		s.inventoryComponents = components
-	}
-	s.mu.Unlock()
 	if err != nil {
 		return releasecompat.Pool{}, err
 	}
 	if deployedSHA != "" && slices.ContainsFunc(pool.Participants, func(p releasecompat.Participant) bool { return p.Commit != deployedSHA }) {
 		return releasecompat.Pool{}, errors.New("deployed release differs from judge pin")
 	}
+	s.mu.Lock()
+	s.inventoryComponents = components
+	s.mu.Unlock()
 	return pool, nil
 }
 
@@ -147,11 +144,11 @@ func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds,
 	var probes *clocks.Falsification
 	if probeFile != "" {
 		s.mu.Lock()
-		raw := rows[frontend].ProbeLog
+		probeSource := frontend
 		if !readProbes {
-			raw = nil
+			probeSource = ""
 		}
-		if cursor := s.clockProbeHistory.Collect(rows, frontend, raw); len(cursor) > 0 {
+		if cursor := s.clockProbeHistory.Collect(rows, probeSource, rows[probeSource].ProbeLog); len(cursor) > 0 {
 			s.clockProbeCursor = cursor
 		}
 		probes = s.clockProbeHistory.Snapshot(frontend, targets)

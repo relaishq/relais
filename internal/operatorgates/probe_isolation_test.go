@@ -119,8 +119,24 @@ func TestAmbiguousProbeInventoryDoesNotReadAnyFile(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, s.Latched())
 		require.Equal(t, "unavailable", e.Falsification.FrontendSlot)
-		require.Equal(t, 1, e.Falsification.LossCounts.ReadFailures)
+		require.Zero(t, e.Falsification.LossCounts.ReadFailures)
 	}
+}
+
+func TestSkippedProbeReadDoesNotCountAsFailure(t *testing.T) {
+	s, _ := fixtureSession(t)
+	s.clockProbeFile = "/private/probes"
+	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}, "w1": {"w1"}, "w2": {"w2"}}
+	peer := &observationPeer{respond: func(req operator.Request) operator.Reply {
+		require.NotContains(t, string(req.Script), "args=json.loads")
+		return hostReply(t, []byte(`{"errorBoundNs":1,"rateErrorPpm":0.1,"measuredUnixNs":"1793930000000000000"}`))
+	}}
+	s.clockProbeRefresh.Lock()
+	defer s.clockProbeRefresh.Unlock()
+	e, err := s.FreshClocks(context.Background(), peer, clocks.Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 1}, time.Minute)
+	require.NoError(t, err)
+	require.Zero(t, e.Falsification.LossCounts.ReadFailures)
+	require.False(t, s.Latched())
 }
 
 func TestConcurrentProbeRefreshesDoNotReplayAPrefix(t *testing.T) {
@@ -180,5 +196,6 @@ func TestConcurrentProbeRefreshesDoNotReplayAPrefix(t *testing.T) {
 		e := s.clockProbeHistory.Snapshot("shared", map[string]string{"control": "shared"})
 		require.Equal(t, 1, e.CountsByStatus["unchecked"])
 		require.Equal(t, 1, e.CountsByReason["request-failed"])
+		require.Zero(t, e.LossCounts.ReadFailures)
 	})
 }

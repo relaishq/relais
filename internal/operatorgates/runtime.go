@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
@@ -38,6 +40,9 @@ type ProcessRuntime struct {
 }
 
 func ValidateProcessParameters(p ProcessParameters) error {
+	if p.ClockProbeFile != "" && (!filepath.IsAbs(p.ClockProbeFile) || strings.ContainsAny(p.ClockProbeFile, "\x00\r\n")) {
+		return fault("invalid-clock-probe-file")
+	}
 	endpoint := func(s string) bool {
 		u, err := url.Parse(s)
 		if err != nil {

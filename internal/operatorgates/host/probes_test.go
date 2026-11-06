@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/relaishq/relais/internal/clockprobe"
@@ -59,4 +62,45 @@ print(json.dumps(out))`)
 		}
 		require.Equal(t, want, results[i], "line %d", i)
 	}
+}
+
+// Execute the generated Python verbatim. Only the host commands and wall clock
+// are replaced, so this test does not depend on a local chrony installation.
+func TestGeneratedClockWithProbesPreservesBaseline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probes")
+	line, err := (clockprobe.Record{Target: clockprobe.WorkerOne, FrontendSend: 1793930000000000000, FrontendReceive: 1793930000000001000, Result: clockprobe.RequestFailed}).MarshalLine()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, line, 0600))
+	run := func(script string) map[string]json.RawMessage {
+		body, ok := strings.CutPrefix(script, "python3 - <<'PY'\n")
+		require.True(t, ok)
+		body, ok = strings.CutSuffix(body, "PY\n")
+		require.True(t, ok)
+		cmd := exec.Command("python3", "-B", "-c", `import sys,subprocess
+from unittest.mock import patch
+sample='System time : 0.000001 seconds\nRoot dispersion : 0.000002 seconds\nRoot delay : 0.000004 seconds\nResidual freq : 0.1 ppm\nSkew : 0.2 ppm\nLeap status : Normal\n'
+def command(args, **kwargs):
+ if args == ['/usr/bin/chronyc', 'tracking']:
+  return subprocess.CompletedProcess(args, 0, sample, '')
+ raise OSError('no local chrony daemon')
+with patch('subprocess.run', side_effect=command), patch('time.time_ns', return_value=1793930000000000000):
+ exec(compile(sys.stdin.read(), '<generated-clock>', 'exec'))`)
+		cmd.Stdin = strings.NewReader(body)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		raw, err := Unpack(string(out), 256000)
+		require.NoError(t, err, string(out))
+		var result map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &result))
+		return result
+	}
+	baseline := run(Clock(nil, 0))
+	withProbes := run(ClockWithProbes(nil, 0, path, nil))
+	var batch struct {
+		Lines string `json:"lines"`
+	}
+	require.NoError(t, json.Unmarshal(withProbes["probeLog"], &batch))
+	require.Equal(t, string(line), batch.Lines)
+	delete(withProbes, "probeLog")
+	require.Equal(t, baseline, withProbes)
 }

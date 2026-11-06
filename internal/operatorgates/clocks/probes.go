@@ -98,8 +98,13 @@ func (h *ProbeHistory) Collect(samples map[string]Sample, frontend string, raw j
 			h.breaks[slot] = append(h.breaks[slot], sample.TrackingLog.Breaks...)
 		}
 	}
+	// No frontend means no probe read was attempted. Keep tracking history,
+	// but do not report an unknown inventory or a skipped refresh as I/O loss.
+	if frontend == "" {
+		return nil
+	}
 	var batch ProbeBatch
-	if frontend == "" || len(raw) == 0 || observe.Decode(raw, &batch, observe.Contract{"lines", "cursor?", "lossCounts", "lossCounts.readFailures", "lossCounts.malformedLines", "lossCounts.cursorGaps", "lossCounts.capacityEvents", "lossCounts.omittedRecords"}) != nil || len(batch.Lines) > 65536 || (batch.Lines != "" && !strings.HasSuffix(batch.Lines, "\n")) || !batch.LossCounts.valid() || !validProbeCursor(batch.Cursor, batch.Lines != "") {
+	if len(raw) == 0 || observe.Decode(raw, &batch, observe.Contract{"lines", "cursor?", "lossCounts", "lossCounts.readFailures", "lossCounts.malformedLines", "lossCounts.cursorGaps", "lossCounts.capacityEvents", "lossCounts.omittedRecords"}) != nil || len(batch.Lines) > 65536 || (batch.Lines != "" && !strings.HasSuffix(batch.Lines, "\n")) || !batch.LossCounts.valid() || !validProbeCursor(batch.Cursor, batch.Lines != "") {
 		h.loss.ReadFailures++
 		return nil
 	}
