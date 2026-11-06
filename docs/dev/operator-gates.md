@@ -51,6 +51,17 @@ Protocol, result, numeric media timing and judge input formats are unchanged.
 Only fixed host slots and content labels survive this projection. No deployment
 identities or addresses are included.
 
+The clock check takes the frontend host from the inventory component `signal`.
+It takes the control host from the inventory component `control`.
+A missing or duplicate component means missing independent clock evidence.
+Inventory that has not been read also means missing clock evidence.
+All four slots (`relay`, `w1`, `w2`, `shared`) must still have a clock row.
+The control bound is the sum of the frontend and control host errors.
+The worker bound is the frontend error plus the larger worker error.
+The drift bound is the frontend rate error plus the largest rate error among
+the control host and both workers. If frontend and control share a host,
+the check still adds both errors.
+
 Each host sample also retains `trackingLog`: newly read rows, a cursor, the
 session's armed time (`runStartUnixMs`) and break records. A session keeps each
 host's live cursor and sends it on the next read. The cursor binds device/inode,

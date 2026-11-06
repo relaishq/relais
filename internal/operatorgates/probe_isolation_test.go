@@ -116,7 +116,7 @@ func TestAmbiguousProbeInventoryDoesNotReadAnyFile(t *testing.T) {
 			return hostReply(t, []byte(`{"errorBoundNs":1,"rateErrorPpm":0.1,"measuredUnixNs":"1793930000000000000"}`))
 		}}
 		e, err := s.FreshClocks(context.Background(), peer, clocks.Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 1}, time.Minute)
-		require.NoError(t, err)
+		require.EqualError(t, err, "missing independent clock evidence")
 		require.False(t, s.Latched())
 		require.Equal(t, "unavailable", e.Falsification.FrontendSlot)
 		require.Zero(t, e.Falsification.LossCounts.ReadFailures)

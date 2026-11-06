@@ -280,37 +280,56 @@ func TestSessionUsesSameAdapterThroughLocalPeerAndPipes(t *testing.T) {
 type p2ClockRunner struct {
 	t              *testing.T
 	sample         clocks.Sample
+	inventory      map[string]json.RawMessage
 	runStartUnixMS int64
 	calls          int
 }
 
 func (r *p2ClockRunner) Run(_ context.Context, c Command) CommandResult {
 	r.t.Helper()
-	if string(c.Input) != host.Clock(nil, r.runStartUnixMS) {
-		r.t.Fatal("adapter did not execute P2's clock script")
-	}
 	r.calls++
-	raw, err := json.Marshal(r.sample)
-	if err != nil {
-		r.t.Fatal(err)
+	raw, isInventory := r.inventory[string(c.Input)]
+	if !isInventory {
+		if string(c.Input) != host.Clock(nil, r.runStartUnixMS) {
+			r.t.Fatal("adapter did not execute P2's inventory or clock script")
+		}
+		var err error
+		raw, err = json.Marshal(r.sample)
+		if err != nil {
+			r.t.Fatal(err)
+		}
 	}
 	var packed bytes.Buffer
 	zip := gzip.NewWriter(&packed)
-	if _, err = zip.Write(raw); err != nil {
+	if _, err := zip.Write(raw); err != nil {
 		r.t.Fatal(err)
 	}
-	if err = zip.Close(); err != nil {
+	if err := zip.Close(); err != nil {
 		r.t.Fatal(err)
 	}
 	return CommandResult{Code: code(0), Stdout: []byte(base64.StdEncoding.EncodeToString(packed.Bytes()))}
 }
 func TestP2ClockObservationsUseSharedHostOutput(t *testing.T) {
+	fixtures, pins := idleInventory(t)
 	now := time.Now()
 	init := operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: []operator.Gate{operator.Rollout}}, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostExecute}}
+	init.Scenario.ReleaseA = operator.Identity{SourceCommit: pins[0].Commit, SHA256: pins[0].ArchiveSHA256}
+	init.Scenario.ReleaseB = operator.Identity{SourceCommit: pins[1].Commit, SHA256: pins[1].ArchiveSHA256}
 	runner := &p2ClockRunner{t: t, runStartUnixMS: now.UnixMilli(), sample: clocks.Sample{ErrorBoundNS: 1, RateErrorPPM: 1, MeasuredUnixNS: strconv.FormatInt(now.UnixNano(), 10)}}
+	runner.inventory = map[string]json.RawMessage{}
+	for slot, data := range fixtures {
+		script, err := host.Inventory(slot, pins, true, "x86_64")
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner.inventory[script] = data
+	}
 	adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner}
 	peer := NewLocalPeer(adapter, "fixture", init)
 	run := func(ctx context.Context, s *operatorgates.Session, p operatorgates.Peer, g operator.Gate) operator.GateResult {
+		if _, err := s.FreshInventory(ctx, p, pins, time.Minute, pins[0].Commit, true); err != nil {
+			t.Fatal(err)
+		}
 		evidence, err := s.FreshClocks(ctx, p, clocks.Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 2}, time.Minute)
 		if err != nil || evidence.Control != 2 || len(evidence.Clocks) != 4 {
 			t.Fatalf("P2 clock evidence failed: %v", err)
@@ -320,7 +339,7 @@ func TestP2ClockObservationsUseSharedHostOutput(t *testing.T) {
 	if err := operatorgates.Serve(context.Background(), peer, operator.Hello{Protocol: operator.ProtocolVersion}, run); err != nil {
 		t.Fatal(err)
 	}
-	if runner.calls != 4 || peer.Final() == nil || peer.Final().Status != operator.Passed {
+	if runner.calls != 8 || peer.Final() == nil || peer.Final().Status != operator.Passed {
 		t.Fatal("P2 clock observations did not complete through the real adapter")
 	}
 }
