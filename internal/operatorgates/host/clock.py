@@ -7,6 +7,8 @@ import json
 import pathlib
 import os
 import math
+import io
+import stat
 import re
 import subprocess
 import time
@@ -183,7 +185,7 @@ def tracking_evidence(cursor=None, run_start_unix_ms=0):
     return result
 
 
-def read_clock(cursor=None, run_start_unix_ms=0):
+def read_clock(cursor=None, run_start_unix_ms=0, probe_file='', probe_cursor=None):
     result = clock_evidence()
     result['trackingLog'] = tracking_evidence(cursor, run_start_unix_ms)
     # Match operator.MaxHostOutputBytes, reserving the print newline. A hostile
@@ -196,7 +198,102 @@ def read_clock(cursor=None, run_start_unix_ms=0):
         since = min([since] + [b['fromUnixSeconds'] for b in timeline['breaks'] if not b['beforeRun']])
         timeline['rows'] = []
         timeline['breaks'] = [dict(kind='cursor-gap', fromUnixSeconds=min(since, now), unixSeconds=max(since, now), beforeRun=False)]
+    if probe_file:
+        return add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)
     return result
+
+
+# Mirror internal/clockprobe.ParseLine. A marker is file-wide, not a timestamp.
+def probe_line(raw):
+    if len(raw) < 84 and b'\n' not in raw:
+        return None
+    require(len(raw) == 84 and raw[83:] == b'\n', 'Invalid probe line')
+    require(all(raw[i:i+1] == b' ' for i in (1, 21, 41, 61, 81)), 'Invalid probe spacing')
+    require(raw[:1] in (b'0', b'1', b'2', b'3') and raw[82:83] in (b'0', b'1', b'2', b'3'), 'Invalid probe code')
+    values = []
+    for i in (2, 22, 42, 62):
+        field = raw[i:i+19]
+        require(all(48 <= n <= 57 for n in field), 'Invalid probe number')
+        value = int(field)
+        require(value <= 2**63 - 1, 'Invalid probe range')
+        values.append(value)
+    target, result = raw[0] - 48, raw[82] - 48
+    require((target <= 2 and result <= 2) or (target == result == 3 and values == [0]*4), 'Invalid probe marker')
+    return target, values, result
+
+
+def probe_fits(baseline, evidence):
+    candidate = dict(baseline, probeLog=evidence)
+    raw = json.dumps(candidate).encode()
+    return len(raw) <= 256000 and len(base64.b64encode(gzip.compress(raw))) <= 23998
+
+
+def add_probe_evidence(baseline, path, cursor, run_start_unix_ms):
+    losses = dict(readFailures=0, malformedLines=0, cursorGaps=0, capacityEvents=0, omittedRecords=0)
+    evidence = dict(lines='', cursor=cursor, lossCounts=dict(losses))
+    try:
+        with pathlib.Path(path).open('rb') as log:
+            info = os.fstat(log.fileno())
+            require(info.st_size <= 4 * 1024 * 1024 and stat.S_ISREG(info.st_mode), 'Invalid probe file')
+            identity = str(info.st_dev) + ':' + str(info.st_ino)
+            position, skip = 0, False
+            if cursor:
+                try:
+                    position, skip = cursor['position'], cursor['skipLine']
+                    require(isinstance(position, int) and 0 <= position <= info.st_size and cursor['file'] == identity, 'Probe cursor gap')
+                    log.seek(max(0, position - 256))
+                    require(hashlib.sha256(log.read(min(position, 256))).hexdigest() == cursor['anchor'], 'Probe anchor gap')
+                except (ValueError, KeyError, TypeError):
+                    # Unknown loss: do not replay old attempts from a replaced file.
+                    losses['cursorGaps'] += 1
+                    position = info.st_size
+                    log.seek(max(0, position - 1))
+                    skip = bool(position) and log.read(1) != b'\n'
+            log.seek(position)
+            if skip:
+                skip = discard_line(log, info.st_size)
+                position = log.tell()
+            # Snapshot at most the existing read window. Each candidate owns its
+            # cursor and counters, so wire deferral cannot acknowledge lost data.
+            log.seek(position)
+            data = log.read(min(READ_LIMIT, info.st_size - position))
+            steps, chunks, length = [(position, skip, 0, dict(losses))], [], 0
+            consumed = position
+            for raw in io.BytesIO(data).readlines():
+                if not raw.endswith(b'\n'):
+                    if len(raw) <= 83:
+                        break
+                    losses['malformedLines'] += 1
+                    consumed += len(raw)
+                    skip = True
+                else:
+                    consumed += len(raw)
+                    try:
+                        parsed = probe_line(raw)
+                        target, stamps, result = parsed
+                        if target == 3:
+                            losses['capacityEvents'] += 1
+                        elif not (stamps[3] > 0 and stamps[3] + 10**9 < run_start_unix_ms * 10**6):
+                            chunks.append(raw.decode('ascii'))
+                            length += len(raw)
+                    except (ValueError, TypeError):
+                        losses['malformedLines'] += 1
+                steps.append((consumed, skip, length, dict(losses)))
+            # Try the largest prefix first. Compression is not strictly monotone,
+            # so binary search alone cannot establish the largest fitting prefix.
+
+            text = ''.join(chunks)
+            for end, skip_line, text_end, counts in reversed(steps):
+                log.seek(max(0, end - 256))
+                next_cursor = dict(file=identity, position=end, anchor=hashlib.sha256(log.read(min(end, 256))).hexdigest(), skipLine=skip_line)
+                candidate = dict(lines=text[:text_end], cursor=next_cursor, lossCounts=counts)
+                if probe_fits(baseline, candidate):
+                    return dict(baseline, probeLog=candidate)
+    except (OSError, ValueError, KeyError, TypeError):
+        evidence['lossCounts']['readFailures'] += 1
+        if probe_fits(baseline, evidence):
+            return dict(baseline, probeLog=evidence)
+    return baseline
 
 
 def clock_evidence():

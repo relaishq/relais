@@ -261,6 +261,9 @@ func TestFreshInventoryReadsAllHostsAndChecksDeployment(t *testing.T) {
 		if err != nil || len(pool.Participants) != 6 {
 			t.Fatalf("fresh inventory: %v", err)
 		}
+		if slot, ok := inventory.ComponentSlot(session.inventoryComponents, "signal"); !ok || slot != "shared" {
+			t.Fatal("fresh inventory did not retain the observed signal component", slot, ok)
+		}
 	}
 	if !reflect.DeepEqual(calls, append(append([]string{}, inventory.Slots...), inventory.Slots...)) {
 		t.Fatalf("inventory cached or host omitted: %v", calls)

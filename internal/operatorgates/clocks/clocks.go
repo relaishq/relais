@@ -14,11 +14,12 @@ import (
 )
 
 type Sample struct {
-	TrackingLog    *TrackingLog `json:"trackingLog,omitempty"`
-	Tracking       string       `json:"tracking,omitempty"`
-	ErrorBoundNS   int64        `json:"errorBoundNs"`
-	RateErrorPPM   float64      `json:"rateErrorPpm"`
-	MeasuredUnixNS string       `json:"measuredUnixNs"`
+	ProbeLog       json.RawMessage `json:"-"`
+	TrackingLog    *TrackingLog    `json:"trackingLog,omitempty"`
+	Tracking       string          `json:"tracking,omitempty"`
+	ErrorBoundNS   int64           `json:"errorBoundNs"`
+	RateErrorPPM   float64         `json:"rateErrorPpm"`
+	MeasuredUnixNS string          `json:"measuredUnixNs"`
 }
 
 // EvidenceVersion covers recorded clock diagnostics, including the optional
@@ -56,6 +57,7 @@ type TrackingLog struct {
 
 // PublicSample retains numeric tracking evidence without exposing source identities.
 func PublicSample(s Sample) Sample {
+	s.ProbeLog = nil
 	s.Tracking = ""
 	if s.TrackingLog == nil {
 		return s
@@ -105,6 +107,7 @@ type Evidence struct {
 	Clocks          map[string]Sample
 	Control, Worker int64
 	Drift           float64
+	Falsification   *Falsification `json:"falsification,omitempty"`
 }
 
 const maxSafeInteger = 1<<53 - 1
@@ -112,7 +115,12 @@ const maxSafeInteger = 1<<53 - 1
 var nsPattern = regexp.MustCompile(`^[0-9]{19}$`)
 
 func Parse(data []byte) (s Sample, err error) {
-	err = observe.Decode(data, &s, observe.Contract{"errorBoundNs", "rateErrorPpm", "measuredUnixNs"})
+	baseline, probe, err := stripProbeLog(data)
+	if err != nil {
+		return s, err
+	}
+	err = observe.Decode(baseline, &s, observe.Contract{"errorBoundNs", "rateErrorPpm", "measuredUnixNs"})
+	s.ProbeLog = probe
 	if err == nil && (s.ErrorBoundNS < 0 || s.ErrorBoundNS > maxSafeInteger || !finite(s.RateErrorPPM) || s.RateErrorPPM < 0 || !nsPattern.MatchString(s.MeasuredUnixNS)) {
 		err = fmt.Errorf("missing independent clock evidence")
 	}

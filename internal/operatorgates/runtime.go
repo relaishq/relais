@@ -64,6 +64,11 @@ func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) er
 	if len(r.ClockSamples) > 0 && r.Session.clock.Wall().Sub(r.ClockSamples[len(r.ClockSamples)-1].At) < time.Minute {
 		return nil
 	}
+	if r.Config != nil {
+		r.Session.mu.Lock()
+		r.Session.clockProbeFile = r.Config.Parameters.ClockProbeFile
+		r.Session.mu.Unlock()
+	}
 	e, err := r.Session.FreshClocks(ctx, r.Peer, *r.Bounds, end)
 	if r.ClockObserved != nil && !e.At.IsZero() {
 		r.ClockObserved(e)
