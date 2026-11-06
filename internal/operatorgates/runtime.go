@@ -239,6 +239,7 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 			if observe.Decode(envelope.Data, &bracket, observe.Contract{"signalBeforeUnixNs", "signalAfterUnixNs"}) != nil {
 				return operator.Unknown
 			}
+			r.Session.retainClockBracket(slot, bracket.Before, bracket.After)
 			midpoint, e := clocks.SignalMidpoint(bracket.Before, bracket.After, r.ClockSamples[len(r.ClockSamples)-1].Worker, r.Bounds.FrontendWorkerBoundNS)
 			if e != nil {
 				return operator.Unknown

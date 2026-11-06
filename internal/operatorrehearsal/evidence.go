@@ -23,12 +23,33 @@ import (
 // members and exact number tokens), not a zero-filled product re-encoding.
 // Opaque text/identities become stable aliases; all timestamps share one shift.
 func SanitizeMediaEvidence(pool operatorevidence.Pool) ([]byte, error) {
+	coverage := pool.ClockCoverage
+	pool.ClockCoverage = nil
 	raw, err := json.Marshal(pool)
 	if err != nil {
 		return nil, err
 	}
 	s := evidenceSanitizer{fields: map[reflect.Type]map[string]reflect.Type{}}
-	return s.document(raw, reflect.TypeFor[operatorevidence.Pool]())
+
+	clean, err := s.document(raw, reflect.TypeFor[operatorevidence.Pool]())
+	if err != nil || coverage == nil {
+		return clean, err
+	}
+	public := sanitizeCoverageTimes(*coverage, s.anchor)
+	extra, err := json.Marshal(public)
+	if err != nil {
+		return nil, err
+	}
+	// Append only the diagnostic member. Re-encoding an envelope map would
+	// reorder existing fields and change their published bytes.
+	result := append([]byte{}, clean[:len(clean)-1]...)
+	if len(clean) > 2 {
+		result = append(result, ',')
+	}
+	result = append(result, `"clockCoverage":`...)
+	result = append(result, extra...)
+	result = append(result, '}')
+	return result, nil
 }
 
 type evidenceSanitizer struct {

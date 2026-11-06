@@ -14,6 +14,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/operator"
@@ -34,6 +35,7 @@ type ResourceConfig struct {
 	Admission    *AdmissionPlan           `json:"admission,omitempty"`
 }
 type ResourceResult struct {
+	ClockCoverage *clocks.CoverageEvidence
 	SequenceResult
 	CallerStopped map[operator.Gate]bool
 	Clocks        []clocks.Evidence
@@ -42,8 +44,9 @@ type ResourceResult struct {
 	BoundaryJSONL string
 }
 type ResourceRunner struct {
-	Config ResourceConfig
-	Timing *TimingRecorder
+	CoverageRead ClockCoverageReader
+	Config       ResourceConfig
+	Timing       *TimingRecorder
 	// Sleep supplies procedure and mailbox waits; nil uses real elapsed time.
 	Sleep func(context.Context, time.Duration) error
 	// These hooks retain local diagnostics and evidence for the rehearsal. They
@@ -145,6 +148,13 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		runtime.ClockObserved = r.Timing.RecordClocks
 	}
 	pool := &EvidenceRuntime{RunID: c.Endpoints.RunID, Judge: judge}
+	pool.Coverage = func(windows []observe.CoverageWindow) *clocks.CoverageEvidence {
+		e := s.coverageSnapshot(c.Bounds)
+		e.Windows = windows
+		e.Evaluate()
+		result.ClockCoverage = e
+		return e
+	}
 	var launchers resourceCallers
 	var boundary *operatorcaller.Broker
 	var caller *CallerRuntime
@@ -295,6 +305,11 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			summary, err := pool.Media(ctx)
 			result.PoolError = err != nil
 			return summary, err
+		},
+		FinalizeDiagnostics: func(ctx context.Context, _ time.Duration) {
+			if result.ClockCoverage != nil {
+				result.ClockCoverage = s.collectCoverage(ctx, c.Bounds, result.ClockCoverage.Windows, r.CoverageRead, pause)
+			}
 		},
 	})
 	s.retainGateDiagnostics(&result.SequenceResult, result.CallerStopped)

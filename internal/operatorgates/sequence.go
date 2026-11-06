@@ -16,6 +16,8 @@ type SequencePorts struct {
 	Minimum        func(operator.Gate) time.Duration
 	Command        func(context.Context, operator.Gate, time.Duration) ProcedureResult
 	Finalize       func(context.Context, time.Duration) (*MediaSummary, error)
+	// FinalizeDiagnostics runs after the pool deadline decision, never before a judge.
+	FinalizeDiagnostics func(context.Context, time.Duration)
 }
 type SequenceResult struct {
 	Gates      []operator.GateResult
@@ -140,10 +142,15 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 		end := s.Budget.PoolEnd()
 		poolCtx, cancel := context.WithTimeout(ctx, end-s.clock.Elapsed())
 		pool, err := p.Finalize(poolCtx, end)
-		cancel()
 		if pool != nil && (err == nil && s.clock.Elapsed() < end || pool.Status == operator.Failure) {
 			out.Pool = pool
 		}
+		// Diagnostic latency cannot turn an already accepted pool into a
+		// deadline failure. This hook has no policy observations or judgments.
+		if p.FinalizeDiagnostics != nil {
+			p.FinalizeDiagnostics(poolCtx, end)
+		}
+		cancel()
 	}
 	for i := range awaiting {
 		if out.Procedures[i].Completed && out.Gates[i].Status != operator.Failure && out.Pool != nil {

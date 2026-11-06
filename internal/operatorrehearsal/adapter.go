@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/relaishq/relais/internal/operatorgates/host"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -260,4 +261,18 @@ func (a *Adapter) executeHost(bounded context.Context, req operator.Request) ope
 		a.printFailure(result)
 	}
 	return reply
+}
+
+// readCoverageClock uses the adapter directly, outside the session's mutation
+// transport and fatal latch. Only the fixed read-only clock script is supplied.
+func (a *Adapter) readCoverageClock(ctx context.Context, slot, script string) (string, error) {
+	reply := a.executeHost(ctx, operator.Request{ID: "coverage", Operation: operator.HostExecute, Target: slot, Action: "clock", Script: []byte(script)})
+	if reply.Transport != operator.Succeeded || reply.ExitCode == nil || *reply.ExitCode != 0 || reply.NotSubmitted {
+		return "", errors.New("clock-coverage-read-unavailable")
+	}
+	var output operator.HostOutput
+	if err := observe.Decode(reply.Payload, &output, observe.Contract{"stdout"}); err != nil {
+		return "", err
+	}
+	return output.Stdout, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
 	"github.com/relaishq/relais/pkg/callharness"
 )
@@ -106,6 +109,36 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 				if err != nil || !reflect.DeepEqual(actual, want) {
 					t.Fatalf("pinned judge differs: got %+v (%v), want %+v", actual, err, want)
 				}
+				pool.ClockCoverage = &clocks.CoverageEvidence{Version: 2, FrontendSlot: "shared", ControlSlot: "shared", Bounds: clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, Windows: []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}, Attempts: []clocks.CoverageAttempt{}}
+				barePool := pool
+				barePool.ClockCoverage = nil
+				bareRaw, sanitizeErr := operatorrehearsal.SanitizeMediaEvidence(barePool)
+				if sanitizeErr != nil {
+					t.Fatal(sanitizeErr)
+				}
+				coveredRaw, sanitizeErr := operatorrehearsal.SanitizeMediaEvidence(pool)
+				if sanitizeErr != nil {
+					t.Fatal(sanitizeErr)
+				}
+				var bareSanitized, coveredSanitized operatorevidence.Pool
+				if err := json.Unmarshal(bareRaw, &bareSanitized); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(coveredRaw, &coveredSanitized); err != nil {
+					t.Fatal(err)
+				}
+				bareSanitized.SourceCommit, coveredSanitized.SourceCommit = commit, commit
+				bareVerdict, bareErr := judge.Judge(ctx, bareSanitized)
+				coveredVerdict, coveredErr := judge.Judge(ctx, coveredSanitized)
+				if bareErr != nil || coveredErr != nil || !reflect.DeepEqual(bareVerdict, coveredVerdict) {
+					t.Fatalf("sanitized coverage changed per-pin judgment: %+v (%v) vs %+v (%v)", bareVerdict, bareErr, coveredVerdict, coveredErr)
+				}
+				pool.ClockCoverage.Bounds.DriftPPM = math.NaN() // Invalid diagnostics must not enter media transport.
+				withCoverage, coverageErr := judge.Judge(ctx, pool)
+				if coverageErr != nil || !reflect.DeepEqual(actual, withCoverage) {
+					t.Fatalf("recorded clock coverage changed pinned judge output: %+v (%v), want %+v", withCoverage, coverageErr, actual)
+				}
+
 			}
 		})
 	}

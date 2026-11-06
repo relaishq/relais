@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -56,13 +57,20 @@ type Session struct {
 	uncertainties   []operator.Uncertainty
 	uncertaintySink func(operator.Uncertainty)
 
-	clockCursors           map[string]json.RawMessage
-	clockProbeFile         string
-	clockProbeRefresh      sync.Mutex
-	clockProbeCursor       json.RawMessage
-	clockProbeHistory      clocks.ProbeHistory
-	inventoryComponents    map[string][]string
-	observationFailureSink func(string, string, error)
+	clockAttempts             []clocks.Evidence
+	clockAttemptsOmitted      int
+	clockDrainAttempts        []clocks.Evidence
+	clockDrainAttemptsOmitted int
+	clockBracketsOmitted      int
+	clockMissingIntervals     map[string]observe.CoverageBreak
+	clockBrackets             []observe.CoverageBracket
+	clockCursors              map[string]json.RawMessage
+	clockProbeFile            string
+	clockProbeRefresh         sync.Mutex
+	clockProbeCursor          json.RawMessage
+	clockProbeHistory         clocks.ProbeHistory
+	inventoryComponents       map[string][]string
+	observationFailureSink    func(string, string, error)
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {

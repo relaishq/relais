@@ -65,7 +65,7 @@ def tracking_evidence(cursor=None, run_start_unix_ms=0):
     before = time.monotonic_ns()
     wall = time.time_ns()
     after = time.monotonic_ns()
-    result = dict(rows=rows, breaks=breaks, cursor=None, runStartUnixMs=run_start_unix_ms)
+    result = dict(rows=rows, breaks=breaks, cursor=None, runStartUnixMs=run_start_unix_ms, readComplete=False)
 
     def before_run(at):
         # A log timestamp has one-second resolution. Count a straddling second in-run.
@@ -178,6 +178,7 @@ def tracking_evidence(cursor=None, run_start_unix_ms=0):
                 breaks.sort(key=lambda b: b['fromUnixSeconds'])
             log.seek(max(0, position - 256))
             anchor = hashlib.sha256(log.read(min(position, 256))).hexdigest()
+        result['readComplete'] = position == info.st_size and not skip_line
         result['cursor'] = dict(file=identity, position=position, anchor=anchor, daemon=daemon,
                                 wallNs=wall, monotonicNs=before, readWidthNs=after-before, lastRow=previous, skipLine=skip_line)
     except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError):

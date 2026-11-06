@@ -107,6 +107,10 @@ func (r *Report) sanitize() {
 		r.CPU.Phases[i] = cleanCalibration(c)
 	}
 	r.Pool = sanitizePool(r.Pool)
+	if r.ClockCoverage != nil {
+		e := r.ClockCoverage.Public()
+		r.ClockCoverage = &e
+	}
 	r.Clocks = append([]clocks.Evidence{}, r.Clocks...)
 	for i, e := range r.Clocks {
 		rows := map[string]clocks.Sample{}

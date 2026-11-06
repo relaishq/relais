@@ -13,6 +13,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -23,6 +24,7 @@ const HeadCallerEvidence = "head-caller-evidence.json"
 // relais-load built from the tested checkout. It has its own session, spool,
 // judge copy and evidence file. Report.Evaluate never reads it.
 type HeadCallerReport struct {
+	ClockCoverage *clocks.CoverageEvidence `json:"clockCoverage,omitempty"`
 	// Commit is the tested checkout that built the caller. The scenario's caller
 	// source commit stays the deployed release, as caller plans require.
 	Commit           string                 `json:"commit"`
@@ -102,6 +104,7 @@ func headSequence(head *HeadCallerReport, judge *recordingJudge, load callerBina
 			if result.PoolError {
 				head.Errors = append(head.Errors, "media-judge-failed")
 			}
+			head.ClockCoverage = result.ClockCoverage
 			head.Latched = s.Latched()
 			head.Uncertainties = append([]operator.Uncertainty{}, s.Uncertainties()...)
 		}}
@@ -123,6 +126,10 @@ func copyExecutable(source, target string) error {
 
 // sanitized applies the pinned report's label and digest rules.
 func (h HeadCallerReport) sanitized() HeadCallerReport {
+	if h.ClockCoverage != nil {
+		e := h.ClockCoverage.Public()
+		h.ClockCoverage = &e
+	}
 	if !fullCommit.MatchString(h.Commit) {
 		h.Commit = "unavailable"
 	}

@@ -204,7 +204,7 @@ func (p PinnedJudge) Judge(ctx context.Context, pool Pool) (Summary, error) {
 	if p.Commit == "" || pool.SourceCommit != p.Commit {
 		return out, errors.New("judge-source-differs")
 	}
-	input, err := json.Marshal(pool)
+	input, err := MarshalJudgeInput(pool)
 	if err != nil {
 		return out, errors.New("judge-input-size")
 	}
@@ -277,4 +277,11 @@ func printDiagnostics(writers []io.Writer, label string, stdout, stderr []byte) 
 			_, _ = fmt.Fprintf(w, "step %s failed\nstdout:\n%s\nstderr:\n%s\n", label, stdout, stderr)
 		}
 	}
+}
+
+// MarshalJudgeInput is the actual pinned-judge wire projection. Recorded-only
+// diagnostics cannot change its bytes or consume the media input-size budget.
+func MarshalJudgeInput(pool Pool) ([]byte, error) {
+	pool.ClockCoverage = nil
+	return json.Marshal(pool)
 }

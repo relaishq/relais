@@ -777,3 +777,138 @@ worker names to local indexes. These are value exceptions in
 fields. Other negative values and out-of-range indexes remain invalid.
 `TestDistributedMoveUnknownWorkerIndex` checks both boundaries;
 `TestDistributedCallerWorkerSentinelsQualify` checks the complete judge path.
+
+### Recorded event clock coverage (slice 4a)
+
+Clock evidence stays version 2. Slice 4a records would-be coverage causes;
+**it does not change admission, media verdicts, timing causes consumed by the
+judge, the fatal latch, or judge summary output**. The fixed-bound pre-fault
+`clocks.Check` remains unchanged. Lease aging, `maxclockerror` declaration and
+receipt binding belong to slice 5. Sticky falsification enforcement and coverage
+qualification belong to slice 4b.
+
+A session retains every clock read attempt, including successful slots in a
+failed batch. Those slots can already have advanced their tracking cursors.
+Dropping their rows would lose acknowledged evidence. A failed read alone does
+not create a coverage gap: the next successful cursor/anchor read can recover
+all intervening rows. Real log loss and tracking breaks remain recorded. The
+successful pre-fault cache is separate and still contains successful checks
+only. Policy history keeps its earliest 256 attempts; drain history has its own
+64-attempt budget. `omittedAttempts`, `omittedDrainAttempts` and
+`omittedBrackets` are separate counters. Overflow preserves the retained prefix.
+Per-slot `missingIntervals` bound omitted evidence, so a later drain cannot
+bridge omitted rows; dropping an exact replay creates no loss interval.
+`report.clocks` remains the successful policy-sample cache, with its original
+Control/Worker/Drift values. Attempts and drain samples live only under coverage.
+
+One optional `clockCoverage` object belongs to the run-level media `Pool`, not
+individual phases. It contains `version`, inventory-derived `frontendSlot` and
+`controlSlot`, fixed `bounds`, cursor-free numeric policy `attempts`, separate
+`drainAttempts`, omission counters and per-slot `missingIntervals`,
+`killBrackets`, `windows`, diagnostic `results` and `drainComplete`. Each window
+uses zero-based `phase` and `event` indexes and preserves its receipt's start,
+end, kind and affected worker slot. Brackets retain worker slot and decimal
+Before/After/midpoint nanoseconds, without operation or session identities.
+Results contain sorted, unique would-be causes. Before invoking the pinned
+judge, 4a strips this field so even invalid or large diagnostics cannot consume
+the judge input-size budget or change its output. Rehearsal reports also retain
+this projection, including the separate head-caller sequence. Public projection
+removes tracking source labels, raw output and private cursor members. Retained
+media artifacts keep the existing fields byte-identical with and without
+coverage. Coverage uses a whole-second origin to preserve tracking-log seconds;
+`mediaTimeOffsetNs` records coverage time minus legacy media time. Subtract that
+offset to compare coverage endpoints with caller timestamps. Coverage's own
+rows, breaks and endpoints always share one shift.
+
+The standard-library-only `observe` evaluator is deterministic and reads no
+clock. It checks control Start–End continuously for planned moves; for takeovers
+it checks the entire killed-worker signal bracket and control completion End.
+It expands host spans by one second for log resolution and frontend spans by
+the fixed pair bound plus one second. Breaks receive a separate one-second margin, so
+span and break padding intentionally permit overlap across two seconds of
+separation in total. Every required interval needs a preceding
+and closing tracking row. The envelope is the upward-rounded maximum column-14
+error over every intersecting interval, including touching boundaries and
+updates in the same second. Source slots come from unique inventory components;
+signal and control on the same slot still contribute both error terms. Decimal
+nanosecond conversion precedes ceiling: `1.230e-04` is exactly 123000 ns, while
+true sub-nanosecond digits still round outward.
+
+Would-be causes are:
+
+- `clock-coverage-missing`: missing endpoints/tail, invalid evidence, a row gap
+  above 60 seconds, or overlapping cursor gap, log rotation or log loss.
+- `clock-coverage-bound`: frontend maximum plus host maximum exceeds the fixed
+  control or worker bound. Equality is accepted.
+- `clock-coverage-break`: an overlapping step, restart, source change,
+  non-Normal leap status or self-consistency break. Break intervals also receive
+  a one-second margin.
+- `clock-coverage-kill-bracket`: missing/invalid signal bracket, or its rounded-up
+  half-width plus frontend and killed-worker error exceeds the worker bound.
+
+A frontend caller-probe outage adds no special cause. Existing caller mapping
+still applies 100 ppm drift. Falsification remains recorded only in this slice.
+
+`EvidenceRuntime.Media` only snapshots retained coverage on each phase judgment;
+it does no host reads or waiting. Finalization first collects and judges the
+final pool and accepts its result under the unchanged deadline check. Only then
+does `FinalizeDiagnostics` run a drain; its latency cannot change pool acceptance.
+The final report holds this completed diagnostic snapshot; per-judgment pool
+artifacts contain the snapshot available before that judgment.
+An optional isolated `ClockCoverageReader` can drain tracking evidence outside
+`Session.Exchange`, whose unknown replies must still latch policy requests.
+The rehearsal adapter provides this isolated reader. Without one, an uncovered
+tail stays incomplete; no unsafe transport fallback is used.
+Diagnostic cursors do not acknowledge the policy reader's cursor, so later
+policy reads may repeat rows; duplicate intervals do not narrow the maximum.
+
+Drain stops when every required slot has a closing row stamped at least
+`ceil(last-required-end + applicable-bound + 1s)` and its latest read consumed
+its entire file snapshot. The bound is zero for host-local endpoints and the
+pair bound for frontend endpoints. The additive tracking-log `readComplete`
+field distinguishes a complete read from a capped prefix or partial final
+line. It is false when absent in older evidence. Collection repeats bounded
+reads with one-second waits only while that condition is unmet. It uses at most
+ten seconds within the remaining final collection/cleanup context; it never
+runs before a judge and cannot extend the session budget. Windows with missing
+receipts/brackets or invalid timestamps are not drain-resolvable and do not
+hold the stop condition open. Their diagnostic causes remain. `drainComplete`
+means no resolvable tail remains, rather than that every event is covered.
+Timeout, missing adapter
+or backlog produces incomplete diagnostics, never a media error or a pass.
+
+For offline inspection, use stored files in the same clock domain:
+
+```sh
+go run ./scripts/dev/clock-coverage -report report.json -pool media-evidence.json \
+  -frontend-slot shared -control-slot shared
+```
+
+The tool accepts a direct Pool or the retained artifact's `pool` envelope. New
+reports already contain their windows and slots, so `-pool` and slot overrides
+are optional. Old reports without event inputs explicitly report that limit.
+When the 4a field is absent, the tool reconstructs timelines from stored
+`clocks[*].Clocks.<slot>.trackingLog` samples. It merges repeated seconds using
+the largest error and any non-Normal leap status, and deduplicates breaks.
+Historical boot rows remain available as predecessors; only intervals that
+intersect the required span can contribute a leap break or error bound.
+
+Older sanitized pools use a 2000 timestamp origin while report clocks retain
+real UTC. The tool aligns them by intersecting the millisecond start-time
+buckets in matching `callerTiming` events across the run. It preserves the
+remaining uncertainty in `timestampUncertaintyNs` and widens each checked
+endpoint by that amount through the shared evaluator. Worker slots come from
+event worker numbers, since retained receipt identities are aliases. Ambiguous
+or inconsistent alignment is refused. The former
+`report-and-pool-must-share-clock-domain` note described this real mismatch but
+did not correct it; aligned replays now report the alignment explicitly.
+
+Historical reports lack kill brackets. Their coverage, bound and break checks
+still run through the shared evaluator. Kill results carry
+`killBracketRule: "unavailable"` and a diagnostic note, not an invented cause.
+`covered` counts the available rules; it does not prove the unavailable bracket
+rule or establish a judge verdict. Synthetic or missing coverage must not be
+substituted for stored measurements. Slice 4b must regenerate old fixtures
+deliberately and prove behavior at both pinned release judges before enforcing
+these diagnostics. The latest-sample, endpoint-only and
+omitted-break-margin mutants remain work for slice 4b.
