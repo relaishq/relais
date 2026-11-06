@@ -184,6 +184,8 @@ func TestClockOracle(t *testing.T) {
 				outputs[response.Instance] = envelope.Value
 			}
 			session, _ := fixtureSession(t)
+			// The historical clock oracle assumes signal on relay and control on shared.
+			session.inventoryComponents = map[string][]string{"relay": {"signal"}, "shared": {"control"}}
 			peer := &observationPeer{respond: func(request operator.Request) operator.Reply {
 				data, ok := outputs[hosts[request.Target]]
 				if !ok {
@@ -269,6 +271,25 @@ func TestFreshInventoryReadsAllHostsAndChecksDeployment(t *testing.T) {
 	if !reflect.DeepEqual(calls, append(append([]string{}, inventory.Slots...), inventory.Slots...)) {
 		t.Fatalf("inventory cached or host omitted: %v", calls)
 	}
+	inventoryReply := peer.respond
+	for _, largeSlot := range []string{"shared", "relay"} {
+		peer.respond = func(request operator.Request) operator.Reply {
+			sample := clocks.Sample{ErrorBoundNS: 1, RateErrorPPM: 1, MeasuredUnixNS: "1793930000000000000"}
+			if request.Target == largeSlot {
+				sample.ErrorBoundNS, sample.RateErrorPPM = 20, 20
+			}
+			return hostReply(t, oracletest.Marshal(t, sample))
+		}
+		e, err := session.FreshClocks(context.Background(), peer, clocks.Bounds{FrontendControlBoundNS: 10, FrontendWorkerBoundNS: 10, DriftPPM: 10}, time.Minute)
+		if largeSlot == "shared" {
+			if err == nil || err.Error() != "measured clocks exceed approved bounds" || e.Control != 40 || e.Worker != 21 || e.Drift != 40 {
+				t.Fatal("fresh inventory did not select shared for signal and control", e, err)
+			}
+		} else if err != nil || e.Control != 2 || e.Worker != 2 || e.Drift != 2 {
+			t.Fatal("relay clock entered shared frontend bounds", e, err)
+		}
+	}
+	peer.respond = inventoryReply
 	if _, err := session.FreshInventory(context.Background(), peer, pins, time.Minute, "different", true); err == nil {
 		t.Fatal("skip-deployed-release-check: wrong deployment accepted")
 	}
@@ -328,6 +349,7 @@ func TestRuntimeClockCacheOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, clock := fixtureSession(t)
+	session.inventoryComponents = map[string][]string{"relay": {"signal"}, "shared": {"control"}}
 	var observed []clocks.Evidence
 	runtime := &ProcessRuntime{Session: session, ClockObserved: func(e clocks.Evidence) { observed = append(observed, e) }}
 	roots := procedureRoots(fixture, "processes.ProcessRuntime.verifyClocks")
@@ -413,6 +435,7 @@ func TestRuntimeClockCacheOracle(t *testing.T) {
 
 func TestTrackingCursorFollowsEachHostAndBreaksStayRecorded(t *testing.T) {
 	s, _ := fixtureSession(t)
+	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
 	round := 0
 	peer := &observationPeer{respond: func(req operator.Request) operator.Reply {
 		script := string(req.Script)
@@ -438,6 +461,31 @@ func TestTrackingCursorFollowsEachHostAndBreaksStayRecorded(t *testing.T) {
 				t.Fatal("lost tracking break")
 			}
 		}
+	}
+}
+
+func TestFreshClocksRequiresUniqueSignalAndControl(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		components map[string][]string
+	}{
+		{"inventory not read", nil},
+		{"missing signal", map[string][]string{"shared": {"control"}}},
+		{"missing control", map[string][]string{"shared": {"signal"}}},
+		{"duplicate signal", map[string][]string{"shared": {"signal", "control"}, "relay": {"signal"}}},
+		{"duplicate control", map[string][]string{"shared": {"signal", "control"}, "relay": {"control"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := fixtureSession(t)
+			s.inventoryComponents = tc.components
+			peer := &observationPeer{respond: func(operator.Request) operator.Reply {
+				return hostReply(t, []byte(`{"errorBoundNs":0,"rateErrorPpm":0,"measuredUnixNs":"1793930000000000000"}`))
+			}}
+			e, err := s.FreshClocks(context.Background(), peer, clocks.Bounds{}, time.Minute)
+			if err == nil || err.Error() != "missing independent clock evidence" || s.Latched() || len(e.Clocks) != 4 || peer.sent != 4 {
+				t.Fatal("unknown component slot became clock proof or changed read/latch behavior", e, err)
+			}
+		})
 	}
 }
 

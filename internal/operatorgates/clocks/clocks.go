@@ -128,7 +128,7 @@ func Parse(data []byte) (s Sample, err error) {
 }
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
-func Check(rows map[string]Sample, bounds Bounds) (Evidence, error) {
+func Check(rows map[string]Sample, bounds Bounds, frontendSlot, controlSlot string) (Evidence, error) {
 	e := Evidence{Version: EvidenceVersion, Clocks: rows}
 	if bounds.FrontendControlBoundNS < 0 || bounds.FrontendWorkerBoundNS < 0 || !finite(bounds.DriftPPM) || bounds.DriftPPM < 0 {
 		return e, fmt.Errorf("invalid clock assumptions")
@@ -138,9 +138,14 @@ func Check(rows map[string]Sample, bounds Bounds) (Evidence, error) {
 			return e, fmt.Errorf("missing independent clock evidence")
 		}
 	}
-	e.Control = rows["relay"].ErrorBoundNS + rows["shared"].ErrorBoundNS
-	e.Worker = rows["relay"].ErrorBoundNS + max(rows["w1"].ErrorBoundNS, rows["w2"].ErrorBoundNS)
-	e.Drift = rows["relay"].RateErrorPPM + max(rows["shared"].RateErrorPPM, rows["w1"].RateErrorPPM, rows["w2"].RateErrorPPM)
+	frontend, frontendOK := rows[frontendSlot]
+	control, controlOK := rows[controlSlot]
+	if !frontendOK || !controlOK {
+		return e, fmt.Errorf("missing independent clock evidence")
+	}
+	e.Control = frontend.ErrorBoundNS + control.ErrorBoundNS
+	e.Worker = frontend.ErrorBoundNS + max(rows["w1"].ErrorBoundNS, rows["w2"].ErrorBoundNS)
+	e.Drift = frontend.RateErrorPPM + max(control.RateErrorPPM, rows["w1"].RateErrorPPM, rows["w2"].RateErrorPPM)
 	if e.Control > bounds.FrontendControlBoundNS || e.Worker > bounds.FrontendWorkerBoundNS || e.Drift > bounds.DriftPPM {
 		return e, fmt.Errorf("measured clocks exceed approved bounds")
 	}

@@ -229,8 +229,10 @@ func runtimeFixture(t *testing.T) (*ProcessRuntime, *observationPeer, *[]string)
 func TestRuntimeFreshProofAndFaultOrder(t *testing.T) {
 	runtime, _, order := runtimeFixture(t)
 	for _, op := range []string{"freeze", "unfreeze"} {
+		// Without fresh inventory the clock check has no frontend slot, so the
+		// step stops before the fault. That stop is the fresh-proof failure too.
 		if _, err := runtime.Step(context.Background(), op, "shared", time.Minute, ProcessExtra{}); err != nil {
-			t.Fatal(err)
+			t.Fatalf("MUTATION: fresh-proof-fault-order step %s: %v", op, err)
 		}
 	}
 	expected := "inventory:relay,inventory:w1,inventory:w2,inventory:shared,clock:relay,clock:w1,clock:w2,clock:shared,fault,freeze:shared,inventory:relay,inventory:w1,inventory:w2,inventory:shared,fault,unfreeze:shared"
