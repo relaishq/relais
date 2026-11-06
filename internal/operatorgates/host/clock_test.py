@@ -136,6 +136,40 @@ class TrackingTests(unittest.TestCase):
         result = self.read(start=1792886400500)
         self.assertFalse(result['rows'][0]['beforeRun'])  # Straddling second is in-run.
 
+    def test_cursorless_tail_records_one_in_run_gap(self):
+        self.log.write_text(''.join(self.row(s) for s in range(1200)))
+        self.assertGreater(self.log.stat().st_size, clock.READ_LIMIT)
+        result = self.read(start=1792886400500)
+        self.assertGreater(result['rows'][0]['unixSeconds'], 1792886400)
+        self.assertEqual(result['breaks'], [dict(kind='cursor-gap', fromUnixSeconds=1792886400,
+                         unixSeconds=result['rows'][0]['unixSeconds'], beforeRun=False)])
+
+    def test_cursorless_tail_before_run_records_no_gap(self):
+        self.log.write_text(''.join(self.row(s) for s in range(1200)))
+        self.assertGreater(self.log.stat().st_size, clock.READ_LIMIT)
+        result = self.read(start=1792887400000)
+        self.assertTrue(result['rows'][0]['beforeRun'])
+        self.assertFalse(result['rows'][-1]['beforeRun'])
+        self.assertEqual(result['breaks'], [])
+
+    def test_cursorless_small_log_records_no_gap(self):
+        self.assertLess(self.log.stat().st_size, clock.READ_LIMIT)
+        result = self.read(start=1792886400000)
+        self.assertFalse(result['rows'][0]['beforeRun'])
+        self.assertEqual(result['breaks'], [])
+
+    def test_cursorless_empty_tail_records_gap_only_after_run_start(self):
+        for text, losses in (('# banner\n' * clock.READ_LIMIT, []), ('x' * (clock.READ_LIMIT + 100), ['log-loss'])):
+            self.log.write_text(text)
+            for start in (0, self.wall // 10**6, self.wall // 10**6 + 1):
+                self.assertEqual([b['kind'] for b in self.read(start=start)['breaks']], losses)
+            start = self.wall // 10**6 - 1500
+            result = self.read(start=start)
+            self.assertEqual(result['rows'], [])
+            self.assertEqual([b['kind'] for b in result['breaks']], losses + ['cursor-gap'])
+            self.assertEqual(result['breaks'][-1], dict(kind='cursor-gap', fromUnixSeconds=start // 1000,
+                             unixSeconds=self.wall // 10**9, beforeRun=False))
+
     def test_missing_malformed_partial_and_rewritten_log(self):
         first = self.read()['cursor']
         self.log.write_text(self.row(1))

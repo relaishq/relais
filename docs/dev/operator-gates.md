@@ -56,7 +56,10 @@ session's armed time (`runStartUnixMs`) and break records. A session keeps each
 host's live cursor and sends it on the next read. The cursor binds device/inode,
 byte position, a trailing-content hash, daemon boot/PID/start identity, the
 previous row and wall/monotonic read brackets. The first read returns recent
-complete rows from at most 64 KiB of log history. Later reads resume at the
+complete rows from at most 64 KiB of log history. A read without a cursor that
+skips bytes records an in-run `cursor-gap` from the run start second to the first
+kept row if that row is in-run. If it keeps no row and the read occurs after the
+run starts, it records this gap through the read time. Later reads resume at the
 cursor and read through EOF up to 64 KiB. An additional encoded-size budget
 keeps rows and breaks below the host unpack limit. A read stopped by either
 limit records nothing; the next read resumes at the cursor. A batch exceeding
