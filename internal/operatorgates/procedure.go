@@ -88,11 +88,12 @@ type WorkerEndpoint struct {
 	Media netip.AddrPort `json:"media"`
 }
 type ProcessParameters struct {
-	Control   string                    `json:"control"`
-	Relay     string                    `json:"relay"`
-	Store     string                    `json:"store"`
-	StorePort int                       `json:"storePort"`
-	Workers   map[string]WorkerEndpoint `json:"workers"`
+	ClockProbeFile string                    `json:"clockProbeFile,omitempty"`
+	Control        string                    `json:"control"`
+	Relay          string                    `json:"relay"`
+	Store          string                    `json:"store"`
+	StorePort      int                       `json:"storePort"`
+	Workers        map[string]WorkerEndpoint `json:"workers"`
 }
 
 // StepResult holds product-owned values. Raw moves retain field omission and

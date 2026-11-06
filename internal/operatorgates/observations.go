@@ -65,6 +65,7 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 		return releasecompat.Pool{}, err
 	}
 	pool := releasecompat.Pool{Schema: 1, Complete: true, TargetWorkerProfile: "legacy"}
+	components := map[string][]string{}
 	err := s.observeHosts(ctx, p, "inventory", end, func(slot string) (string, error) {
 		arch := "arm64"
 		if len(pins) > 0 && pins[0].Architecture != "" {
@@ -79,6 +80,9 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 		rows, err := inventory.Parse(slot, data, pins)
 		if err == nil {
 			pool.Participants = append(pool.Participants, rows...)
+			for _, row := range rows {
+				components[slot] = append(components[slot], row.Name)
+			}
 		}
 		return err
 	})
@@ -88,15 +92,38 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 	if deployedSHA != "" && slices.ContainsFunc(pool.Participants, func(p releasecompat.Participant) bool { return p.Commit != deployedSHA }) {
 		return releasecompat.Pool{}, errors.New("deployed release differs from judge pin")
 	}
+	s.mu.Lock()
+	s.inventoryComponents = components
+	s.mu.Unlock()
 	return pool, nil
 }
 
 func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds, end time.Duration) (clocks.Evidence, error) {
 	rows := map[string]clocks.Sample{}
+	s.mu.Lock()
+	probeFile := s.clockProbeFile
+	s.mu.Unlock()
+	// A probe prefix and its acknowledgement belong to one refresh. A concurrent
+	// refresh keeps its normal policy reads rather than waiting for diagnostics.
+	readProbes := probeFile != "" && s.clockProbeRefresh.TryLock()
+	if readProbes {
+		defer s.clockProbeRefresh.Unlock()
+	}
+	s.mu.Lock()
+	probeCursor := s.clockProbeCursor
+	frontend, _ := inventory.ComponentSlot(s.inventoryComponents, "signal")
+	targets := map[string]string{}
+	for _, target := range []string{"control", "w1", "w2"} {
+		targets[target], _ = inventory.ComponentSlot(s.inventoryComponents, target)
+	}
+	s.mu.Unlock()
 	err := s.observeHosts(ctx, p, "clock", end, func(slot string) (string, error) {
 		s.mu.Lock()
 		cursor := s.clockCursors[slot]
 		s.mu.Unlock()
+		if readProbes && slot == frontend {
+			return host.ClockWithProbes(cursor, s.Budget.armed, probeFile, probeCursor), nil
+		}
 		return host.Clock(cursor, s.Budget.armed), nil
 	}, func(slot, stdout string) error {
 		data, err := host.Unpack(stdout, 256000)
@@ -114,11 +141,25 @@ func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds,
 		}
 		return err
 	})
+	var probes *clocks.Falsification
+	if probeFile != "" {
+		s.mu.Lock()
+		probeSource := frontend
+		if !readProbes {
+			probeSource = ""
+		}
+		if cursor := s.clockProbeHistory.Collect(rows, probeSource, rows[probeSource].ProbeLog); len(cursor) > 0 {
+			s.clockProbeCursor = cursor
+		}
+		probes = s.clockProbeHistory.Snapshot(frontend, targets)
+		s.mu.Unlock()
+	}
 	if err != nil {
-		return clocks.Evidence{Version: clocks.EvidenceVersion, At: s.clock.Wall(), Clocks: rows}, err
+		return clocks.Evidence{Version: clocks.EvidenceVersion, At: s.clock.Wall(), Clocks: rows, Falsification: probes}, err
 	}
 	evidence, err := clocks.Check(rows, bounds)
 	evidence.At = s.clock.Wall()
+	evidence.Falsification = probes
 	return evidence, err
 }
 

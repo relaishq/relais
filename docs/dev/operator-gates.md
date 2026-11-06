@@ -45,8 +45,8 @@ when labels disagree. Change flags compare with the first row for that metric.
 They are representative cells, not a full replay history. `host-clocks` records retain
 error/rate measurements and measurement times for each actual four-host refresh;
 raw tracking text is removed. Clock evidence now writes `version: 2` (the
-previous unversioned shape is version 1). Version 2 covers recorded diagnostics;
-the next slice can add optional falsification records under this same version.
+previous unversioned shape is version 1). Version 2 covers recorded diagnostics,
+including optional frontend clock falsification records.
 Protocol, result, numeric media timing and judge input formats are unchanged.
 Only fixed host slots and content labels survive this projection. No deployment
 identities or addresses are included.
@@ -122,9 +122,76 @@ timestamps; it is file-wide, not a pre-run sample. Later lost-attempt counts
 are unknown; the marker stops further probing. Restarts append, completing
 a partial capacity marker or terminating another partial tail as one malformed
 line. Readers wait at an unfinished last line without advancing its cursor;
-the Go reference parser is `internal/clockprobe.ParseLine`. This slice only
-produces the file: operator collection, falsification checks and histogram
-evidence follow separately. Pinned rehearsal services receive no new flags.
+the Go reference parser is `internal/clockprobe.ParseLine`. The Python reader
+uses this same format. Pinned rehearsal services receive no new flags.
+
+Set the private process parameter `clockProbeFile` to collect that run-local
+file. An empty value disables probe collection and omits `falsification`.
+The existing host inventory identifies the one host with component `signal`.
+Only that host reads the file. The same inventory maps `control`, `w1` and
+`w2` to clock slots. A missing or duplicate component has no fallback. It
+records unavailable evidence. The existing clock admission check is unchanged.
+
+Each existing clock refresh reads complete lines with a separate file cursor.
+The reader uses the existing 64 KiB read window. It packs the tracking baseline
+first, including its existing wire fallback. It then adds a probe
+prefix that fits 23998 bytes of base64(gzip) and 256000 unpacked bytes. Deferred
+lines keep their cursor position. An unfinished last line waits for the next
+read. File loss, replacement or an invalid anchor records a cursor gap and
+resumes at the current file end; it does not replay old attempts. File errors
+and invalid optional payloads only add diagnostic counts. They do not change
+tracking rows, measured error/rate, read success, admission, causes or verdicts.
+Concurrent refreshes do not wait for a probe reader. They keep their normal
+tracking reads. A skipped probe collection is not a read failure.
+The startup read excludes attempts ending more than one second before arm.
+
+Prefix packing uses at most 13 compression checks per read. A failure diagnostic
+can add one check. The baseline and final output each use one more compression.
+Packing can defer a fitting prefix instead of finding the largest prefix.
+Deferred lines keep their cursor position for the next read. The probe path
+must be absolute and must not contain a NUL or newline. The reader opens only a
+direct regular file. It rejects symlinks and uses a nonblocking open so a FIFO
+cannot delay the clock read.
+
+Version 2 adds optional `falsification`: `frontendSlot`, `records`,
+`countsByStatus`, `countsByReason`, `rttHistogram` and `lossCounts`. Each record
+has `target`, `fSendUnixNs`, `hRecvUnixNs`, `hSendUnixNs`, `fRecvUnixNs`, `status`
+and `reason`. Checked intervals also have `lowerNs`, `upperNs`, `pairErrorNs`
+and `rttNs` where available. Absolute nanoseconds are decimal strings. Status
+is `falsified`, `not-falsified` or `unchecked`; there is no pass status. Reasons
+are `disjoint`, `intersects`, `no-coverage`, `tracking-break`,
+`inventory-unavailable`, `request-failed` and `invalid-sample`. Probe cursors,
+file paths, addresses and raw errors never enter the public projection.
+
+For each probe, widen frontend `[f_send,f_recv]` and host `[h_recv,h_send]` by
+one second on each side. Use each host's own wall times. Both spans need a
+preceding tracking row and a closing row. Row k's `maxErrorSeconds` covers
+`(t[k-1],t[k]]`. Take its maximum over all intersecting spans, including touching
+boundaries and equal-second rows. Missing coverage, gaps over 60 seconds,
+overlapping breaks or non-Normal leap status leave the probe unchecked. Break
+intervals also receive a one-second margin. Do not age or extrapolate a row.
+Round each host maximum up to nanoseconds, then add them to get `B`.
+With `L=h_send-f_recv` and `U=h_recv-f_send`, a probe is falsified only when
+`L > B` or `U < -B`. Equality intersects. Zero/invalid timestamps, failed
+requests and negative RTT stay unchecked. Probes never narrow a clock bound.
+
+Counts and histograms are cumulative snapshots; replace earlier totals instead
+of adding them. `records` contains new or revised details. Match a revision by
+its target and four timestamps. Later closing rows can resolve an unchecked
+record. At most 32768 details, including revisions, are emitted per session;
+this same quota bounds retained attempts. Omitted details are counted. No final
+drain runs in this slice. A tail with no closing rows stays unchecked and is
+counted. Rehearsal probe acceptance waits for release pins with the prober.
+
+`rttHistogram` has `upperBoundsNs` and `countsByTarget` for control, w1 and w2.
+Its nine disjoint buckets end at 0.1, 0.25, 0.5, 1, 2, 5, 10 and 50 ms; the
+last bucket has no upper limit. It includes valid RTTs even without tracking
+coverage. `lossCounts` has `readFailures`, `malformedLines`, `cursorGaps`,
+`capacityEvents` and `omittedRecords`. Missing optional metadata from an
+attempted probe read counts as a read failure. Missing inventory and skipped
+concurrent probe reads do not count as read failures. Keep the last successful
+inventory when a refresh fails; the topology is fixed for the session. A capacity
+event or cursor gap means the number of missing attempts is unknown. These diagnostics add no gate or pass rule.
 
 Each event retains at most two gap rows and eight probes per endpoint (the
 first six plus the binding probes) and 16 candidate states shared across `first_content` and

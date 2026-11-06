@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/clockprobe"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/oracletest"
@@ -261,6 +262,9 @@ func TestFreshInventoryReadsAllHostsAndChecksDeployment(t *testing.T) {
 		if err != nil || len(pool.Participants) != 6 {
 			t.Fatalf("fresh inventory: %v", err)
 		}
+		if slot, ok := inventory.ComponentSlot(session.inventoryComponents, "signal"); !ok || slot != "shared" {
+			t.Fatal("fresh inventory did not retain the observed signal component", slot, ok)
+		}
 	}
 	if !reflect.DeepEqual(calls, append(append([]string{}, inventory.Slots...), inventory.Slots...)) {
 		t.Fatalf("inventory cached or host omitted: %v", calls)
@@ -268,6 +272,45 @@ func TestFreshInventoryReadsAllHostsAndChecksDeployment(t *testing.T) {
 	if _, err := session.FreshInventory(context.Background(), peer, pins, time.Minute, "different", true); err == nil {
 		t.Fatal("skip-deployed-release-check: wrong deployment accepted")
 	}
+	// A definite inventory failure must not reclassify or re-emit prior probes.
+	rows := []clocks.TrackingRow{}
+	for n := int64(-3); n <= 3; n++ {
+		rows = append(rows, clocks.TrackingRow{UnixSeconds: 1793930000 + n, MaxErrorSeconds: 0.0005, LeapStatus: "N"})
+	}
+	line, err := (clockprobe.Record{Target: clockprobe.WorkerOne, FrontendSend: 1793930000100000000, FrontendReceive: 1793930000102000000, HostReceive: 1793930000111000000, HostSend: 1793930000111000000}).MarshalLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := json.Marshal(clocks.ProbeBatch{Lines: string(line), Cursor: json.RawMessage(`{"file":"1:2","position":84,"anchor":"` + strings.Repeat("a", 64) + `","skipLine":false}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.clockProbeHistory.Collect(map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{Rows: rows}}, "w1": {TrackingLog: &clocks.TrackingLog{Rows: rows}}}, "shared", batch)
+	snapshot := func() *clocks.Falsification {
+		frontend, _ := inventory.ComponentSlot(session.inventoryComponents, "signal")
+		return session.clockProbeHistory.Snapshot(frontend, map[string]string{"w1": "w1"})
+	}
+	if e := snapshot(); e.CountsByStatus["falsified"] != 1 || len(e.Records) != 1 {
+		t.Fatal("missing initial falsification", e)
+	}
+	respond := peer.respond
+	for range 2 {
+		peer.respond = func(operator.Request) operator.Reply { return hostReply(t, []byte(`{}`)) }
+		if _, err := session.FreshInventory(context.Background(), peer, pins, time.Minute, "", true); err == nil {
+			t.Fatal("invalid inventory accepted")
+		}
+		if e := snapshot(); e.CountsByStatus["falsified"] != 1 || len(e.Records) != 0 || e.LossCounts.OmittedRecords != 0 {
+			t.Fatal("failed inventory churned probe evidence", e)
+		}
+		peer.respond = respond
+		if _, err := session.FreshInventory(context.Background(), peer, pins, time.Minute, pins[0].Commit, true); err != nil {
+			t.Fatal(err)
+		}
+		if e := snapshot(); e.CountsByStatus["falsified"] != 1 || len(e.Records) != 0 || e.LossCounts.OmittedRecords != 0 {
+			t.Fatal("inventory recovery churned probe evidence", e)
+		}
+	}
+
 	pins[1].Commit = strings.Repeat("f", 40)
 	before := len(calls)
 	if _, err := session.FreshInventory(context.Background(), peer, pins, time.Minute, "", true); err == nil || len(calls) != before {

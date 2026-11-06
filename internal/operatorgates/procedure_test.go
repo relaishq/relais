@@ -512,6 +512,22 @@ func TestProcessEndpointsAreResourceNeutral(t *testing.T) {
 	}
 }
 
+func TestClockProbeFileValidation(t *testing.T) {
+	g, _ := testProcedure(t)
+	for _, path := range []string{"", "/var/log/relais/probes", "/var/log/relais/probe file"} {
+		g.c.Parameters.ClockProbeFile = path
+		if err := ValidateProcessParameters(g.c.Parameters); err != nil {
+			t.Fatalf("valid probe file %q: %v", path, err)
+		}
+	}
+	for _, path := range []string{"relative/probes", "/tmp/probes\x00", "/tmp/probes\n", "/tmp/probes\r"} {
+		g.c.Parameters.ClockProbeFile = path
+		if ValidateProcessParameters(g.c.Parameters) == nil {
+			t.Fatalf("invalid probe file admitted: %q", path)
+		}
+	}
+}
+
 func TestUnknownMediaCannotEnterPool(t *testing.T) {
 	g, _ := testProcedure(t)
 	g.c.Pool = true

@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
@@ -38,6 +40,9 @@ type ProcessRuntime struct {
 }
 
 func ValidateProcessParameters(p ProcessParameters) error {
+	if p.ClockProbeFile != "" && (!filepath.IsAbs(p.ClockProbeFile) || strings.ContainsAny(p.ClockProbeFile, "\x00\r\n")) {
+		return fault("invalid-clock-probe-file")
+	}
 	endpoint := func(s string) bool {
 		u, err := url.Parse(s)
 		if err != nil {
@@ -63,6 +68,11 @@ func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) er
 	}
 	if len(r.ClockSamples) > 0 && r.Session.clock.Wall().Sub(r.ClockSamples[len(r.ClockSamples)-1].At) < time.Minute {
 		return nil
+	}
+	if r.Config != nil {
+		r.Session.mu.Lock()
+		r.Session.clockProbeFile = r.Config.Parameters.ClockProbeFile
+		r.Session.mu.Unlock()
 	}
 	e, err := r.Session.FreshClocks(ctx, r.Peer, *r.Bounds, end)
 	if r.ClockObserved != nil && !e.At.IsZero() {

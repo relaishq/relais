@@ -136,3 +136,23 @@ except Exception:
 PY
 `, data, runStartUnixMS)
 }
+
+func ClockWithProbes(cursor json.RawMessage, runStartUnixMS int64, path string, probeCursor json.RawMessage) string {
+	if path == "" {
+		return Clock(cursor, runStartUnixMS)
+	}
+	args, _ := encoded(struct {
+		Tracking json.RawMessage `json:"tracking"`
+		Probes   json.RawMessage `json:"probes"`
+		Path     string          `json:"path"`
+	}{cursor, probeCursor, path})
+	return "python3 - <<'PY'\n" + source("clock.py") + fmt.Sprintf(`
+import json,gzip,base64
+try:
+ args=json.loads(base64.b64decode('%s'))
+ print(base64.b64encode(gzip.compress(json.dumps(read_clock(args['tracking'], %d, args['path'], args['probes'])).encode())).decode())
+except Exception:
+ print('CLOCK_UNKNOWN')
+PY
+`, args, runStartUnixMS)
+}

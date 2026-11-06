@@ -253,3 +253,179 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(result['trackingLog']['breaks'], [dict(kind='cursor-gap', fromUnixSeconds=start // 1000,
                          unixSeconds=self.wall // 10**9, beforeRun=False)])
         self.assertLessEqual(len(clock.base64.b64encode(clock.gzip.compress(clock.json.dumps(result).encode()))), 23998)
+
+
+class ProbeTests(unittest.TestCase):
+    def setUp(self):
+        import pathlib
+        import tempfile
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = pathlib.Path(self.temp.name) / 'probes'
+        self.path.write_bytes(b'')
+        self.sample = dict(errorBoundNs=12, rateErrorPpm=0.5, measuredUnixNs='1793930000000000000')
+        self.timeline = dict(rows=[], breaks=[], cursor=None, runStartUnixMs=0)
+
+    def line(self, n=0, target=0, result=0, stamps=None):
+        if stamps is None:
+            base = 1793930000000000000 + n * 10**9
+            stamps = [base, base+1000, base+2000, base+3000]
+        return (str(target) + ' ' + ' '.join(f'{v:019d}' for v in stamps) + ' ' + str(result) + '\n').encode()
+
+    def read(self, cursor=None, path=None):
+        import copy
+        with patch.object(clock, 'clock_evidence', return_value=copy.deepcopy(self.sample)), patch.object(clock, 'tracking_evidence', return_value=copy.deepcopy(self.timeline)):
+            return clock.read_clock(None, 0, str(self.path) if path is None else path, cursor)
+
+    def baseline(self):
+        return dict(self.sample, trackingLog=self.timeline)
+
+    def test_probe_line_mirrors_fixed_format_and_partial_tail(self):
+        for target in range(3):
+            for result in range(3):
+                raw = self.line(target=target, result=result)
+                self.assertEqual(len(raw), 84)
+                self.assertEqual(clock.probe_line(raw), (target, [1793930000000000000, 1793930000000001000, 1793930000000002000, 1793930000000003000], result))
+                for n in range(84):
+                    self.assertIsNone(clock.probe_line(raw[:n]))
+        self.assertEqual(clock.probe_line(self.line(target=3, result=3, stamps=[0]*4)), (3, [0]*4, 3))
+        for raw in (self.line(target=3), self.line(result=3), self.line(target=3, result=3), self.line(stamps=[10**19-1]*4), b'short\n', self.line().replace(b' ', b'\t', 1), self.line() + b'x'):
+            with self.assertRaises(ValueError):
+                clock.probe_line(raw)
+
+    def test_partial_last_line_waits_and_cursor_resumes(self):
+        first, second = self.line(0), self.line(1)
+        self.path.write_bytes(first + second[:20])
+        result = self.read()['probeLog']
+        self.assertEqual(result['lines'].encode(), first)
+        self.assertEqual(result['cursor']['position'], 84)
+        waiting = self.read(result['cursor'])['probeLog']
+        self.assertEqual(waiting['lines'], '')
+        self.assertEqual(waiting['cursor']['position'], 84)
+        with self.path.open('ab') as f:
+            f.write(second[20:])
+        rest = self.read(waiting['cursor'])['probeLog']
+        self.assertEqual(rest['lines'].encode(), second)
+        self.assertEqual(rest['cursor']['position'], 168)
+        self.assertEqual(sum(rest['lossCounts'].values()), 0)
+
+    def test_capacity_marker_and_malformed_line_are_counted_once(self):
+        self.path.write_bytes(b'bad\n' + self.line(target=3, result=3, stamps=[0]*4))
+        result = self.read()['probeLog']
+        self.assertEqual(result['lines'], '')
+        self.assertEqual(result['lossCounts']['capacityEvents'], 1)
+        self.assertEqual(result['lossCounts']['malformedLines'], 1)
+        self.assertEqual(sum(self.read(result['cursor'])['probeLog']['lossCounts'].values()), 0)
+
+    def test_unreadable_and_bad_cursor_never_change_baseline(self):
+        missing = str(self.path.with_suffix('.missing'))
+        result = self.read(path=missing)
+        self.assertEqual(result['probeLog']['lossCounts']['readFailures'], 1)
+        del result['probeLog']
+        self.assertEqual(result, self.baseline())
+        self.path.write_bytes(self.line())
+        first = self.read()['probeLog']
+        self.path.write_bytes(self.line(1))
+        gap = self.read(first['cursor'])['probeLog']
+        self.assertEqual(gap['lossCounts']['cursorGaps'], 1)
+        self.assertEqual(gap['lines'], '')
+        with self.path.open('ab') as f:
+            f.write(self.line(2))
+        self.assertEqual(self.read(gap['cursor'])['probeLog']['lines'].encode(), self.line(2))
+        self.assertNotIn('probeLog', self.read(path=''))
+
+    def test_combined_wire_pressure_defers_a_prefix_without_loss(self):
+        import random
+        import string
+        rng = random.Random(31)
+        self.sample['tracking'] = ''.join(rng.choices(string.ascii_letters + string.digits, k=16000))
+        lines = []
+        for i in range(900):
+            base = 1793930000000000000 + i * 10**9
+            a, b, processing = rng.randrange(10**8), rng.randrange(10**8), rng.randrange(10**7)
+            lines.append(self.line(i, target=i % 3, stamps=[base, base+a, base+a+processing, base+a+processing+b]))
+        self.path.write_bytes(b''.join(lines))
+        first = self.read()['probeLog']
+        count = len(first['lines']) // 84
+        self.assertGreater(count, 0)
+        self.assertLess(count, len(lines))
+        self.assertEqual(first['cursor']['position'], count * 84)
+        self.assertEqual(first['lines'].encode(), b''.join(lines[:count]))
+        seen, cursor = first['lines'], first['cursor']
+        for _ in range(20):
+            result = self.read(cursor)
+            encoded = clock.json.dumps(result).encode()
+            self.assertLessEqual(len(encoded), 256000)
+            self.assertLessEqual(len(clock.base64.b64encode(clock.gzip.compress(encoded))), 23998)
+            batch = result.pop('probeLog')
+            self.assertEqual(result, self.baseline())
+            self.assertEqual(sum(batch['lossCounts'].values()), 0)
+            seen += batch['lines']
+            cursor = batch['cursor']
+            if cursor['position'] == self.path.stat().st_size:
+                break
+        self.assertEqual(seen.encode(), b''.join(lines))
+
+    def test_full_window_has_bounded_compression_calls(self):
+        # Wire pressure forces deferral. Include baseline compression, normal
+        # records, and the maximum number of malformed lines in one window.
+        import random
+        import string
+        self.sample['tracking'] = ''.join(random.Random(31).choices(string.ascii_letters + string.digits, k=22000))
+        for data in (b''.join(self.line(i) for i in range(781))[:clock.READ_LIMIT], b'\n' * clock.READ_LIMIT):
+            self.path.write_bytes(data)
+            with patch.object(clock.gzip, 'compress', wraps=clock.gzip.compress) as compress:
+                result = self.read()
+            self.assertLessEqual(compress.call_count, 15)
+            self.assertGreater(result['probeLog']['cursor']['position'], 0)
+            result.pop('probeLog')
+            self.assertEqual(result, self.baseline())
+
+    def test_fifo_and_symlink_leave_baseline_intact(self):
+        import os
+        fifo = self.path.with_suffix('.fifo')
+        os.mkfifo(fifo)
+        link = self.path.with_suffix('.link')
+        link.symlink_to(self.path)
+        # A subprocess timeout makes a blocking-open regression fail promptly.
+        import subprocess
+        import sys
+        for path in (fifo, link):
+            completed = subprocess.run([sys.executable, '-B', '-c',
+                "import clock,json,sys; print(json.dumps(clock.add_probe_evidence(json.load(sys.stdin),sys.argv[1],None,0)))", str(path)],
+                input=clock.json.dumps(self.baseline()), text=True, capture_output=True, check=True, timeout=2)
+            result = clock.json.loads(completed.stdout)
+            self.assertEqual(result.pop('probeLog')['lossCounts']['readFailures'], 1)
+            self.assertEqual(result, self.baseline())
+
+    def test_unexpected_probe_exception_leaves_baseline_intact(self):
+        self.path.write_bytes(self.line())
+        with patch.object(clock, 'probe_line', side_effect=RuntimeError('injected')):
+            result = self.read()
+        batch = result.pop('probeLog')
+        self.assertEqual(batch['lossCounts']['readFailures'], 1)
+        self.assertIsNone(batch['cursor'])
+        self.assertEqual(result, self.baseline())
+        # Even an exception in diagnostic packing cannot escape this boundary.
+        with patch.object(clock, 'probe_fits', side_effect=RuntimeError('injected')):
+            self.assertEqual(self.read(), self.baseline())
+
+    def test_unpack_budget_and_tracking_fallback_are_unchanged(self):
+        self.path.write_bytes(self.line())
+        # Low-entropy text fits the compressed limit but leaves no unpack room.
+        self.sample['tracking'] = 'x' * 255900
+        result = self.read()
+        self.assertEqual(result, self.baseline())
+        # #404's baseline fallback must run before extension budgeting.
+        import random
+        import string
+        rng = random.Random(7)
+        self.sample['tracking'] = ''
+        self.timeline['rows'] = [dict(reference=''.join(rng.choices(string.ascii_letters, k=500)), unixSeconds=1793930000, beforeRun=False) for _ in range(100)]
+        self.timeline['breaks'] = [dict(kind='clock-step', fromUnixSeconds=1793929990, unixSeconds=1793929991, beforeRun=False)]
+        with patch.object(clock, 'clock_evidence', return_value=dict(self.sample)), patch.object(clock, 'tracking_evidence', return_value=clock.json.loads(clock.json.dumps(self.timeline))):
+            baseline = clock.read_clock()
+        result = self.read()
+        result.pop('probeLog', None)
+        self.assertEqual(result, baseline)
+        self.assertEqual(result['trackingLog']['breaks'][0]['fromUnixSeconds'], 1793929990)
