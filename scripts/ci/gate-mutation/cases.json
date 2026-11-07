@@ -3917,5 +3917,158 @@
     "Test": "TestClockSelectRelocatedControl",
     "Marker": "MUTATION: relocated-control",
     "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-admission-partial-peers",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Function": "",
+    "Old": "if result and set(result) != {'control', 'w1', 'w2'}:",
+    "New": "if False:",
+    "Test": "TestClockProbeHostAsset",
+    "Marker": "MUTATION: helper-validation",
+    "Package": "./internal/operatorgates/host"
+  },
+  {
+    "ID": "clock-admission-public-peer",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Function": "",
+    "Old": "if not (ip.is_private or ip.is_loopback) or ip.version != 4:",
+    "New": "if False:",
+    "Test": "TestClockProbeHostAsset",
+    "Marker": "MUTATION: helper-validation",
+    "Package": "./internal/operatorgates/host"
+  },
+  {
+    "ID": "clock-admission-omit-target",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Function": "",
+    "Old": "sorted(targets.items())",
+    "New": "sorted(targets.items())[:1]",
+    "Test": "TestClockProbeHostAsset",
+    "Marker": "MUTATION: helper-targets",
+    "Package": "./internal/operatorgates/host"
+  },
+  {
+    "ID": "clock-admission-omit-capacity",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Function": "",
+    "Old": "if output.tell() + len(line) > 4*1024*1024 - 84:",
+    "New": "if False:",
+    "Test": "TestClockProbeHostAsset",
+    "Marker": "MUTATION: helper-capacity",
+    "Package": "./internal/operatorgates/host"
+  },
+  {
+    "ID": "clock-admission-pre-restore",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if time.Unix(e.StartUnixSeconds, 0).Before(started) {",
+    "New": "if false {",
+    "Test": "TestClockSelectionRejectsPreRestoreWindow",
+    "Marker": "MUTATION: admission-pre-restore",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-unredacted",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "sample = clocks.PublicSample(sample)",
+    "New": "sample.Tracking = \"\"",
+    "Test": "TestClockSelectionAdmissionArtifacts",
+    "Marker": "MUTATION: admission-redaction",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-unbound-cli",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "selectClockBounds",
+    "Old": "selected.SHA256 != want.SHA256",
+    "New": "selected.SHA256 == \"\" && want.SHA256 == \"\"",
+    "Test": "TestClockSelectionVerifiesCLI",
+    "Marker": "MUTATION: admission-cli-binding",
+    "Package": "./internal/operatorrehearsal",
+    "Receiver": "rehearsal"
+  },
+  {
+    "ID": "clock-admission-ignore-cli-exit",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "selectClockBounds",
+    "Old": "if *result.Code != 0 {",
+    "New": "if false {",
+    "Test": "TestClockSelectionVerifiesCLI",
+    "Marker": "MUTATION: admission-cli-binding",
+    "Package": "./internal/operatorrehearsal",
+    "Receiver": "rehearsal"
+  },
+  {
+    "ID": "clock-admission-changes-verdict",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "recordClockSelectionReport",
+    "Old": "r.report.ClockSelection = result",
+    "New": "r.report.ClockSelection = result\n r.report.Errors = append(r.report.Errors, result.Cause)",
+    "Test": "TestClockSelectionReportNeutral",
+    "Marker": "MUTATION: selection-verdict-neutral",
+    "Package": "./internal/operatorrehearsal",
+    "Receiver": "rehearsal"
+  },
+  {
+    "ID": "clock-admission-free-text-cause",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "clockSelectionCause",
+    "Old": "return \"clock-selection-unavailable\"",
+    "New": "return cause",
+    "Test": "TestClockSelectionReportNeutral",
+    "Marker": "MUTATION: selection-cause-redaction",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-forget-observations",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "e.Falsification.Records = records",
+    "New": "e.Falsification.Records = nil",
+    "Test": "TestClockSelectionAdmissionArtifacts",
+    "Marker": "MUTATION: admission-artifacts",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-clear-falsified",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "mergeClockProbeRecords",
+    "Old": "} else if records[i].Status != \"falsified\" {",
+    "New": "} else {",
+    "Test": "TestClockSelectionStickyProbe",
+    "Marker": "MUTATION: admission-sticky",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-no-seed-margin",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if p.pause(ctx, 2*time.Second) != nil {",
+    "New": "if p.pause(ctx, 0) != nil {",
+    "Test": "TestClockSelectionAdmissionArtifacts",
+    "Marker": "MUTATION: admission-first-attempt",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-cancel-keeps-helpers",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "p.stop(stopCtx)",
+    "New": "_ = stopCtx",
+    "Test": "TestClockSelectionPartialStartWaits",
+    "Marker": "MUTATION: admission-cancel-stop",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-ignore-stop-file",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Function": "",
+    "Old": "if pathlib.Path(path).is_file():\n            stop.set()",
+    "New": "if pathlib.Path(path).is_file():\n            return",
+    "Test": "TestClockProbeHostAsset",
+    "Marker": "MUTATION: helper-stop-file",
+    "Package": "./internal/operatorgates/host"
   }
 ]

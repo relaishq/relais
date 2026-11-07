@@ -353,7 +353,22 @@
     "clock-select-leap",
     "clock-select-missing-column14-pad",
     "clock-select-ignore-post-window-break",
-    "clock-select-control-hardcoded-shared"
+    "clock-select-control-hardcoded-shared",
+    "clock-admission-partial-peers",
+    "clock-admission-public-peer",
+    "clock-admission-omit-target",
+    "clock-admission-omit-capacity",
+    "clock-admission-pre-restore",
+    "clock-admission-unredacted",
+    "clock-admission-unbound-cli",
+    "clock-admission-ignore-cli-exit",
+    "clock-admission-changes-verdict",
+    "clock-admission-free-text-cause",
+    "clock-admission-forget-observations",
+    "clock-admission-clear-falsified",
+    "clock-admission-no-seed-margin",
+    "clock-admission-cancel-keeps-helpers",
+    "clock-admission-ignore-stop-file"
   ],
   "killed": [
     {
@@ -3116,6 +3131,111 @@
       "id": "clock-select-control-hardcoded-shared",
       "test": "TestClockSelectRelocatedControl",
       "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-partial-peers",
+      "test": "TestClockProbeHostAsset",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-public-peer",
+      "test": "TestClockProbeHostAsset",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-omit-target",
+      "test": "TestClockProbeHostAsset",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-omit-capacity",
+      "test": "TestClockProbeHostAsset",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-pre-restore",
+      "test": "TestClockSelectionRejectsPreRestoreWindow",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-unredacted",
+      "test": "TestClockSelectionAdmissionArtifacts",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-unbound-cli",
+      "test": "TestClockSelectionVerifiesCLI",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-ignore-cli-exit",
+      "test": "TestClockSelectionVerifiesCLI",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-changes-verdict",
+      "test": "TestClockSelectionReportNeutral",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-free-text-cause",
+      "test": "TestClockSelectionReportNeutral",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-forget-observations",
+      "test": "TestClockSelectionAdmissionArtifacts",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-clear-falsified",
+      "test": "TestClockSelectionStickyProbe",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-no-seed-margin",
+      "test": "TestClockSelectionAdmissionArtifacts",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-cancel-keeps-helpers",
+      "test": "TestClockSelectionPartialStartWaits",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-ignore-stop-file",
+      "test": "TestClockProbeHostAsset",
+      "package": "./internal/operatorgates/host",
       "evidence": "killed",
       "guardFingerprint": ""
     }

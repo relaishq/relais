@@ -11,7 +11,7 @@ import (
 	"slices"
 )
 
-//go:embed preview_process.py preview_inventory.py preview_telemetry.py clock.py
+//go:embed preview_process.py preview_inventory.py preview_telemetry.py clock.py clock_probe.py
 var Assets embed.FS
 
 func source(name string) string {
