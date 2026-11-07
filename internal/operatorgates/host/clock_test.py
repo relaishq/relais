@@ -18,6 +18,62 @@ class ClockTests(unittest.TestCase):
                 clock.clock_evidence()
 
 
+class LeaseTests(unittest.TestCase):
+    def tracking(self, dispersion='0.000002000', reference='1792886400.000000000'):
+        # chronyc -c tracking includes both the reference ID and name.
+        return ','.join(['CB00710F', 'test-source', '2', reference, '-0.000001000', '0', '0',
+                         '1.000', '-0.200', '0.300', '0.000004000', dispersion, '1.0', 'Normal'])
+
+    def collect(self, first=None, second=None, sources='^,*,test-source,2,0,377,0,0,0,0\n'):
+        with patch.object(clock.subprocess, 'run', side_effect=[
+                types.SimpleNamespace(stdout=self.tracking() if first is None else first),
+                types.SimpleNamespace(stdout=self.tracking('0.000002200') if second is None else second),
+                types.SimpleNamespace(stdout=sources)]), \
+             patch.object(clock.time, 'monotonic_ns', side_effect=[0, 10000000, 210000000, 230000000]), \
+             patch.object(clock.time, 'time_ns', return_value=1792886401000000000), \
+             patch.object(clock.time, 'sleep'):
+            return clock.lease_evidence()
+
+    def test_same_update_growth_brackets_and_report_time_error(self):
+        o = self.collect()
+        self.assertTrue(o['available'])
+        self.assertEqual(o['errorBoundNs'], 5202)
+        self.assertEqual(o['intervalNs'], 200000000)
+        self.assertEqual(o['hostElapsedNs'], 230000000)
+        self.assertEqual(o['referenceAgeNs'], 1000000000)
+        self.assertEqual(o['pollSeconds'], '1')
+        self.assertEqual(o['residualPpm'], '-0.200')
+
+    def test_update_leap_regression_and_read_failures_are_unavailable(self):
+        for second in [self.tracking(reference='1792886401.000000000'),
+                       self.tracking('0.000001000'), self.tracking().replace('Normal', 'Insert second'),
+                       self.tracking('NaN'), 'malformed']:
+            self.assertEqual(self.collect(second=second), dict(available=False, reason='unavailable'))
+        with patch.object(clock.subprocess, 'run', side_effect=OSError('private-message')):
+            self.assertEqual(clock.lease_evidence(), dict(available=False, reason='unavailable'))
+
+    def test_runtime_poll_handles_refclocks_without_dpoll(self):
+        self.assertEqual(self.collect(sources='#,*,test-refclock,0,-1,377,0,0,0,0\n')['pollSeconds'], '0.5')
+        for sources in ['', '^,?,test-source,2,0,0,0\n', '^,*,a,2,0,377,0\n^,*,b,2,0,377,0\n', '^,*,a,2,25,377,0\n']:
+            self.assertFalse(self.collect(sources=sources)['available'])
+
+    def test_opt_in_records_without_perturbing_baseline_or_wire_budget(self):
+        import copy
+        baseline = dict(errorBoundNs=7, rateErrorPpm=0.5, measuredUnixNs='1792886401000000000')
+        timeline = dict(rows=[], breaks=[], cursor=None, readComplete=True)
+        with patch.object(clock, 'clock_evidence', side_effect=lambda: copy.deepcopy(baseline)), \
+             patch.object(clock, 'tracking_evidence', side_effect=lambda *a, **k: copy.deepcopy(timeline)), \
+             patch.object(clock, 'lease_evidence', return_value=self.collect()) as lease:
+            old = clock.read_clock()
+            lease.assert_not_called()
+            recorded = clock.read_clock(lease=True)
+            self.assertTrue(recorded.pop('lease')['available'])
+            self.assertEqual(old, recorded)
+            # An oversized extension cannot evict baseline evidence.
+            lease.return_value = dict(available=False, reason='x'*260000)
+            self.assertEqual(clock.read_clock(lease=True), old)
+
+
 class TrackingTests(unittest.TestCase):
     def setUp(self):
         import pathlib
@@ -36,6 +92,28 @@ class TrackingTests(unittest.TestCase):
     def read(self, cursor=None, start=0):
         with patch.object(clock, 'TRACKING_LOG', self.log), patch.object(clock, 'daemon_identity', return_value=self.daemon), patch.object(clock.time, 'time_ns', return_value=self.wall), patch.object(clock.time, 'monotonic_ns', return_value=self.mono):
             return clock.tracking_evidence(cursor, start)
+
+    def test_precision_pressure_drops_decimals_before_baseline_rows(self):
+        import json
+        self.log.write_text(''.join(self.row(s, maximum='9.000e-06') for s in range(1100)))
+        sample = dict(errorBoundNs=7, rateErrorPpm=0.5, measuredUnixNs=str(self.wall))
+        with patch.object(clock, 'TRACKING_LOG', self.log), \
+             patch.object(clock, 'daemon_identity', return_value=self.daemon), \
+             patch.object(clock.time, 'time_ns', return_value=self.wall), \
+             patch.object(clock.time, 'monotonic_ns', return_value=self.mono), \
+             patch.object(clock, 'clock_evidence', side_effect=lambda: dict(sample)), \
+             patch.object(clock, 'lease_evidence', return_value=dict(available=False, reason='unavailable')):
+            # Use the real row parser, cursor and encoded-size retention limit.
+            baseline = clock.read_clock()
+            precise = dict(sample, trackingLog=clock.tracking_evidence(precision=True))
+            self.assertEqual(len(precise['trackingLog']['rows']), len(baseline['trackingLog']['rows']))
+            wire = lambda value: len(clock.base64.b64encode(clock.gzip.compress(json.dumps(value).encode())))
+            self.assertGreater(wire(precise), wire(baseline))
+            with patch.object(clock, 'WIRE_LIMIT', (wire(precise)+wire(baseline))//2):
+                recorded = clock.read_clock(lease=True)
+            recorded.pop('lease', None)
+            self.assertEqual(recorded, baseline)
+            self.assertGreater(len(recorded['trackingLog']['rows']), 0)
 
     def append(self, line, seconds=1):
         with self.log.open('a') as f:

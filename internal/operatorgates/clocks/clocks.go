@@ -14,12 +14,14 @@ import (
 )
 
 type Sample struct {
-	ProbeLog       json.RawMessage `json:"-"`
-	TrackingLog    *TrackingLog    `json:"trackingLog,omitempty"`
-	Tracking       string          `json:"tracking,omitempty"`
-	ErrorBoundNS   int64           `json:"errorBoundNs"`
-	RateErrorPPM   float64         `json:"rateErrorPpm"`
-	MeasuredUnixNS string          `json:"measuredUnixNs"`
+	ProbeLog       json.RawMessage   `json:"-"`
+	Lease          *LeaseObservation `json:"lease,omitempty"`
+	RecordedLease  *RecordedLease    `json:"recordedLease,omitempty"`
+	TrackingLog    *TrackingLog      `json:"trackingLog,omitempty"`
+	Tracking       string            `json:"tracking,omitempty"`
+	ErrorBoundNS   int64             `json:"errorBoundNs"`
+	RateErrorPPM   float64           `json:"rateErrorPpm"`
+	MeasuredUnixNS string            `json:"measuredUnixNs"`
 }
 
 // EvidenceVersion covers recorded clock diagnostics, including the optional
@@ -40,6 +42,7 @@ type TrackingRow struct {
 	RootDelaySeconds           float64 `json:"rootDelaySeconds"`
 	RootDispersionSeconds      float64 `json:"rootDispersionSeconds"`
 	MaxErrorSeconds            float64 `json:"maxErrorSeconds"`
+	MaxErrorDecimal            string  `json:"maxErrorDecimal,omitempty"`
 	LeapStatus                 string  `json:"leapStatus"`
 }
 type TrackingBreak struct {
@@ -60,6 +63,15 @@ type TrackingLog struct {
 func PublicSample(s Sample) Sample {
 	s.ProbeLog = nil
 	s.Tracking = ""
+	s.RecordedLease = nil
+	if s.Lease != nil {
+		o := *s.Lease
+		if value, err := RecordLease(o, o.HostElapsedNS); err == nil {
+			s.Lease, s.RecordedLease = &o, &value
+		} else {
+			s.Lease, s.RecordedLease = &LeaseObservation{Reason: "invalid-evidence"}, nil
+		}
+	}
 	if s.TrackingLog == nil {
 		return s
 	}
@@ -67,6 +79,9 @@ func PublicSample(s Sample) Sample {
 	log.Rows = append([]TrackingRow{}, log.Rows...)
 	for i := range log.Rows {
 		log.Rows[i].Reference = ""
+		if raw := log.Rows[i].MaxErrorDecimal; raw != "" && !column14Pattern.MatchString(raw) {
+			log.Rows[i].MaxErrorDecimal = "unavailable"
+		}
 		switch log.Rows[i].LeapStatus {
 		case "N", "+", "-", "?":
 		default:
@@ -120,7 +135,26 @@ func Parse(data []byte) (s Sample, err error) {
 	if err != nil {
 		return s, err
 	}
+	baseline, lease, err := stripClockMember(baseline, "lease")
+	if err != nil {
+		return s, err
+	}
+	baseline, _, err = stripClockMember(baseline, "recordedLease")
+	if err != nil {
+		return s, err
+	}
 	err = observe.Decode(baseline, &s, observe.Contract{"errorBoundNs", "rateErrorPpm", "measuredUnixNs"})
+	// The extension is recorded only: even malformed optional lease evidence
+	// cannot change the independently decoded scalar policy sample.
+	if len(lease) > 0 {
+		s.Lease = &LeaseObservation{Reason: "invalid-evidence"}
+		var o LeaseObservation
+		if observe.Decode(lease, &o, nil) == nil {
+			if value, e := RecordLease(o, o.HostElapsedNS); e == nil {
+				s.Lease, s.RecordedLease = &o, &value
+			}
+		}
+	}
 	s.ProbeLog = probe
 	if err == nil && (s.ErrorBoundNS < 0 || s.ErrorBoundNS > maxSafeInteger || !finite(s.RateErrorPPM) || s.RateErrorPPM < 0 || !nsPattern.MatchString(s.MeasuredUnixNS)) {
 		err = fmt.Errorf("missing independent clock evidence")

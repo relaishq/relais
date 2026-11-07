@@ -31,6 +31,8 @@ func runWithAdapter(startAdapter func(context.Context, string, []string) (*opera
 		return 2
 	}
 	switch os.Args[1] {
+	case "clock-select":
+		return clockSelect(os.Args[2:], os.Stdout, os.Stderr)
 	case "version":
 		if len(os.Args) != 2 {
 			return 2

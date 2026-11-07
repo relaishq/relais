@@ -31,6 +31,92 @@ func passingReport() Report {
 	r.Gates[3].Process = operatorgates.ProcessEvidence{CompletedSteps: 5, Restarts: 1, DuplicatePackets: &zero, RelayEpochDelta: &one, RoutesRestored: &one, RelayLocalTiming: "inconclusive", RelayConnectionInvariants: "inconclusive"}
 	return r
 }
+
+func TestRecordedClockLeasePreservesReportsAndJudgeInput(t *testing.T) {
+	strip := func(raw []byte) []byte {
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Fatal(err)
+		}
+		var visit func(any)
+		visit = func(v any) {
+			switch v := v.(type) {
+			case map[string]any:
+				delete(v, "lease")
+				delete(v, "recordedLease")
+				delete(v, "maxErrorDecimal")
+				for _, child := range v {
+					visit(child)
+				}
+			case []any:
+				for _, child := range v {
+					visit(child)
+				}
+			}
+		}
+		visit(value)
+		out, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	for i, available := range []bool{false, true} {
+		r := passingReport()
+		r.Clocks = []clocks.Evidence{{Version: 2, Clocks: map[string]clocks.Sample{"relay": {ErrorBoundNS: 1, RateErrorPPM: 0.1, MeasuredUnixNS: "1792886400000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1792886400, MaxErrorSeconds: 1e-6, LeapStatus: "N"}, {UnixSeconds: 1792886401, MaxErrorSeconds: 1e-6, LeapStatus: "N"}}}}}}}
+		var before, after bytes.Buffer
+		if err := r.Write(&before); err != nil {
+			t.Fatal(err)
+		}
+		pool := operatorevidence.Pool{ClockCoverage: &clocks.CoverageEvidence{Bounds: clocks.FixedCoverageBounds()}}
+		for _, e := range r.Clocks {
+			pool.ClockCoverage.Attempts = append(pool.ClockCoverage.Attempts, clocks.NewCoverageAttempt(e))
+		}
+		judgeBefore, err := operatorevidence.MarshalJudgeInput(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j := range r.Clocks {
+			for slot, s := range r.Clocks[j].Clocks {
+				s.Lease = &clocks.LeaseObservation{Reason: "unavailable"}
+				if available {
+					s.Lease = &clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1792886400000000000", ReferenceUnixNS: "1792886400000000000", PollSeconds: "1", ResidualPPM: "-0.1", SkewPPM: "0.2", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 1000000000, HostElapsedNS: 1000000000}
+					for k := range s.TrackingLog.Rows {
+						s.TrackingLog.Rows[k].MaxErrorDecimal = "1.000e-06"
+					}
+				}
+				r.Clocks[j].Clocks[slot] = s
+			}
+		}
+		if err := r.Write(&after); err != nil {
+			t.Fatal(err)
+		}
+		if available {
+			var retained Report
+			if err := json.Unmarshal(after.Bytes(), &retained); err != nil {
+				t.Fatal(err)
+			}
+			s := retained.Clocks[0].Clocks["relay"]
+			if s.Lease == nil || !s.Lease.Available || s.RecordedLease == nil || s.TrackingLog.Rows[0].MaxErrorDecimal != "1.000e-06" {
+				t.Fatal("available lease/precision fixture was not retained")
+			}
+		}
+		if !bytes.Equal(strip(before.Bytes()), strip(after.Bytes())) {
+			t.Fatalf("recorded lease changed report %d", i)
+		}
+		pool.ClockCoverage.Attempts = nil
+		for _, e := range r.Clocks {
+			pool.ClockCoverage.Attempts = append(pool.ClockCoverage.Attempts, clocks.NewCoverageAttempt(e))
+		}
+		judgeAfter, err := operatorevidence.MarshalJudgeInput(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(judgeBefore, judgeAfter) {
+			t.Fatalf("recorded lease changed judge input %d", i)
+		}
+	}
+}
 func TestRehearsalPassRule(t *testing.T) {
 	r := passingReport()
 	r.Evaluate()

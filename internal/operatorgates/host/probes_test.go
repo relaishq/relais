@@ -103,4 +103,8 @@ with patch('subprocess.run', side_effect=command), patch('time.time_ns', return_
 	require.Equal(t, string(line), batch.Lines)
 	delete(withProbes, "probeLog")
 	require.Equal(t, baseline, withProbes)
+	withLease := run(ClockWithLease(nil, 0, path, nil))
+	delete(withLease, "lease")
+	delete(withLease, "probeLog")
+	require.Equal(t, baseline, withLease, "unavailable optional lease changed baseline")
 }
