@@ -148,7 +148,7 @@ There is no default launcher policy. For example, a rehearsal can use:
   "signalReserveNs": 50000,
   "controlCeilingNs": 250000,
   "workerCeilingNs": 350000,
-  "maxDispersionGrowthPpm": "2"
+  "maxDispersionGrowthPpm": "5"
 }
 ```
 
@@ -229,10 +229,8 @@ gate must add its monotonic elapsed time from request-send, including transport;
 the host-only age in 5a does not prove this full age. The new
 lease fields are optional recorded data. No existing fault path checks them.
 
-Slice 5c will deploy a provider-neutral probe helper and archive receipts in
-rehearsal, still recorded only. Slice 5b will bind Init/config/caller/coverage
-to the receipt, enforce leases only on enumerated fault paths, keep restoration
-possible, and drain coverage before the final judge within its deadline.
+Slice 5b will bind Init/config/caller/coverage to the receipt, enforce fault-path
+leases, preserve restoration, and drain coverage before the final judge.
 
 The opt-in frontend clock prober writes an append-only run-local file, capped
 at 4 MiB including one capacity marker. Each complete ASCII line is exactly
@@ -1059,3 +1057,39 @@ pre-coverage path. The coverage fixture is generated deliberately. Named tests
 cover `repair-gap-with-later-sample`, `omit-frontend-error` and
 `omit-final-coverage`. Mutation tests reject use of the latest error, endpoint-only
 coverage, omission of the break margin and a falsification latch that can clear.
+
+## Rehearsal admission receipt (slice 5c)
+
+Any launcher can deploy `internal/operatorgates/host/clock_probe.py`. Start each
+endpoint with `python3 clock_probe.py --listen PRIVATE_IPV4:PORT --seconds 150`.
+The frontend also needs `--output RUN_LOCAL_FILE` and all three
+`--peer control=http://PRIVATE_IPV4:PORT`, `--peer w1=...`, `--peer w2=...`.
+Use an isolated private network: this unauthenticated helper accepts private IPv4,
+bypasses proxies, timestamps after TCP connect, and probes at 1 Hz (750 ms socket
+timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–300 s; optional `--stop-file PATH` requests cooperative
+shutdown when that file appears.
+
+After negative controls restore, rehearsal establishes/drains cursors before
+starting helpers or the admission timer, without reading the probe file. This
+preflight has a ten-second budget including a two-second guard to keep overflow
+breaks outside the selector's margin. Startup history remains recorded. Then
+parallel reads/selection start at 123 s within a fixed 150 s admission deadline;
+setup has ten seconds inside that deadline and helper lifetimes use the remainder.
+Non-cancelled exits wait through deadline +2 s before calibration (152 s plus
+preflight, at most 162 s). Parent cancellation requests cooperative stop files
+on all hosts with a two-second cleanup budget and returns promptly. Generated
+chrony configuration declares hosts and caller unsmeared.
+
+The 5 ppm growth policy uses runs 42302414107/42330487259: their maximum
+successful-read residual-plus-skew was 0.251/0.147 ppm. Adding the configured
+1 ppm allowance and 0.005 ppm printing pad at 200 ms gives about 1.256 ppm.
+Selection still checks each measured growth rate. This shared-kernel data does
+not characterize independent hosts; changed reference updates can refuse leases.
+
+The real CLI archives `clock-selection.json`, `clock-admission-evidence.json`,
+`clock-selection-policy.json` and `clock-selection-status.json`. Report
+`clockSelection` and logs print digests, bounds and counts or the fixed refusal
+cause. Archives omit addresses, source labels and opaque cursors. Selection stays
+diagnostic; acceptance, caller flags and judge inputs do not use it.
+`TestClockSelectionAdmissionArtifacts` exercises the real reader with oversized
+logs, a transient read failure and the real CLI. PR admission is a separate gate.

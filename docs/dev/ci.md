@@ -53,3 +53,8 @@ Storage benchmarks also skip Redis unless `RELAIS_TEST_REDIS_ADDR` is set.
 Memory benchmarks always run; Redis variants use random prefixes and remove
 their keys at cleanup. With `RELAIS_TEST_REDIS_REQUIRE=1`, missing or
 unreachable Redis fails integration tests and Redis benchmarks.
+
+The separate `operator-rehearsal.yml` job adds a clock admission step (152 seconds plus bounded preflight, at most 162)
+after negative controls restore. It archives sanitized evidence, policy, receipt
+and status; report/log print bounds/counts or refusal. Selection is recorded only
+([admission details](operator-gates.md#rehearsal-admission-receipt-slice-5c)).

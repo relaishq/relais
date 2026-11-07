@@ -233,6 +233,7 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		r.recordError("negative-controls-failed", e)
 		return report, errors.New("negative-controls-failed")
 	}
+	r.recordClockSelection(ctx)
 	if e = r.calibrate(ctx); e != nil || !report.CPU.Calibration.Passed {
 		r.recordError("calibration-failed", e)
 		return report, errors.New("calibration-failed")

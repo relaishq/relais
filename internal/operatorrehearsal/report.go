@@ -30,6 +30,7 @@ type CPUReport struct {
 	Phases           []Calibration `json:"phases"`
 }
 type Report struct {
+	ClockSelection  *ClockSelectionReport     `json:"clockSelection,omitempty"`
 	TimingUndecided []TimingUndecided         `json:"timingUndecided"`
 	Uncertainties   []operator.Uncertainty    `json:"uncertainties"`
 	SchemaVersion   int                       `json:"schemaVersion"`

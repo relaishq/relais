@@ -57,7 +57,7 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		if strings.HasPrefix(step.Uses, "actions/upload-artifact@") {
 			uploads++
 			paths := strings.Fields(step.With["path"].(string))
-			if len(paths) != 4 || paths[0] != "runtime/operator-report/report.json" || paths[1] != "runtime/operator-report/host-diagnostics.log" || paths[2] != "runtime/operator-report/media-evidence.json" || paths[3] != "runtime/operator-report/"+HeadCallerEvidence {
+			if len(paths) != 8 || paths[0] != "runtime/operator-report/report.json" || paths[1] != "runtime/operator-report/host-diagnostics.log" || paths[2] != "runtime/operator-report/media-evidence.json" || paths[3] != "runtime/operator-report/"+HeadCallerEvidence || paths[4] != "runtime/operator-report/clock-admission-evidence.json" || paths[5] != "runtime/operator-report/clock-selection-policy.json" || paths[6] != "runtime/operator-report/clock-selection.json" || paths[7] != "runtime/operator-report/clock-selection-status.json" {
 				t.Fatal(paths)
 			}
 		}

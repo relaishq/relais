@@ -99,5 +99,9 @@ jobs:
             runtime/operator-report/host-diagnostics.log
             runtime/operator-report/media-evidence.json
             runtime/operator-report/head-caller-evidence.json
+            runtime/operator-report/clock-admission-evidence.json
+            runtime/operator-report/clock-selection-policy.json
+            runtime/operator-report/clock-selection.json
+            runtime/operator-report/clock-selection-status.json
           if-no-files-found: warn
           retention-days: 14

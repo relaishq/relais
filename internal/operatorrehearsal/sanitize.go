@@ -66,6 +66,11 @@ func sanitizePool(p *operatorevidence.Summary) *operatorevidence.Summary {
 	return &copy
 }
 func (r *Report) sanitize() {
+	if r.ClockSelection != nil {
+		diagnostic := *r.ClockSelection
+		diagnostic.Cause = clockSelectionCause(diagnostic.Cause)
+		r.ClockSelection = &diagnostic
+	}
 	r.Uncertainties = append([]operator.Uncertainty{}, r.Uncertainties...)
 	for i := range r.Uncertainties {
 		r.Uncertainties[i] = r.Uncertainties[i].Public()
