@@ -621,8 +621,8 @@ Its call must complete with valid caller and generator evidence and no known
 media failures. The pool records `relayCalls: 1` separately and applies the
 unchanged trial judge only to the other phases. Other gates without trial
 collections remain excluded. `TestRelayCompletedCallContributesNoTrials` and
-`TestRelayPoolKeepsTrialPopulationUnchanged` pin these populations at both release
-commits via `TestPinnedReleaseJudgesMatchFrozenEvidence`.
+`TestRelayPoolKeepsTrialPopulationUnchanged` pin these populations via `TestPinnedReleaseJudgesMatchFrozenEvidence`, once,
+against the byte-identical executable both release commits build.
 `TestFrozenRelayProcedureHasNoTrialReceipts` checks the frozen relay procedure
 fixtures; their media callbacks are canned summaries, so the raw zero-event
 caller case uses synthetic product reports.

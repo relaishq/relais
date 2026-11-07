@@ -3266,7 +3266,7 @@
         "TestFrozenRelayProcedureHasNoTrialReceipts",
         "TestPinnedReleaseJudgesMatchFrozenEvidence"
       ],
-      "scope": "Native composition includes raw caller/pool/unchanged judge; frozen trial composition crosses broker/mailbox/bridge. Relay-deploy contributes one completed call and zero trials; raw zero-event caller qualification is synthetic product evidence checked at both release pins, distinct from the frozen callback replay."
+      "scope": "Native composition includes raw caller/pool/unchanged judge; frozen trial composition crosses broker/mailbox/bridge. Relay-deploy contributes one completed call and zero trials; raw zero-event caller qualification is synthetic product evidence checked against the byte-identical executable both release pins build, distinct from the frozen callback replay."
     },
     {
       "id": "strict-verdict",

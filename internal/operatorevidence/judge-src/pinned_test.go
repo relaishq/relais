@@ -28,8 +28,8 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Coverage scenarios and production/sanitized projections run at both pins.
-	// Keep this bounded without sharing the former seven-case three-minute budget.
+	// Coverage scenarios run once against the identical executable; production
+	// and sanitized projections run at both pins.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	relay := relayInput()
@@ -94,10 +94,16 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 			if executableSHA != "" && executableSHA != judge.SHA256 {
 				t.Fatal("byte-identical fixed judge sources produced different executables")
 			}
+			// Both pins build byte-identical executables (checked above), so the
+			// case sweep runs once. The production projection below runs at both.
+			sweep := cases
+			if executableSHA != "" {
+				sweep = nil
+			}
 			executableSHA = judge.SHA256
-			for _, input := range cases {
+			for _, input := range sweep {
 				// The raw constructors and existing judge policy are unchanged frozen
-				// synthetic evidence. Compare every summary field at both release pins.
+				// synthetic evidence. Compare every summary field.
 				expected := pooledPreviewMedia(&input)
 				wantBytes, _ := json.Marshal(expected)
 				want, err := operatorevidence.DecodeSummary(wantBytes)
@@ -108,7 +114,7 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				// Execute the exact compact transport at each release pin.
+				// Execute the exact compact transport against the pinned executable.
 				result, err := exec.CommandContext(ctx, judge.Binary, writePinnedInput(t, wire)).Output()
 				actual, decodeErr := operatorevidence.DecodeSummary(result)
 				if err == nil {
