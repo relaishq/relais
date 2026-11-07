@@ -75,6 +75,10 @@ type Session struct {
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
+	// Reject receipt claims until Init binding is activated in 5b6.
+	if init.Scenario.ClockReceiptSHA256 != "" {
+		return nil, &clocks.BindingError{Cause: "clock-binding-not-active"}
+	}
 	if id == "" || len(id) > 128 || !digestPattern.MatchString(init.Scenario.Digest) || init.Scenario.SchemaVersion != 1 || len(init.Scenario.Gates) == 0 || len(init.Scenario.Gates) > 6 {
 		return nil, errors.New("invalid-init")
 	}

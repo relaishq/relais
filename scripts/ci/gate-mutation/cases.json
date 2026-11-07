@@ -4120,5 +4120,295 @@
     "Test": "TestClockSelectionPartialStartWaits",
     "Marker": "MUTATION: admission-cancel-prompt",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-binding-swapped-run",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "if receipt.RunID != in.RunID || evidence.RunID != in.RunID {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/run",
+    "Marker": "MUTATION: binding-run",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-wrong-slot",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "if receipt.FrontendSlot != in.FrontendSlot || evidence.FrontendSlot != in.FrontendSlot || receipt.ControlSlot != in.ControlSlot || evidence.ControlSlot != in.ControlSlot {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/roles",
+    "Marker": "MUTATION: binding-roles",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-wrong-mode",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "if receipt.CallerLeapMode != in.CallerLeapMode || evidence.CallerLeapMode != in.CallerLeapMode {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/mode",
+    "Marker": "MUTATION: binding-mode",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-config-bounds",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "receipt.Bounds != in.ConfigBounds ||",
+    "New": "false ||",
+    "Test": "TestReceiptBindingRefusals/config",
+    "Marker": "MUTATION: binding-config",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-caller-bounds",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "receipt.Bounds != in.CallerBounds",
+    "New": "false",
+    "Test": "TestReceiptBindingRefusals/caller",
+    "Marker": "MUTATION: binding-caller",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-altered-digest",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "receiptSHA != in.ReceiptSHA256",
+    "New": "false",
+    "Test": "TestReceiptBindingRefusals/receipt-digest",
+    "Marker": "MUTATION: binding-receipt-digest",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-altered-evidence-digest",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "selected.Receipt.EvidenceSHA256 != in.EvidenceSHA256",
+    "New": "false",
+    "Test": "TestReceiptBindingRefusals/evidence-digest",
+    "Marker": "MUTATION: binding-evidence-digest",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-selected-bounds",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "if selected.Receipt.Bounds != receipt.Bounds {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/selected-bounds",
+    "Marker": "MUTATION: binding-selected-bounds",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-forged-receipt",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "if selected.SHA256 != receiptSHA {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/selection",
+    "Marker": "MUTATION: binding-selection",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-open-schema",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "observe.DecodeClosedLimit(in.EvidenceJSON",
+    "New": "observe.DecodeLimit(in.EvidenceJSON",
+    "Test": "TestReceiptBindingRefusals/unknown",
+    "Marker": "MUTATION: binding-unknown",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-host-count",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "if len(reads) != len(selectionSlots) {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/host-count",
+    "Marker": "MUTATION: binding-host-count",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-host-slot",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "if !slices.Contains(selectionSlots, h.Slot) || seen[h.Slot] {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/host-slot",
+    "Marker": "MUTATION: binding-host-slot",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-host-mode",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "if h.LeapMode != e.CallerLeapMode {",
+    "New": "if false {",
+    "Test": "TestReceiptBindingRefusals/host-mode",
+    "Marker": "MUTATION: binding-host-mode",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-incomplete",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "!log.ReadComplete ||",
+    "New": "false ||",
+    "Test": "TestReceiptBindingRefusals/incomplete",
+    "Marker": "MUTATION: binding-incomplete",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-unordered",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "!slices.IsSortedFunc(log.Rows",
+    "New": "false && !slices.IsSortedFunc(log.Rows",
+    "Test": "TestReceiptBindingRefusals/order",
+    "Marker": "MUTATION: binding-order",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-source-trust",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "selectionMaximum(log, e.StartUnixSeconds, e.EndUnixSeconds); err != nil {",
+    "New": "selectionMaximum(log, e.StartUnixSeconds, e.EndUnixSeconds); err != nil && false {",
+    "Test": "TestReceiptBindingRefusals/source",
+    "Marker": "MUTATION: binding-source",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-before-run",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "!row.BeforeRun ||",
+    "New": "false ||",
+    "Test": "TestReceiptBindingRefusals/before-run",
+    "Marker": "MUTATION: binding-before-run",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-run-boundary",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "(row.UnixSeconds+1)*1000 > log.RunStartUnixMS",
+    "New": "(row.UnixSeconds+1)*1000 > log.RunStartUnixMS && false",
+    "Test": "TestReceiptBindingRefusals/run-boundary",
+    "Marker": "MUTATION: binding-run-boundary",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-missing-row",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "!bytes.Equal(want, got)",
+    "New": "false && !bytes.Equal(want, got)",
+    "Test": "TestReceiptBindingRefusals/missing-row",
+    "Marker": "MUTATION: binding-missing-row",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-column14-token",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingRowBytes",
+    "Old": "rows[i].Reference = \"\"",
+    "New": "rows[i].Reference = \"\"\n\t\trows[i].MaxErrorDecimal = \"\"",
+    "Test": "TestReceiptBindingRefusals/token",
+    "Marker": "MUTATION: binding-token",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-omit-predecessor",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingFrozenRows",
+    "Old": "first--",
+    "New": "first -= 0",
+    "Test": "TestReceiptBindingRefusals/predecessor",
+    "Marker": "MUTATION: binding-predecessor",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-omit-successor",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingFrozenRows",
+    "Old": "last++",
+    "New": "last += 0",
+    "Test": "TestReceiptBindingRefusals/successor",
+    "Marker": "MUTATION: binding-successor",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-freeze-gap",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "seen := map[string]bool{}",
+    "New": "if reads[0].Tracking.Rows[len(reads[0].Tracking.Rows)-1].UnixSeconds > e.EndUnixSeconds+1 { return &BindingError{\"clock-binding-readback-differ\"} }\n\tseen := map[string]bool{}",
+    "Test": "TestReceiptBindingFrozenReadback",
+    "Marker": "MUTATION: binding-frozen-window",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "scenario-omit-receipt",
+    "File": "pkg/operator/scenario.go",
+    "Function": "ScenarioIdentityBytes",
+    "Old": "s.Digest = \"\"",
+    "New": "s.Digest = \"\"\n\ts.ClockReceiptSHA256 = \"\"",
+    "Test": "TestScenarioIdentityBindsReceipt",
+    "Marker": "MUTATION: scenario-receipt-binding",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-invalid-receipt",
+    "File": "pkg/operator/scenario.go",
+    "Function": "ScenarioIdentityBytes",
+    "Old": "if err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != s.ClockReceiptSHA256 {",
+    "New": "if false && (err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != s.ClockReceiptSHA256) {",
+    "Test": "TestScenarioIdentityBindsReceipt",
+    "Marker": "MUTATION: scenario-invalid-receipt",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-unbound-wire-change",
+    "File": "pkg/operator/scenario.go",
+    "Function": "",
+    "Old": "json:\"clockReceiptSha256,omitempty\"",
+    "New": "json:\"clockReceiptSha256\"",
+    "Test": "TestScenarioIdentityUnbound",
+    "Marker": "MUTATION: scenario-unbound-bytes",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "clock-binding-ignore-worker2",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingReadback",
+    "Old": "for _, h := range reads {",
+    "New": "for _, h := range reads {\n\t\tif h.Slot == \"w2\" { continue }",
+    "Test": "TestReceiptBindingEveryHost/w2",
+    "Marker": "MUTATION: binding-each-host",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-self-selected-policy",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "if receipt.Policy != in.ExpectedPolicy {\n\t\treturn refuse(\"clock-binding-policy-differ\")\n\t}\n\tselected, err := Select(evidence, in.ExpectedPolicy)",
+    "New": "selected, err := Select(evidence, receipt.Policy)",
+    "Test": "TestReceiptBindingRefusals/policy",
+    "Marker": "MUTATION: binding-policy",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-accept-unvalidated-claim",
+    "File": "internal/operatorgates/session.go",
+    "Function": "NewSession",
+    "Old": "if init.Scenario.ClockReceiptSHA256 != \"\" {",
+    "New": "if false {",
+    "Test": "TestSessionRefusesUnvalidatedReceipt",
+    "Marker": "MUTATION: receipt-claim-not-active",
+    "Package": "./internal/operatorgates"
   }
 ]
