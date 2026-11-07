@@ -136,7 +136,8 @@ mailbox-read callback, so these are partial projections. They do not establish w
 session replay. The coverage inventory retains the pending scopes explicitly.
 
 `TestPinnedReleaseJudgesMatchFrozenEvidence` compares every summary field on unchanged
-synthetic judge evidence at both published release commits. The relocated original
+synthetic judge evidence once, against the byte-identical executable both
+published release commits build. The relocated original
 tests cover raw identity joins, missing evidence, generator exclusions,
 duplicate/replayed events and known failures. The repository-local mutation driver
 runs the original-ledger and new caller guard cases in isolated source copies.
