@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ func TestClockCoverageDrainConditionAndTimeout(t *testing.T) {
 			if mode == "unavailable" {
 				read = nil
 			}
-			e := s.collectCoverage(context.Background(), clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000}, w, read, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })
+			e := s.collectCoverage(context.Background(), clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, w, read, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })
 			require.Equal(t, mode == "ready" || mode == "cut-short", e.DrainComplete)
 			switch mode {
 			case "ready":
@@ -123,7 +124,7 @@ func (j *coverageJudge) Judge(_ context.Context, p operatorevidence.Pool) (opera
 	}
 	return operatorevidence.Summary{Status: status}, nil
 }
-func TestClockCoverageDoesNotChangeMediaSummary(t *testing.T) {
+func TestClockCoverageTransportsQualification(t *testing.T) {
 	expected, err := operatorevidence.MarshalJudgeInput(operatorevidence.Pool{RunID: "run", Phases: []operatorevidence.MediaInput{}})
 	require.NoError(t, err)
 	j := &coverageJudge{expected: expected}
@@ -136,8 +137,9 @@ func TestClockCoverageDoesNotChangeMediaSummary(t *testing.T) {
 	}
 	after, err := p.Media(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, before, after)
-	require.Equal(t, j.inputs[0], j.inputs[1])
+	require.NotEqual(t, before, after)
+	require.NotEqual(t, j.inputs[0], j.inputs[1])
+	require.Contains(t, string(j.inputs[1]), `"clockCoverage":{"results":[],"falsified":false}`)
 	p.RunID = "changed-media"
 	changed, err := p.Media(context.Background())
 	require.NoError(t, err)
@@ -148,8 +150,8 @@ func TestClockCoverageReadsOnlyAfterFinalJudgment(t *testing.T) {
 	s, c := fixtureSession(t)
 	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
 	windows := []observe.CoverageWindow{{Kind: "move", Worker: "w1", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}
-	bounds := clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000}
-	expected, err := operatorevidence.MarshalJudgeInput(operatorevidence.Pool{RunID: "run", Phases: []operatorevidence.MediaInput{}})
+	bounds := clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}
+	expected, err := operatorevidence.MarshalJudgeInput(operatorevidence.Pool{RunID: "run", Phases: []operatorevidence.MediaInput{}, ClockCoverage: &clocks.CoverageEvidence{Bounds: bounds, Windows: windows}})
 	require.NoError(t, err)
 	order := []string{}
 	j := &coverageJudge{expected: expected, order: &order}
@@ -201,7 +203,7 @@ func TestClockCoverageOverflowKeepsPrefixAndSeparateBudgets(t *testing.T) {
 	require.Empty(t, s.clockMissingIntervals, "dropping an exact replay loses no interval")
 	s.retainClockAttempt(sample(31, 32))
 	s.retainDrainClockAttempt(sample(33, 40))
-	e := s.coverageSnapshot(clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000})
+	e := s.coverageSnapshot(clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100})
 	e.Windows = []observe.CoverageWindow{{Event: 0, Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930020000000000"}, {Event: 1, Kind: "move", StartUnixNS: "1793930031000000000", EndUnixNS: "1793930032000000000"}}
 	e.Evaluate()
 	require.Empty(t, e.Results[0].Causes)
@@ -248,4 +250,82 @@ func TestFinalCoverageLatencyCannotChangePoolDeadlineVerdict(t *testing.T) {
 	require.Equal(t, operator.Passed, result.Pool.Status)
 	require.Equal(t, operator.Passed, result.Status)
 	require.False(t, s.Latched())
+}
+
+func TestClockCoverageFalsificationLatchIsSticky(t *testing.T) {
+	for _, overflow := range []bool{false, true} {
+		t.Run(fmt.Sprint(overflow), func(t *testing.T) {
+			s, _ := fixtureSession(t)
+			clean := clocks.Evidence{Version: 2}
+			if overflow {
+				for range clocks.CoverageAttemptLimit {
+					s.retainClockAttempt(clean)
+				}
+			}
+			bad := clocks.Evidence{Version: 2, Falsification: &clocks.Falsification{Records: []clocks.ProbeRecord{{Status: "falsified"}}}}
+			s.retainClockAttempt(bad)
+			s.retainClockAttempt(clean)
+			if !s.coverageSnapshot(clocks.Bounds{}).Falsified {
+				t.Fatal("MUTATION: clock-coverage-sticky-falsification")
+			}
+			s.retainDrainClockAttempt(clean)
+			if !s.coverageSnapshot(clocks.Bounds{}).Qualification().Falsified {
+				t.Fatal("MUTATION: clock-coverage-sticky-falsification")
+			}
+		})
+	}
+	s, _ := fixtureSession(t)
+	s.retainClockAttempt(clocks.Evidence{Version: 2})
+	if s.coverageSnapshot(clocks.Bounds{}).Falsified {
+		t.Fatal("disabled prober falsified")
+	}
+}
+
+func TestClockCoverageFalsificationUsesCumulativeCounts(t *testing.T) {
+	s, _ := fixtureSession(t)
+	s.retainClockAttempt(clocks.Evidence{Version: 2, Falsification: &clocks.Falsification{CountsByStatus: map[string]int{"falsified": 1}}})
+	if !s.coverageSnapshot(clocks.Bounds{}).Falsified {
+		t.Fatal("cumulative falsification lost")
+	}
+}
+
+type finalCoverageJudge struct{}
+
+func (finalCoverageJudge) Judge(_ context.Context, pool operatorevidence.Pool) (operatorevidence.Summary, error) {
+	q := pool.ClockCoverage.Qualification()
+	causes := q.WindowCauses(0, 0, false)
+	out := operatorevidence.Summary{Status: operator.Passed}
+	if len(causes) != 0 {
+		out.Status = operator.Inconclusive
+		out.UndecidedMetrics = []operatorevidence.UndecidedMetric{{Phase: 0, Event: 0, Metric: "distributed_window", Causes: causes}}
+	}
+	return out, nil
+}
+func TestFinalJudgmentRefreshesClockCoverage(t *testing.T) {
+	s, _ := fixtureSession(t)
+	closed := true
+	pool := &EvidenceRuntime{RunID: "run", Judge: finalCoverageJudge{}, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
+		last := int64(1793930030)
+		if !closed {
+			last = 1793930020
+		}
+		return &clocks.CoverageEvidence{Bounds: clocks.FixedCoverageBounds(), FrontendSlot: "shared", ControlSlot: "shared",
+			Windows:  []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930020000000000"}},
+			Attempts: []clocks.CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: last, LeapStatus: "N"}}}}}}}
+	}}
+	before, err := pool.Media(context.Background())
+	require.NoError(t, err)
+	if before.Status != operator.Passed {
+		t.Fatal("final coverage control", before)
+	}
+	closed = false
+	result := s.RunSequence(context.Background(), SequencePorts{
+		Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
+			return ProcedureResult{Status: operator.Passed, Completed: true, Media: before}
+		},
+		Finalize: func(ctx context.Context, _ time.Duration) (*MediaSummary, error) { return pool.Media(ctx) },
+	})
+	if result.Pool == nil || result.Pool.Status != operator.Inconclusive || len(result.Pool.UndecidedMetrics) != 1 || !slices.Contains(result.Pool.UndecidedMetrics[0].Causes, "clock-coverage-missing") {
+		t.Fatal("MUTATION: final-coverage-snapshot", result.Pool)
+	}
 }

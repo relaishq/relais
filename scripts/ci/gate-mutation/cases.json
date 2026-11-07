@@ -3677,5 +3677,105 @@
     "Test": "TestMeasureRestorationFailureStopsSuccessors/restoration-call-loss",
     "Marker": "MUTATION: measure-restoration-latch",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "clock-coverage-latest-error",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageError",
+    "Old": "maximum = max(maximum, row.MaxErrorSeconds)",
+    "New": "maximum = row.MaxErrorSeconds",
+    "Test": "TestClockCoverage/max-over-span",
+    "Marker": "MUTATION: clock-coverage-max-over-span",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "clock-coverage-endpoints-only",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageSpans",
+    "Old": "return []coverageSpan{{slot: control, a: a, b: b, bound: cb}}, \"\"",
+    "New": "return []coverageSpan{{slot: control, a: a, b: a, bound: cb}, {slot: control, a: b, b: b, bound: cb}}, \"\"",
+    "Test": "TestClockCoverage/span-interior-break",
+    "Marker": "MUTATION: clock-coverage-span-interior-break",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "clock-coverage-no-break-margin",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageError",
+    "Old": "br.FromUnixSeconds*coverageSecond-coverageSecond <= b && br.UnixSeconds*coverageSecond+coverageSecond >= a",
+    "New": "br.FromUnixSeconds*coverageSecond <= b && br.UnixSeconds*coverageSecond >= a",
+    "Test": "TestClockCoverage/break-margin",
+    "Marker": "MUTATION: clock-coverage-break-margin",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "clock-coverage-nonsticky-falsification",
+    "File": "internal/operatorgates/clock_coverage.go",
+    "Function": "retainCoverageAttempt",
+    "Old": "s.clockCoverageFalsified = s.clockCoverageFalsified || clocks.HasFalsification(e)",
+    "New": "s.clockCoverageFalsified = clocks.HasFalsification(e)",
+    "Test": "TestClockCoverageFalsificationLatchIsSticky/false",
+    "Marker": "MUTATION: clock-coverage-sticky-falsification",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "clock-coverage-qualification-skipped",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "previewMediaQualified",
+    "Old": "qualifyClockCoverage(r, coverage)",
+    "New": "_ = coverage",
+    "Test": "TestClockCoverageQualifiesPhasesAndPool/missing",
+    "Marker": "MUTATION: clock-coverage-qualification",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "clock-coverage-drop-run-seed",
+    "File": "internal/operatorrehearsal/resource_server.go",
+    "Function": "runResourceSequence",
+    "Old": "s.SeedClockCoverageFalsification(r.clockCoverageFalsified)",
+    "New": "s.SeedClockCoverageFalsification(false)",
+    "Test": "TestClockFalsificationSeedsLaterSequenceWindows",
+    "Marker": "MUTATION: clock-coverage-run-seed",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-coverage-drop-frontend-error",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound)",
+    "New": "f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound)\n f = 0",
+    "Test": "TestClockCoverage/omit-frontend-error",
+    "Marker": "MUTATION: clock-coverage-omit-frontend-error",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "clock-coverage-repair-gap-with-later-sample",
+    "File": "internal/operatorgates/clocks/coverage.go",
+    "Function": "Timelines",
+    "Old": "t.Breaks = append(t.Breaks, next.Breaks...)",
+    "New": "t.Breaks = append([]observe.CoverageBreak{}, next.Breaks...)",
+    "Test": "TestClockCoverageQualifiesPhasesAndPool/repair-gap-with-later-sample",
+    "Marker": "MUTATION: clock-coverage-qualification",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "clock-coverage-omit-final-coverage",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/caller.go",
+        "Old": "type EvidenceRuntime struct {",
+        "New": "type EvidenceRuntime struct {\n coverageFrozen *clocks.CoverageEvidence"
+      },
+      {
+        "File": "internal/operatorgates/caller.go",
+        "Function": "Media",
+        "Old": "pool.ClockCoverage = r.Coverage(operatorevidence.CoverageWindows(pool))",
+        "New": "if r.coverageFrozen == nil { r.coverageFrozen = r.Coverage(operatorevidence.CoverageWindows(pool)) }; pool.ClockCoverage = r.coverageFrozen",
+        "Receiver": "EvidenceRuntime"
+      }
+    ],
+    "Test": "TestFinalJudgmentRefreshesClockCoverage",
+    "Marker": "MUTATION: final-coverage-snapshot",
+    "Package": "./internal/operatorgates"
   }
 ]

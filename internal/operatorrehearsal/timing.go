@@ -38,7 +38,7 @@ func rehearsalMedia(p *operatorevidence.Summary) bool {
 		}
 		seen[k] = true
 		for _, cause := range row.Causes {
-			if cause == "unclassified" || operatorevidence.PublicTimingCause(cause) != cause {
+			if observe.IsCoverageCause(cause) || cause == "unclassified" || operatorevidence.PublicTimingCause(cause) != cause {
 				return false
 			}
 		}

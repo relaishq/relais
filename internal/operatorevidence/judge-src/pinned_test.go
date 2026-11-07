@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -14,8 +14,6 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
-	"github.com/relaishq/relais/internal/operatorgates/clocks"
-	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
 	"github.com/relaishq/relais/pkg/callharness"
 )
@@ -30,7 +28,9 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// Coverage scenarios and production/sanitized projections run at both pins.
+	// Keep this bounded without sharing the former seven-case three-minute budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	relay := relayInput()
 	mixed := rawPoolSample()
@@ -64,6 +64,9 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases = append(cases, sanitizedTiming)
+	for _, name := range []string{"covered", "missing", "bound", "break", "kill-bracket", "falsified", "independent-failure", "independent-gap-failure", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage"} {
+		cases = append(cases, coveragePoolFixture(t, name))
+	}
 	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
 	for _, commit := range commits {
 		if err := pinnedCommit(ctx, root, commit); err != nil {
@@ -81,6 +84,8 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	var executableSHA string
 	for _, commit := range commits {
 		t.Run(commit, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
 			judge, err := operatorevidence.BuildPinned(ctx, root, commit, goExecutable, filepath.Join(t.TempDir(), "judge"))
 			if err != nil {
 				t.Fatal(err)
@@ -91,11 +96,6 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 			}
 			executableSHA = judge.SHA256
 			for _, input := range cases {
-				raw, _ := json.Marshal(input)
-				var pool operatorevidence.Pool
-				if err = json.Unmarshal(raw, &pool); err != nil {
-					t.Fatal(err)
-				}
 				// The raw constructors and existing judge policy are unchanged frozen
 				// synthetic evidence. Compare every summary field at both release pins.
 				expected := pooledPreviewMedia(&input)
@@ -104,41 +104,79 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				pool.SourceCommit = commit
-				actual, err := judge.Judge(ctx, pool)
+				wire, err := json.Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Execute the exact compact transport at each release pin.
+				result, err := exec.CommandContext(ctx, judge.Binary, writePinnedInput(t, wire)).Output()
+				actual, decodeErr := operatorevidence.DecodeSummary(result)
+				if err == nil {
+					err = decodeErr
+				}
 				if err != nil || !reflect.DeepEqual(actual, want) {
 					t.Fatalf("pinned judge differs: got %+v (%v), want %+v", actual, err, want)
 				}
-				pool.ClockCoverage = &clocks.CoverageEvidence{Version: 2, FrontendSlot: "shared", ControlSlot: "shared", Bounds: clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, Windows: []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}, Attempts: []clocks.CoverageAttempt{}}
-				barePool := pool
-				barePool.ClockCoverage = nil
-				bareRaw, sanitizeErr := operatorrehearsal.SanitizeMediaEvidence(barePool)
-				if sanitizeErr != nil {
-					t.Fatal(sanitizeErr)
-				}
-				coveredRaw, sanitizeErr := operatorrehearsal.SanitizeMediaEvidence(pool)
-				if sanitizeErr != nil {
-					t.Fatal(sanitizeErr)
-				}
-				var bareSanitized, coveredSanitized operatorevidence.Pool
-				if err := json.Unmarshal(bareRaw, &bareSanitized); err != nil {
+
+				// Compact qualification contains only event indexes, fixed codes
+				// and the latch. It needs no clock-domain shift during sanitization.
+				archival := input
+				archival.ClockCoverage = nil
+				rawArchive, _ := json.Marshal(archival)
+				var archive operatorevidence.Pool
+				if err := json.Unmarshal(rawArchive, &archive); err != nil {
 					t.Fatal(err)
 				}
-				if err := json.Unmarshal(coveredRaw, &coveredSanitized); err != nil {
+				publicRaw, err := operatorrehearsal.SanitizeMediaEvidence(archive)
+				if err != nil {
 					t.Fatal(err)
 				}
-				bareSanitized.SourceCommit, coveredSanitized.SourceCommit = commit, commit
-				bareVerdict, bareErr := judge.Judge(ctx, bareSanitized)
-				coveredVerdict, coveredErr := judge.Judge(ctx, coveredSanitized)
-				if bareErr != nil || coveredErr != nil || !reflect.DeepEqual(bareVerdict, coveredVerdict) {
-					t.Fatalf("sanitized coverage changed per-pin judgment: %+v (%v) vs %+v (%v)", bareVerdict, bareErr, coveredVerdict, coveredErr)
+				publicInput, err := decodePool(publicRaw)
+				if err != nil {
+					t.Fatal(err)
 				}
-				pool.ClockCoverage.Bounds.DriftPPM = math.NaN() // Invalid diagnostics must not enter media transport.
-				withCoverage, coverageErr := judge.Judge(ctx, pool)
-				if coverageErr != nil || !reflect.DeepEqual(actual, withCoverage) {
-					t.Fatalf("recorded clock coverage changed pinned judge output: %+v (%v), want %+v", withCoverage, coverageErr, actual)
+				publicInput.ClockCoverage = input.ClockCoverage
+				publicWire, _ := json.Marshal(publicInput)
+				publicResult, err := exec.CommandContext(ctx, judge.Binary, writePinnedInput(t, publicWire)).Output()
+				publicVerdict, publicErr := operatorevidence.DecodeSummary(publicResult)
+				if err != nil || publicErr != nil || !reflect.DeepEqual(actual, publicVerdict) {
+					t.Fatalf("all-case sanitized judgment differs: %+v (%v, %v), want %+v", publicVerdict, err, publicErr, actual)
 				}
 
+			}
+			// Exercise PinnedJudge.Judge's production projection as well as the
+			// compact command entry above, including sanitized coverage input.
+			for _, supplied := range []bool{false, true} {
+				raw, _ := json.Marshal(rawPoolSample())
+				var pool operatorevidence.Pool
+				if err := json.Unmarshal(raw, &pool); err != nil {
+					t.Fatal(err)
+				}
+				pool.SourceCommit, pool.PreCoverageEvidence = commit, false
+				if supplied {
+					pool.ClockCoverage = coverageEvidenceFixture(t)
+				}
+				got, err := judge.Judge(ctx, pool)
+				want := "inconclusive"
+				if supplied {
+					want = "passed"
+				}
+				if err != nil || string(got.Status) != want {
+					t.Fatalf("production coverage projection: %+v (%v), want %s", got, err, want)
+				}
+				sanitized, err := operatorrehearsal.SanitizeMediaEvidence(pool)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var public operatorevidence.Pool
+				if err := json.Unmarshal(sanitized, &public); err != nil {
+					t.Fatal(err)
+				}
+				public.SourceCommit = commit
+				projected, err := judge.Judge(ctx, public)
+				if err != nil || !reflect.DeepEqual(got, projected) {
+					t.Fatalf("sanitized coverage projection differs: %+v (%v), want %+v", projected, err, got)
+				}
 			}
 		})
 	}
@@ -163,4 +201,13 @@ func TestMissingPinnedCommitExplainsHistoryRequirement(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), commit) || !strings.Contains(err.Error(), "fetch-depth: 0") {
 		t.Fatal("missing pinned commit must identify the commit and checkout requirement", err)
 	}
+}
+
+func writePinnedInput(t *testing.T, raw []byte) string {
+	t.Helper()
+	name := filepath.Join(t.TempDir(), "input.json")
+	if err := os.WriteFile(name, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return name
 }

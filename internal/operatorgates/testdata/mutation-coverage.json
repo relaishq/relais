@@ -330,7 +330,16 @@
     "batch-child-uncertainty-dropped",
     "batch-shared-host-parallel-probes",
     "measure-restoration-not-latched",
-    "measure-restoration-hides-call-loss"
+    "measure-restoration-hides-call-loss",
+    "clock-coverage-latest-error",
+    "clock-coverage-endpoints-only",
+    "clock-coverage-no-break-margin",
+    "clock-coverage-nonsticky-falsification",
+    "clock-coverage-qualification-skipped",
+    "clock-coverage-drop-run-seed",
+    "clock-coverage-drop-frontend-error",
+    "clock-coverage-repair-gap-with-later-sample",
+    "clock-coverage-omit-final-coverage"
   ],
   "killed": [
     {
@@ -2932,6 +2941,69 @@
       "id": "batch-shared-host-parallel-probes",
       "test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-latest-error",
+      "test": "TestClockCoverage/max-over-span",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-endpoints-only",
+      "test": "TestClockCoverage/span-interior-break",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-no-break-margin",
+      "test": "TestClockCoverage/break-margin",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-nonsticky-falsification",
+      "test": "TestClockCoverageFalsificationLatchIsSticky/false",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-qualification-skipped",
+      "test": "TestClockCoverageQualifiesPhasesAndPool/missing",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-drop-run-seed",
+      "test": "TestClockFalsificationSeedsLaterSequenceWindows",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-drop-frontend-error",
+      "test": "TestClockCoverage/omit-frontend-error",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-repair-gap-with-later-sample",
+      "test": "TestClockCoverageQualifiesPhasesAndPool/repair-gap-with-later-sample",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-coverage-omit-final-coverage",
+      "test": "TestFinalJudgmentRefreshesClockCoverage",
+      "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""
     }

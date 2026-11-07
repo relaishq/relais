@@ -302,7 +302,7 @@ func buildRawPoolSample() previewPoolInput {
 	}
 	left, right := rawPreviewInput(a, 0), rawPreviewInput(b, 0)
 	right.Sessions = []string{"second"}
-	return previewPoolInput{RunID: "run-fixture", Phases: []previewMediaInput{left, right}}
+	return previewPoolInput{PreCoverageEvidence: true, RunID: "run-fixture", Phases: []previewMediaInput{left, right}}
 }
 
 var rawPoolControl = sync.OnceValue(buildRawPoolSample)

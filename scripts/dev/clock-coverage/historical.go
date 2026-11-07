@@ -13,6 +13,7 @@ import (
 )
 
 type storedReport struct {
+	HeadCaller   *storedReport            `json:"headCaller"`
 	Clocks       []clocks.Evidence        `json:"clocks"`
 	Bounds       clocks.Bounds            `json:"bounds"`
 	Coverage     *clocks.CoverageEvidence `json:"clockCoverage"`

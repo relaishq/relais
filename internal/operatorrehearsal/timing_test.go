@@ -106,3 +106,13 @@ func TestRehearsalReportsEveryUndecidedTiming(t *testing.T) {
 		t.Fatal("invalid timing evidence passed", err)
 	}
 }
+
+func TestRehearsalDoesNotWaiveClockCoverage(t *testing.T) {
+	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified"} {
+		r := timingReport()
+		r.Pool.UndecidedMetrics[0].Causes = []string{cause}
+		if rehearsalMedia(r.Pool) {
+			t.Fatal("clock coverage treated as optional timing", cause)
+		}
+	}
+}

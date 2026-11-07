@@ -10,14 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/clockprobe"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/internal/operatorgates/oracletest"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -288,5 +291,123 @@ func TestHeadCallerPhaseNamesItsBuildInReportAndEvidence(t *testing.T) {
 	}
 	if err = json.Unmarshal(raw, &evidence); err != nil || evidence.SourceCommit != ReleaseACommit || evidence.HeadCaller != (headCallerBuild{commit, loadSHA}) {
 		t.Fatalf("evidence %s %v", raw, err)
+	}
+}
+
+func TestClockFalsificationSeedsLaterSequenceWindows(t *testing.T) {
+	raw, err := os.ReadFile("../operatorgates/testdata/resource-session.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Scenario operator.Scenario
+		Config   operatorgates.ResourceConfig
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	binary := filepath.Join(work, "judge")
+	if err := os.WriteFile(binary, []byte("judge-stub"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	inventories, pins := idleInventory(t)
+	topology := fixtureTopology(t)
+	r := &rehearsal{work: work, run: "idle", diagnostics: io.Discard, topology: topology, pins: pins,
+		runner: commandRunner(func(context.Context, Command) CommandResult { return CommandResult{Err: context.DeadlineExceeded} }),
+		report: &Report{Bounds: clocks.FixedCoverageBounds()}}
+	r.deployment = &Deployment{Topology: topology, containerIDs: fixtureContainerIDs()}
+	judge := &recordingJudge{pinned: operatorevidence.PinnedJudge{Binary: binary, SHA256: fixture.Scenario.Judge.SHA256}}
+	now := time.Now()
+	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	line, err := (clockprobe.Record{Target: clockprobe.WorkerOne, FrontendSend: 1793930000100000000, FrontendReceive: 1793930000102000000, HostReceive: 1793930000111000000, HostSend: 1793930000111000000}).MarshalLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readWindow := func(s *operatorgates.Session, falsify bool) (observe.CoverageQualification, error) {
+		peer := &idlePeer{respond: func(req operator.Request) operator.Reply {
+			var reads operator.HostReadBatchArgs
+			if err := json.Unmarshal(req.Args, &reads); err != nil {
+				return operator.Reply{Transport: operator.Failed}
+			}
+			out := operator.HostReadBatchOutput{}
+			for _, read := range reads.Reads {
+				data := inventories[read.Target]
+				if req.Action == "clock" {
+					rows := []clocks.TrackingRow{}
+					for n := int64(-3); n <= 3; n++ {
+						rows = append(rows, clocks.TrackingRow{UnixSeconds: 1793930000 + n, MaxErrorSeconds: .0005, LeapStatus: "N"})
+					}
+					sample := struct {
+						clocks.Sample
+						ProbeLog *clocks.ProbeBatch `json:"probeLog,omitempty"`
+					}{Sample: clocks.Sample{ErrorBoundNS: 1, MeasuredUnixNS: "1793930000000000000", TrackingLog: &clocks.TrackingLog{Rows: rows, ReadComplete: true}}}
+					if read.Target == "shared" {
+						batch := clocks.ProbeBatch{Cursor: json.RawMessage(`null`)}
+						if falsify {
+							batch.Lines = string(line)
+							batch.Cursor = json.RawMessage(`{"file":"1:2","position":84,"anchor":"` + strings.Repeat("a", 64) + `","skipLine":false}`)
+						}
+						sample.ProbeLog = &batch
+					}
+					data = oracletest.Marshal(t, sample)
+				}
+				child := hostReply(t, data)
+				child.ID = read.Target
+				out.Replies = append(out.Replies, child)
+			}
+			return resourceReply(req.ID, operator.Succeeded, out)
+		}}
+		if _, err := s.FreshInventory(ctx, peer, pins, time.Minute, "", false); err != nil {
+			return observe.CoverageQualification{}, err
+		}
+		var observed clocks.Evidence
+		runtime := &operatorgates.ProcessRuntime{Session: s, Peer: peer, Bounds: &r.report.Bounds, Config: &operatorgates.ProcessConfig{Parameters: operatorgates.ProcessParameters{ClockProbeFile: "/probe-fixture"}}, ClockObserved: func(e clocks.Evidence) { observed = e }}
+		if err := runtime.VerifyClocks(ctx, time.Minute); err != nil {
+			return observe.CoverageQualification{}, err
+		}
+		e := clocks.CoverageEvidence{Bounds: r.report.Bounds, FrontendSlot: "shared", ControlSlot: "shared", Falsified: s.ClockCoverageFalsified(), Attempts: []clocks.CoverageAttempt{clocks.NewCoverageAttempt(observed)}, Windows: []observe.CoverageWindow{{Phase: 0, Event: 0, Kind: "move", StartUnixNS: "1793930000000000000", EndUnixNS: "1793930000200000000"}}}
+		return e.Qualification(), nil
+	}
+	var alreadyJudged, firstAfterRead observe.CoverageQualification
+	var earlierWire []byte
+	var readErr error
+	first := resourceSequence{spool: "first", judge: judge, started: func(s *operatorgates.Session) {
+		alreadyJudged, readErr = readWindow(s, false)
+		if readErr == nil {
+			earlierWire, _ = json.Marshal(alreadyJudged)
+			firstAfterRead, readErr = readWindow(s, true)
+		}
+	}, finished: func(*operatorgates.Session, operatorgates.ResourceResult) {}}
+	if err := r.runResourceSequence(ctx, init, first); err != nil {
+		t.Fatal(err)
+	}
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(alreadyJudged.WindowCauses(0, 0, false)) != 0 || !slices.Contains(firstAfterRead.WindowCauses(0, 0, false), "clock-coverage-falsified") {
+		t.Fatal("normal probe read did not change clock trust", alreadyJudged, firstAfterRead)
+	}
+	var secondCauses []string
+	second := resourceSequence{spool: "second", judge: judge, started: func(s *operatorgates.Session) {
+		var q observe.CoverageQualification
+		q, readErr = readWindow(s, false)
+		// This exact lookup supplies the pinned judge's per-window qualification.
+		secondCauses = q.WindowCauses(0, 0, false)
+	}, finished: func(*operatorgates.Session, operatorgates.ResourceResult) {}}
+	if err := r.runResourceSequence(ctx, init, second); err != nil {
+		t.Fatal(err)
+	}
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !reflect.DeepEqual(secondCauses, []string{"clock-coverage-falsified"}) {
+		t.Fatal("MUTATION: clock-coverage-run-seed", secondCauses)
+	}
+	afterWire, _ := json.Marshal(alreadyJudged)
+	if !bytes.Equal(earlierWire, afterWire) || len(alreadyJudged.WindowCauses(0, 0, false)) != 0 {
+		t.Fatal("earlier judgment changed")
 	}
 }

@@ -54,7 +54,7 @@ func (composedJudge) Judge(ctx context.Context, pool operatorevidence.Pool) (ope
 	if err := checkRetention(ctx); err != nil {
 		return operatorevidence.Summary{}, err
 	}
-	raw, _ := json.Marshal(pool)
+	raw, _ := operatorevidence.MarshalJudgeInput(pool)
 	input, err := decodePool(raw)
 	if err != nil {
 		return operatorevidence.Summary{}, err
@@ -156,7 +156,11 @@ func TestComposedProcedureCallerPool(t *testing.T) {
 			if scenario == "missing-report" || strings.HasSuffix(scenario, "-loss") {
 				input.Phases[0].Receipts[0].Result.Lost = true
 			}
-			pool := &operatorgates.EvidenceRuntime{RunID: input.RunID, Judge: composedJudge{}}
+			pool := &operatorgates.EvidenceRuntime{RunID: input.RunID, Judge: composedJudge{}, Coverage: func(windows []observe.CoverageWindow) *clocks.CoverageEvidence {
+				e := coverageEvidenceFixture(t)
+				e.Windows = windows
+				return e
+			}}
 			for index, phase := range input.Phases {
 				base := phase.Probes[0].Send
 				at := base.Add(123 * time.Second)

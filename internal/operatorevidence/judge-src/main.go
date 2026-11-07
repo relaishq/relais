@@ -59,6 +59,9 @@ func previewMedia(r *loadgen.RunReport) previewMediaSummary {
 	return previewMediaFor(r, false)
 }
 func previewMediaFor(r *loadgen.RunReport, relay bool) previewMediaSummary {
+	return previewMediaQualified(r, relay, nil)
+}
+func previewMediaQualified(r *loadgen.RunReport, relay bool, coverage map[int][]string) previewMediaSummary {
 	knownFailure := reportFailure(r)
 	validNumbers := observe.Numbers(r) == nil
 	for _, p := range r.Processes {
@@ -84,6 +87,7 @@ func previewMediaFor(r *loadgen.RunReport, relay bool) previewMediaSummary {
 		}
 	} else {
 		r.Judge()
+		qualifyClockCoverage(r, coverage)
 	}
 	completeMedia := true
 	knownLoss := knownFailure
@@ -173,6 +177,7 @@ type previewMediaInput struct {
 	Receipts    []previewReceipt      `json:"receipts"`
 	Missing     bool                  `json:"missing,omitempty"`
 	issue       observe.EvidenceIssue
+	coverage    map[int][]string
 }
 type previewReceipt = receipt
 
@@ -352,9 +357,9 @@ func parsePreviewMediaFor(input *previewMediaInput) (*loadgen.RunReport, preview
 	out := rawVerdict
 	guards := false
 	if collectionsErr == nil && parseErr == nil {
-		rawVerdict = previewMediaFor(r, input.Gate == "relay-deploy")
+		rawVerdict = previewMediaQualified(r, input.Gate == "relay-deploy", input.coverage)
 		guards = previewGeneratorDetails(r, validReceipts, samples, &out)
-		judged := previewMediaFor(r, input.Gate == "relay-deploy")
+		judged := previewMediaQualified(r, input.Gate == "relay-deploy", input.coverage)
 		judged.ExcludedEvents = out.ExcludedEvents
 		judged.SaturationOverlaps = out.SaturationOverlaps
 		judged.exclusionCause = out.exclusionCause
@@ -408,9 +413,11 @@ func joinedPreviewMedia(input *previewMediaInput) previewMediaSummary {
 }
 
 type previewPoolInput struct {
-	RunID   string              `json:"runId"`
-	Phases  []previewMediaInput `json:"phases"`
-	Missing bool                `json:"missing"`
+	PreCoverageEvidence bool                           `json:"preCoverageEvidence,omitempty"`
+	ClockCoverage       *observe.CoverageQualification `json:"clockCoverage,omitempty"`
+	RunID               string                         `json:"runId"`
+	Phases              []previewMediaInput            `json:"phases"`
+	Missing             bool                           `json:"missing"`
 }
 
 // Assemble RAW processes and receipts first; invoke the unchanged public policy
@@ -424,11 +431,13 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	completeMedia, lost := true, 0
 	type eventPosition struct{ phase, event int }
 	var positions []eventPosition
+	pooledCoverage := map[int][]string{}
 	var relayCalls int
 	var relayGap int64
 	sessions, operations := map[string]bool{}, map[string]bool{}
 	for i := range input.Phases {
 		phase := &input.Phases[i]
+		phase.coverage = coverageForPhase(input, i)
 		part, verdict, qualified := parsePreviewMedia(phase)
 		valid = valid && qualified && phase.RunID == input.RunID
 		failed = failed || phase.RunID == input.RunID && verdict.Status == "failed"
@@ -491,13 +500,14 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		r.Callers = int(count)
 		r.Processes = append(r.Processes, part.Processes...)
 		for j := range part.Events {
+			pooledCoverage[len(positions)] = phase.coverage[j]
 			positions = append(positions, eventPosition{i, j})
 		}
 		r.Events = append(r.Events, part.Events...)
 	}
 	out := previewMediaSummary{Status: "inconclusive"}
 	if r.Callers > 0 {
-		out = previewMedia(r)
+		out = previewMediaQualified(r, false, pooledCoverage)
 	} else if relayCalls > 0 {
 		out.Status = "passed"
 	}
@@ -541,6 +551,7 @@ func decodePool(data []byte) (input previewPoolInput, err error) {
 	}
 
 	input.RunID, input.Missing = wire.RunID, wire.Missing
+	input.ClockCoverage, input.PreCoverageEvidence = wire.ClockCoverage, wire.PreCoverageEvidence
 	input.Phases = make([]previewMediaInput, len(wire.Phases))
 	for i, raw := range wire.Phases {
 		phase := &input.Phases[i]

@@ -109,8 +109,9 @@ in-run even if they start earlier. Undated loss records conservatively count
 in-run. Historical rows and breaks remain recorded; rehearsal acceptance counts
 only breaks with `beforeRun: false` and checks coverage of in-run timestamps.
 
-These diagnostics do not enter clock admission, event verdicts, causes,
-thresholds or pooling. Attempted refreshes with a failing host also retain a
+The fixed pre-fault clock admission stays unchanged. Slice 4b uses retained
+timelines to qualify event windows, as described below. Attempted refreshes
+with a failing host also retain a
 non-zero `At` and available host timelines, including in batch mode. Such
 failed refreshes count toward the recorder's 256-refresh cap, but do not enter
 the runtime's successful sample cache or make a failed gate succeed.
@@ -118,7 +119,7 @@ For rehearsal acceptance, inspect all four slots in `host-clocks` JSONL or
 report `clocks`: require version 2, usable per-host cursors, a continuous row
 timeline covering the run including its tail, no in-run breaks, and zero
 `omitted_refreshes`. An empty batch or a non-zero `At` alone proves no coverage.
-Coverage enforcement and bound selection remain later slices.
+Coverage is enforced with the fixed bounds. Bound selection belongs to slice 5.
 
 The opt-in frontend clock prober writes an append-only run-local file, capped
 at 4 MiB including one capacity marker. Each complete ASCII line is exactly
@@ -202,7 +203,9 @@ coverage. `lossCounts` has `readFailures`, `malformedLines`, `cursorGaps`,
 attempted probe read counts as a read failure. Missing inventory and skipped
 concurrent probe reads do not count as read failures. Keep the last successful
 inventory when a refresh fails; the topology is fixed for the session. A capacity
-event or cursor gap means the number of missing attempts is unknown. These diagnostics add no gate or pass rule.
+event or cursor gap means the number of missing attempts is unknown. A
+falsified record sets the sticky coverage trust latch described below. The pass
+rule stays unchanged.
 
 Each event retains at most two gap rows and eight probes per endpoint (the
 first six plus the binding probes) and 16 candidate states shared across `first_content` and
@@ -465,7 +468,7 @@ expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
 160 public mutants are owned and killed, 41 are retired with explicit successor
-contracts, and 213 remain assigned to private owners. The 166 additional native
+contracts, and 213 remain assigned to private owners. The 175 additional native
 mutants are counted separately. These are accounting categories, not claims that
 private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
@@ -778,14 +781,14 @@ fields. Other negative values and out-of-range indexes remain invalid.
 `TestDistributedMoveUnknownWorkerIndex` checks both boundaries;
 `TestDistributedCallerWorkerSentinelsQualify` checks the complete judge path.
 
-### Recorded event clock coverage (slice 4a)
+### Enforced event clock coverage (slices 4a and 4b)
 
-Clock evidence stays version 2. Slice 4a records would-be coverage causes;
-**it does not change admission, media verdicts, timing causes consumed by the
-judge, the fatal latch, or judge summary output**. The fixed-bound pre-fault
-`clocks.Check` remains unchanged. Lease aging, `maxclockerror` declaration and
-receipt binding belong to slice 5. Sticky falsification enforcement and coverage
-qualification belong to slice 4b.
+Clock evidence stays version 2. The judge now makes uncovered event windows
+undecided. It does not change the pass rule or make a passing window fail.
+Independent failures remain failures. The fixed bounds stay at 2 ms for control,
+3 ms for workers and 100 ppm for caller drift. The pre-fault `clocks.Check`
+stays unchanged. Lease aging, `maxclockerror` declaration and receipt binding
+belong to slice 5. There is no freeze-gap rule.
 
 A session retains every clock read attempt, including successful slots in a
 failed batch. Those slots can already have advanced their tracking cursors.
@@ -809,9 +812,18 @@ individual phases. It contains `version`, inventory-derived `frontendSlot` and
 uses zero-based `phase` and `event` indexes and preserves its receipt's start,
 end, kind and affected worker slot. Brackets retain worker slot and decimal
 Before/After/midpoint nanoseconds, without operation or session identities.
-Results contain sorted, unique would-be causes. Before invoking the pinned
-judge, 4a strips this field so even invalid or large diagnostics cannot consume
-the judge input-size budget or change its output. Rehearsal reports also retain
+Results contain sorted, unique causes. Before transport, the collector evaluates
+the retained evidence with the shared fixed bounds. A different configured
+control bound, worker bound or drift makes coverage undecided with
+`clock-coverage-bound` in both recorded results and qualification. It sends one compact `clockCoverage`
+object with `results` and the `falsified` latch. It does not send tracking rows.
+The existing total judge input limit still applies. Each pinned release first
+runs its own `r.Judge()`. The added qualification then marks matching windows
+undecided and removes trust from their metrics. Trusted failures stay trusted.
+The same release judge rebuilds the yardstick, distributed result and run
+outcome. This applies to every phase and to the final pool. Gap populations and
+trial counts stay unchanged.
+Rehearsal reports also retain
 this projection, including the separate head-caller sequence. Public projection
 removes tracking source labels, raw output and private cursor members. Retained
 media artifacts keep the existing fields byte-identical with and without
@@ -834,7 +846,7 @@ signal and control on the same slot still contribute both error terms. Decimal
 nanosecond conversion precedes ceiling: `1.230e-04` is exactly 123000 ns, while
 true sub-nanosecond digits still round outward.
 
-Would-be causes are:
+The enforced causes are:
 
 - `clock-coverage-missing`: missing endpoints/tail, invalid evidence, a row gap
   above 60 seconds, or overlapping cursor gap, log rotation or log loss.
@@ -846,8 +858,28 @@ Would-be causes are:
 - `clock-coverage-kill-bracket`: missing/invalid signal bracket, or its rounded-up
   half-width plus frontend and killed-worker error exceeds the worker bound.
 
+- `clock-coverage-falsified`: any falsified probe record, or a positive cumulative
+  falsification count, removes clock trust from every window judged from then on
+  in the run.
+
+The rehearsal owns the forward-sticky latch for the whole run ID. Each later
+sequence, including the head caller, seeds its new Session from that latch. A
+pool judged before the falsification is not judged again. Later clean reads
+cannot clear the latch. It is set
+before retention limits can drop an attempt. A disabled prober cannot set it.
+The free rehearsal timing exception cannot waive a clock coverage cause.
+It does not change the session's transport safety latch or admit a fault.
 A frontend caller-probe outage adds no special cause. Existing caller mapping
-still applies 100 ppm drift. Falsification remains recorded only in this slice.
+still applies 100 ppm drift.
+
+New runs without coverage evidence get `clock-coverage-missing`. Historical
+archives may opt into `preCoverageEvidence: true` to retain their frozen verdicts.
+This explicit path supplies no measured coverage. Live `ReadPool` never sets it.
+An absent or null coverage field uses historical policy only with that marker.
+A supplied coverage object always takes precedence, including an invalid object. Tests
+check both paths at both pinned releases. The synthetic coverage fixture is
+`internal/operatorevidence/judge-src/testdata/clock-coverage.json`; it is test
+input, not a reconstruction of measurements missing from an archive.
 
 `EvidenceRuntime.Media` only snapshots retained coverage on each phase judgment;
 it does no host reads or waiting. Finalization first collects and judges the
@@ -886,7 +918,8 @@ go run ./scripts/dev/clock-coverage -report report.json -pool media-evidence.jso
 
 The tool accepts a direct Pool or the retained artifact's `pool` envelope. New
 reports already contain their windows and slots, so `-pool` and slot overrides
-are optional. Old reports without event inputs explicitly report that limit.
+are optional. Add `-head-caller` when using `head-caller-evidence.json` to select
+the report's separate head sequence. Old reports without event inputs explicitly report that limit.
 When the 4a field is absent, the tool reconstructs timelines from stored
 `clocks[*].Clocks.<slot>.trackingLog` samples. It merges repeated seconds using
 the largest error and any non-Normal leap status, and deduplicates breaks.
@@ -908,7 +941,8 @@ still run through the shared evaluator. Kill results carry
 `killBracketRule: "unavailable"` and a diagnostic note, not an invented cause.
 `covered` counts the available rules; it does not prove the unavailable bracket
 rule or establish a judge verdict. Synthetic or missing coverage must not be
-substituted for stored measurements. Slice 4b must regenerate old fixtures
-deliberately and prove behavior at both pinned release judges before enforcing
-these diagnostics. The latest-sample, endpoint-only and
-omitted-break-margin mutants remain work for slice 4b.
+substituted for stored measurements. Old verdict fixtures retain an explicit
+pre-coverage path. The coverage fixture is generated deliberately. Named tests
+cover `repair-gap-with-later-sample`, `omit-frontend-error` and
+`omit-final-coverage`. Mutation tests reject use of the latest error, endpoint-only
+coverage, omission of the break margin and a falsification latch that can clear.

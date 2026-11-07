@@ -34,6 +34,7 @@ func TestClockCoverage(t *testing.T) {
 		{"covered", func(map[string]CoverageTimeline, []CoverageWindow) {}, []string{}},
 		{"bound-equality", func(map[string]CoverageTimeline, []CoverageWindow) {}, []string{}},
 		{"max-over-span", func(m map[string]CoverageTimeline, _ []CoverageWindow) { m["shared"].Rows[15].MaxErrorSeconds = .0011 }, []string{"clock-coverage-bound"}},
+		{"omit-frontend-error", func(m map[string]CoverageTimeline, _ []CoverageWindow) { m["relay"].Rows[15].MaxErrorSeconds = .0011 }, []string{"clock-coverage-bound"}},
 		{"upward-rounding", func(m map[string]CoverageTimeline, _ []CoverageWindow) {
 			m["relay"].Rows[15].MaxErrorSeconds = .00100000001
 		}, []string{"clock-coverage-bound"}},
@@ -47,7 +48,7 @@ func TestClockCoverage(t *testing.T) {
 			r.Rows = []CoverageRow{{UnixSeconds: coverageBase, LeapStatus: "N"}, {UnixSeconds: coverageBase + 100, LeapStatus: "N"}}
 			m["shared"] = r
 		}, []string{"clock-coverage-missing"}},
-		{"tail", func(m map[string]CoverageTimeline, _ []CoverageWindow) {
+		{"omit-final-coverage", func(m map[string]CoverageTimeline, _ []CoverageWindow) {
 			r := m["shared"]
 			r.Rows = r.Rows[:21]
 			m["shared"] = r
@@ -67,7 +68,7 @@ func TestClockCoverage(t *testing.T) {
 			r.Breaks = []CoverageBreak{{FromUnixSeconds: coverageBase + 23, UnixSeconds: coverageBase + 23, Kind: "clock-step"}}
 			m["shared"] = r
 		}, []string{}},
-		{"permanent-cursor-gap", func(m map[string]CoverageTimeline, _ []CoverageWindow) {
+		{"repair-gap-with-later-sample", func(m map[string]CoverageTimeline, _ []CoverageWindow) {
 			r := m["shared"]
 			r.Breaks = []CoverageBreak{{FromUnixSeconds: coverageBase + 15, UnixSeconds: coverageBase + 15, Kind: "cursor-gap"}}
 			m["shared"] = r
@@ -79,7 +80,7 @@ func TestClockCoverage(t *testing.T) {
 			tc.change(m, w)
 			got := EvaluateClockCoverage(m, "relay", "shared", 2000000, 3000000, w, nil)
 			if len(got) != 1 || !reflect.DeepEqual(got[0].Causes, tc.want) {
-				t.Fatalf("would-be coverage: %+v, want %v", got, tc.want)
+				t.Fatalf("MUTATION: clock-coverage-%s: %+v, want %v", tc.name, got, tc.want)
 			}
 		})
 	}

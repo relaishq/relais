@@ -51,9 +51,11 @@ func publicPhaseIssue(issue observe.EvidenceIssue) observe.EvidenceIssue {
 // Duplicate outer members invalidate the envelope; duplicate members inside a
 // phase quarantine that phase without hiding independently valid siblings.
 type poolEnvelope struct {
-	RunID   string            `json:"runId"`
-	Phases  []json.RawMessage `json:"phases"`
-	Missing bool              `json:"missing"`
+	PreCoverageEvidence bool                           `json:"preCoverageEvidence,omitempty"`
+	ClockCoverage       *observe.CoverageQualification `json:"clockCoverage,omitempty"`
+	RunID               string                         `json:"runId"`
+	Phases              []json.RawMessage              `json:"phases"`
+	Missing             bool                           `json:"missing"`
 }
 
 func decodePoolEnvelope(data []byte) (wire poolEnvelope, err error) {
@@ -103,6 +105,23 @@ func decodePoolEnvelope(data []byte) (wire poolEnvelope, err error) {
 	}
 	if wire.Phases == nil {
 		wire.Missing = true
+	}
+	if raw, supplied := fields["clockCoverage"]; supplied && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		var q observe.CoverageQualification
+		valid := observe.DecodeEvidenceLimit(raw, &q, 64<<20) == nil
+		seen := map[[2]int]bool{}
+		for _, row := range q.Results {
+			key := [2]int{row.Phase, row.Event}
+			if row.Phase < 0 || row.Event < 0 || seen[key] {
+				valid = false
+			}
+			seen[key] = true
+		}
+		if !valid {
+			// Supplied but incomplete coverage never falls back to historical
+			// policy. Quarantine only coverage; retain independent media loss.
+			wire.ClockCoverage = &observe.CoverageQualification{Falsified: q.Falsified}
+		}
 	}
 	return wire, nil
 }

@@ -57,6 +57,7 @@ type Session struct {
 	uncertainties   []operator.Uncertainty
 	uncertaintySink func(operator.Uncertainty)
 
+	clockCoverageFalsified    bool
 	clockAttempts             []clocks.Evidence
 	clockAttemptsOmitted      int
 	clockDrainAttempts        []clocks.Evidence

@@ -24,6 +24,11 @@ type optionalEvidenceRule struct {
 }
 
 var evidenceConditionalOptional = map[string]optionalEvidenceRule{
+	"main.previewPoolInput.ClockCoverage":       {"Only explicit pre-coverage archives may omit measured coverage.", func(object map[string]any) bool { return object["preCoverageEvidence"] == true }},
+	"operatorevidence.Pool.ClockCoverage":       {"Only explicit pre-coverage archives may omit measured coverage.", func(object map[string]any) bool { return object["preCoverageEvidence"] == true }},
+	"main.previewPoolInput.PreCoverageEvidence": {"Coverage-bearing runs need no historical replay marker.", func(object map[string]any) bool { return object["clockCoverage"] != nil }},
+	"operatorevidence.Pool.PreCoverageEvidence": {"Coverage-bearing runs need no historical replay marker.", func(object map[string]any) bool { return object["clockCoverage"] != nil }},
+
 	"controlplane.MoveResult.Start": {"Historical takeovers may omit start; qualification uses independent signal timing.", func(object map[string]any) bool { return object["kind"] == "takeover" }},
 	"loadgen.Message.Call":          {"Call payload belongs only to call messages.", func(object map[string]any) bool { return object["type"] != "call" }},
 	"loadgen.Message.Stats":         {"Stats payload belongs only to stats messages.", func(object map[string]any) bool { return object["type"] != "stats" }},
@@ -46,7 +51,6 @@ func EvidenceOptionalLedger() map[string]string {
 }
 
 var evidenceOptional = map[string]string{
-	"operatorevidence.Pool.ClockCoverage":              "Recorded-only coverage diagnostics never qualify media and are omitted from pinned judge transport in slice 4a.",
 	"callharness.ClassificationCandidate.StartRange":   "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
 	"callharness.ClassificationCandidate.EndRange":     "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
 	"callharness.TimingEvidence.PlannedSpan":           "Only planned moves apply the shared control-clock span allowance.",

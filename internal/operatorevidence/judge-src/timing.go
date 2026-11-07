@@ -44,6 +44,11 @@ func undecidedRows(r *loadgen.RunReport) []undecidedMetric {
 						if !loadgen.MatchesEvent(r.Events[row.EventIndex], c.Call, m) {
 							continue
 						}
+						for _, reason := range m.Measurement.Reasons {
+							if observe.IsCoverageCause(reason) {
+								add([]string{reason})
+							}
+						}
 						switch row.Metric {
 						case "distributed_window":
 							if m.Distributed != nil && m.Distributed.WindowOutcome != "pass" && m.Distributed.WindowOutcome != "fail" {

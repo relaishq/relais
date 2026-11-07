@@ -60,7 +60,7 @@ func TestUndecidedRowsNameEveryMetricAndCause(t *testing.T) {
 }
 
 func freeRehearsalTimingInput(reason string) previewPoolInput {
-	input := previewPoolInput{RunID: "run-fixture"}
+	input := previewPoolInput{PreCoverageEvidence: true, RunID: "run-fixture"} // Frozen timing-only evidence predates coverage.
 	for i, gate := range operatorrehearsal.CoveredGates {
 		phase := relayInput()
 		if i < 3 {
