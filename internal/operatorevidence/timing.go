@@ -1,5 +1,7 @@
 package operatorevidence
 
+import "github.com/relaishq/relais/internal/operatorgates/observe"
+
 // UndecidedMetric is a diagnostic projection of a strict product yardstick row.
 // Phase and Event are zero-based indexes, never operation or session identities.
 type UndecidedMetric struct {
@@ -22,6 +24,9 @@ func PublicMetric(metric string) string {
 }
 
 func PublicTimingCause(cause string) string {
+	if observe.IsCoverageCause(cause) {
+		return cause
+	}
 	switch cause {
 	case "trusted-coverage-below-80-percent", "classification-varies-with-clock-interval", "classification-unproven-within-clock-interval", "interval-evaluation-unavailable", "duration-bounds-uncertain", "event-window-incomplete", "baseline-intervals-insufficient", "pause-bound-uncertain", "baseline-spread-uncertain", "move-p95-unproven", "trial-count-insufficient", "content-loss-unproven", "metric-undecided":
 		return cause

@@ -123,3 +123,27 @@ func TestHistoricalTrackingReplayAlignsClocksAndKeepsBootBreakLocal(t *testing.T
 		t.Fatal("duplicate-second maximum was lost", got)
 	}
 }
+
+func TestOfflineCoverageSelectsHeadCallerSequence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.json")
+	main := clocks.CoverageEvidence{Version: 2, Windows: []observe.CoverageWindow{{Event: 0, Kind: "move"}, {Event: 1, Kind: "move"}}}
+	head := clocks.CoverageEvidence{Version: 2, Windows: []observe.CoverageWindow{{Event: 0, Kind: "move"}}}
+	data, _ := json.Marshal(map[string]any{"clockCoverage": main, "headCaller": map[string]any{"clockCoverage": head}})
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want int
+	}{{nil, 2}, {[]string{"-head-caller"}, 1}} {
+		var out bytes.Buffer
+		args := append([]string{"-report", path}, tc.args...)
+		if err := evaluate(args, &out); err != nil {
+			t.Fatal(err)
+		}
+		var got struct{ Events int }
+		if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Events != tc.want {
+			t.Fatal("wrong coverage sequence", out.String(), err)
+		}
+	}
+}

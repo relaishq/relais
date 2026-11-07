@@ -39,7 +39,8 @@ type HeadCallerReport struct {
 }
 
 // runHeadCaller runs after the pinned sequence's report inputs are final. It
-// shares only the deployment and teardown with the pinned comparison.
+// shares the deployment, teardown and forward-sticky clock falsification latch
+// with the pinned comparison. Earlier judgments remain unchanged.
 func (r *rehearsal) runHeadCaller(ctx context.Context, scenario operator.Scenario) *HeadCallerReport {
 	head := &HeadCallerReport{Commit: r.c.Commit, Gates: []GateReport{}, CallerAffinities: []string{}, CallerTiming: []CallerTiming{}, Uncertainties: []operator.Uncertainty{}, Errors: []string{}}
 	_, _ = fmt.Fprintln(r.diagnostics, "head-caller-phase begin")

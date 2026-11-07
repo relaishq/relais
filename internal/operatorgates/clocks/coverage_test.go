@@ -2,6 +2,8 @@ package clocks
 
 import (
 	"encoding/json"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,5 +27,17 @@ func TestCoveragePublicProjection(t *testing.T) {
 	again, _ := json.Marshal(e)
 	if string(raw) != string(again) {
 		t.Fatal("projection is nondeterministic")
+	}
+}
+
+func TestCoverageDiagnosticsAndQualificationUseFixedBounds(t *testing.T) {
+	for _, bound := range []int64{1000000, 4000000} {
+		e := CoverageEvidence{Bounds: FixedCoverageBounds(), FrontendSlot: "shared", ControlSlot: "shared", Windows: []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930020000000000"}}, Attempts: []CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, LeapStatus: "N", MaxErrorSeconds: .0001}, {UnixSeconds: 1793930030, LeapStatus: "N", MaxErrorSeconds: .0001}}}}}}}
+		e.Bounds.FrontendControlBoundNS = bound
+		e.Evaluate()
+		q := e.Qualification()
+		if !reflect.DeepEqual(e.Results, q.Results) || !slices.Contains(q.Results[0].Causes, "clock-coverage-bound") {
+			t.Fatal("diagnostic/verdict bounds diverged", e.Results, q.Results)
+		}
 	}
 }

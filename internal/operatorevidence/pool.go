@@ -116,11 +116,14 @@ type MediaInput struct {
 	Missing bool `json:"missing,omitempty"`
 }
 type Pool struct {
-	ClockCoverage *clocks.CoverageEvidence `json:"clockCoverage,omitempty"`
-	SourceCommit  string                   `json:"-"`
-	RunID         string                   `json:"runId"`
-	Phases        []MediaInput             `json:"phases"`
-	Missing       bool                     `json:"missing"`
+	// PreCoverageEvidence opts historical archives into their frozen policy.
+	// Live ReadPool never sets it. Coverage, when present, always wins.
+	PreCoverageEvidence bool                     `json:"preCoverageEvidence,omitempty"`
+	ClockCoverage       *clocks.CoverageEvidence `json:"clockCoverage,omitempty"`
+	SourceCommit        string                   `json:"-"`
+	RunID               string                   `json:"runId"`
+	Phases              []MediaInput             `json:"phases"`
+	Missing             bool                     `json:"missing"`
 }
 
 func ReadPool(run string, phases []Phase, missing bool) (Pool, string, error) {

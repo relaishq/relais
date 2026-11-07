@@ -12,6 +12,9 @@ func TimingCause(reason string) string {
 			break
 		}
 	}
+	if IsCoverageCause(reason) {
+		return reason
+	}
 	switch {
 	case strings.Contains(reason, "classification changes within event-time interval;"):
 		return "classification-varies-with-clock-interval"
@@ -44,6 +47,8 @@ func TimingCause(reason string) string {
 // same classifier result and precedence. Unknown reasons must remain opaque.
 func CanonicalTimingReason(reason string) (string, bool) {
 	switch TimingCause(reason) {
+	case "clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified":
+		return TimingCause(reason), true
 	case "classification-varies-with-clock-interval":
 		return "classification changes within event-time interval;", true
 	case "classification-unproven-within-clock-interval":

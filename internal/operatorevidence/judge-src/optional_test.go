@@ -95,10 +95,12 @@ func optionalDocuments(t *testing.T, input previewPoolInput) []optionalDocument 
 		t.Fatal(err)
 	}
 	docs := []optionalDocument{{value, reflect.TypeFor[previewPoolInput](), -1, -1}}
-	// Both ingress representations have ledger entries. They share the real
-	// wire format, so every alias is tested through the same pooled judge.
+	// The raw Pool archive and compact judge input have ledger entries. The
+	// archive case explicitly predates coverage; compact evaluated coverage is
+	// exercised in the main document and the production transport tests.
 	var alias any
 	_ = json.Unmarshal(data, &alias)
+	alias.(map[string]any)["clockCoverage"] = nil
 	docs = append(docs, optionalDocument{alias, reflect.TypeFor[operatorevidence.Pool](), -1, -1})
 	for i, phase := range input.Phases {
 		for j, line := range strings.Split(strings.TrimSpace(phase.CallerJSONL), "\n") {

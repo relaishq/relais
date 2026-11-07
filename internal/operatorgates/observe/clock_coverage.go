@@ -9,7 +9,7 @@ import (
 
 const coverageSecond int64 = 1e9
 
-// Coverage types are numeric public diagnostics, independent of media policy.
+// Coverage types are numeric public evidence for clock qualification.
 // Absolute nanoseconds stay decimal strings; the evaluator never reads a clock.
 type CoverageRow struct {
 	UnixSeconds     int64   `json:"unixSeconds"`
@@ -40,6 +40,14 @@ type CoverageBracket struct {
 	BeforeUnixNS   string `json:"beforeUnixNs"`
 	AfterUnixNS    string `json:"afterUnixNs"`
 }
+
+// CoverageQualification is the bounded, evaluated input to pinned judges.
+// The historical replay opt-in belongs to the pool, not these measured results.
+type CoverageQualification struct {
+	Results   []CoverageResult `json:"results"`
+	Falsified bool             `json:"falsified"`
+}
+
 type CoverageResult struct {
 	Phase  int      `json:"phase"`
 	Event  int      `json:"event"`
@@ -284,4 +292,35 @@ func CoverageTailReady(timelines map[string]CoverageTimeline, frontend, control 
 		}
 	}
 	return true
+}
+
+// IsCoverageCause accepts only the clock qualification's fixed public codes.
+func IsCoverageCause(s string) bool {
+	switch s {
+	case "clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified":
+		return true
+	}
+	return false
+}
+
+// WindowCauses returns the clock qualification for one event. Nonempty causes
+// make its windows undecided, while independent media failures remain failures.
+func (q *CoverageQualification) WindowCauses(phase, event int, preCoverage bool) []string {
+	causes := []string{"clock-coverage-missing"}
+	if q == nil {
+		if preCoverage {
+			return nil
+		}
+		return causes
+	}
+	for _, row := range q.Results {
+		if row.Phase == phase && row.Event == event {
+			causes = row.Causes
+			break
+		}
+	}
+	if q.Falsified {
+		causes = append(append([]string{}, causes...), "clock-coverage-falsified")
+	}
+	return causes
 }

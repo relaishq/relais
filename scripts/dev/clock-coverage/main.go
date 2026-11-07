@@ -21,6 +21,7 @@ func evaluate(args []string, out io.Writer) error {
 	poolPath := flags.String("pool", "", "optional retained pool JSON (same clock domain)")
 	frontend := flags.String("frontend-slot", "", "inventory-derived frontend slot")
 	control := flags.String("control-slot", "", "inventory-derived control slot")
+	head := flags.Bool("head-caller", false, "inspect the separate head caller sequence")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -34,6 +35,13 @@ func evaluate(args []string, out io.Writer) error {
 	var report storedReport
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return fmt.Errorf("invalid report JSON")
+	}
+	if *head {
+		if report.HeadCaller == nil {
+			return fmt.Errorf("head caller evidence unavailable")
+		}
+		report.CallerTiming = report.HeadCaller.CallerTiming
+		report.Coverage = report.HeadCaller.Coverage
 	}
 	e := report.Coverage
 	historical := e == nil

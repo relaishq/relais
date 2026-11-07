@@ -22,6 +22,7 @@ func (s *Session) retainDrainClockAttempt(e clocks.Evidence) { s.retainCoverageA
 func (s *Session) retainCoverageAttempt(e clocks.Evidence, drain bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.clockCoverageFalsified = s.clockCoverageFalsified || clocks.HasFalsification(e)
 	history, omitted, limit := &s.clockAttempts, &s.clockAttemptsOmitted, clocks.CoverageAttemptLimit
 	if drain {
 		history, omitted, limit = &s.clockDrainAttempts, &s.clockDrainAttemptsOmitted, clocks.CoverageDrainAttemptLimit
@@ -109,7 +110,7 @@ func (s *Session) coverageSnapshot(bounds clocks.Bounds) *clocks.CoverageEvidenc
 	for slot, b := range s.clockMissingIntervals {
 		missing[slot] = b
 	}
-	return &clocks.CoverageEvidence{Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: bounds, Attempts: coverageAttempts(s.clockAttempts), DrainAttempts: coverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...)}
+	return &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: bounds, Attempts: coverageAttempts(s.clockAttempts), DrainAttempts: coverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...)}
 }
 func (s *Session) retainClockBracket(worker, before, after string) {
 	b, okB := observe.CoverageNS(before)
@@ -205,4 +206,17 @@ func (s *Session) ClockAttempts() []clocks.Evidence {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]clocks.Evidence{}, s.clockAttempts...)
+}
+
+// SeedClockCoverageFalsification carries a prior sequence's run-wide trust loss
+// into this Session. It never clears a falsification observed in this sequence.
+func (s *Session) SeedClockCoverageFalsification(falsified bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clockCoverageFalsified = s.clockCoverageFalsified || falsified
+}
+func (s *Session) ClockCoverageFalsified() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clockCoverageFalsified
 }

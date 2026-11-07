@@ -52,7 +52,7 @@ type ProbeHistogram struct {
 }
 
 // Falsification has cumulative counters and new or revised record details.
-// Neither the counters nor the details are policy inputs.
+// A falsified record or positive cumulative count sets the coverage trust latch.
 type Falsification struct {
 	FrontendSlot   string          `json:"frontendSlot"`
 	Records        []ProbeRecord   `json:"records"`

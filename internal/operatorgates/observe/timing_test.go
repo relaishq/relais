@@ -116,3 +116,17 @@ func TestTimingCauseProductReasons(t *testing.T) {
 		}
 	}
 }
+
+func TestClockCoverageTimingReasonsStayPublic(t *testing.T) {
+	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified"} {
+		for _, prefix := range []string{"", "first content: "} {
+			got, ok := CanonicalTimingReason(prefix + cause)
+			if !ok || got != cause || TimingCause(prefix+cause) != cause {
+				t.Fatal("coverage cause lost", prefix, cause, got)
+			}
+		}
+	}
+	if IsCoverageCause("clock-coverage-private-text") {
+		t.Fatal("arbitrary cause accepted")
+	}
+}

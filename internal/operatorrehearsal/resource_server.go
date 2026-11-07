@@ -162,7 +162,8 @@ func (m mailboxResources) Create(ctx context.Context, req operator.Request) oper
 
 // resourceSequence names one session's sinks. The pinned sequence and the
 // diagnostic head-caller phase each get their own spool, judge, caller binary
-// and report rows; only the deployment and teardown are shared.
+// and report rows. The run-wide clock falsification latch, deployment and
+// teardown are shared.
 type resourceSequence struct {
 	spool      string
 	judge      *recordingJudge
@@ -205,8 +206,14 @@ func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init,
 	init.Capabilities = adapter.Capabilities()
 	config := operatorgates.ResourceConfig{Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: seq.judge.pinned.Binary, CallerIDBase: uint64(len(r.units) + 1), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
 	var session *operatorgates.Session
+	defer func() {
+		if session != nil {
+			r.clockCoverageFalsified = r.clockCoverageFalsified || session.ClockCoverageFalsified()
+		}
+	}()
 	runner := operatorgates.ResourceRunner{Config: config, Judge: seq.judge, CoverageRead: adapter.readCoverageClock, Timing: &operatorgates.TimingRecorder{Writer: r.diagnostics}, Started: func(s *operatorgates.Session) {
 		session = s
+		s.SeedClockCoverageFalsification(r.clockCoverageFalsified)
 		seq.started(s)
 		seq.judge.note = s.RecordUncertainty
 		s.SetObservationFailureSink(r.preconditionDiagnostic)

@@ -25,3 +25,15 @@ func TestCoverageWindowsPreservesEveryReceipt(t *testing.T) {
 		t.Fatal("missing receipt silently omitted", windows)
 	}
 }
+
+func TestPublicDiagnosticsKeepsClockCoverageCauses(t *testing.T) {
+	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified"} {
+		p := Summary{UndecidedMetrics: []UndecidedMetric{{Metric: "audio_loss", Causes: []string{cause}}}}
+		if got := p.PublicDiagnostics(); len(got.UndecidedMetrics) != 1 || len(got.UndecidedMetrics[0].Causes) != 1 || got.UndecidedMetrics[0].Causes[0] != cause {
+			t.Fatal("coverage cause removed", got)
+		}
+	}
+	if PublicTimingCause("clock-coverage-private-text") != "unclassified" {
+		t.Fatal("arbitrary cause escaped")
+	}
+}

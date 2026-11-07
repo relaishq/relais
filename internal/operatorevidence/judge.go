@@ -279,9 +279,20 @@ func printDiagnostics(writers []io.Writer, label string, stdout, stderr []byte) 
 	}
 }
 
-// MarshalJudgeInput is the actual pinned-judge wire projection. Recorded-only
-// diagnostics cannot change its bytes or consume the media input-size budget.
+// MarshalJudgeInput sends evaluated results once, not raw tracking timelines.
+// The existing total input limit is still checked by invoke.
 func MarshalJudgeInput(pool Pool) ([]byte, error) {
-	pool.ClockCoverage = nil
-	return json.Marshal(pool)
+	type wire struct {
+		RunID               string                         `json:"runId"`
+		Phases              []MediaInput                   `json:"phases"`
+		Missing             bool                           `json:"missing"`
+		PreCoverageEvidence bool                           `json:"preCoverageEvidence,omitempty"`
+		ClockCoverage       *observe.CoverageQualification `json:"clockCoverage,omitempty"`
+	}
+	out := wire{RunID: pool.RunID, Phases: pool.Phases, Missing: pool.Missing, PreCoverageEvidence: pool.PreCoverageEvidence}
+	if pool.ClockCoverage != nil {
+		q := pool.ClockCoverage.Qualification()
+		out.ClockCoverage = &q
+	}
+	return json.Marshal(out)
 }

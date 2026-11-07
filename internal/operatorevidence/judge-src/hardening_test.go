@@ -50,6 +50,7 @@ func joinedPool(t *testing.T, phases []operatorevidence.Phase) (operatorevidence
 	if err != nil {
 		t.Fatal(err)
 	}
+	pool.PreCoverageEvidence = true // These synthetic archives predate clock coverage.
 	data, _ := json.Marshal(pool)
 	var input previewPoolInput
 	if err := observe.DecodeLimit(data, &input, nil, 64<<20); err != nil {

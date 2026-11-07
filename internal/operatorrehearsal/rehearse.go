@@ -29,6 +29,7 @@ type RehearseConfig struct {
 }
 
 type rehearsal struct {
+	clockCoverageFalsified  bool
 	c                       RehearseConfig
 	report                  *Report
 	topology                *Topology
@@ -240,6 +241,8 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		r.recordError("calibration-cleanup-failed", e)
 		return report, errors.New("calibration-cleanup-failed")
 	}
+	// Carry setup trust loss before the first resource sequence starts.
+	r.clockCoverageFalsified = r.clockCoverageFalsified || r.session.ClockCoverageFalsified()
 	if e = r.runResourceSequence(ctx, init, r.pinnedSequence()); e != nil {
 		r.recordError("operator-session-incomplete", e)
 		return report, e

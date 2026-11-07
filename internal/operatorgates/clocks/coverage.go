@@ -3,6 +3,8 @@ package clocks
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
@@ -10,10 +12,18 @@ import (
 
 const CoverageAttemptLimit = 256
 const CoverageDrainAttemptLimit = 64
+const CoverageControlBoundNS int64 = 2000000
+const CoverageWorkerBoundNS int64 = 3000000
+const CoverageDriftPPM float64 = 100
 
-// CoverageEvidence belongs to one run, not individual phases. These diagnostics
-// do not supply admission evidence or change a judge's input media records.
+func FixedCoverageBounds() Bounds {
+	return Bounds{FrontendControlBoundNS: CoverageControlBoundNS, FrontendWorkerBoundNS: CoverageWorkerBoundNS, DriftPPM: CoverageDriftPPM}
+}
+
+// CoverageEvidence belongs to one run, not individual phases. Its evaluated
+// results qualify judge windows, without supplying admission evidence.
 type CoverageEvidence struct {
+	Falsified            bool                             `json:"falsified"`
 	Version              int                              `json:"version"`
 	FrontendSlot         string                           `json:"frontendSlot"`
 	ControlSlot          string                           `json:"controlSlot"`
@@ -155,8 +165,17 @@ func (e CoverageEvidence) Timelines() map[string]observe.CoverageTimeline {
 func (e *CoverageEvidence) Evaluate() {
 	e.Version = EvidenceVersion
 	t := e.Timelines()
-	e.Results = observe.EvaluateClockCoverage(t, e.FrontendSlot, e.ControlSlot, e.Bounds.FrontendControlBoundNS, e.Bounds.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
-	e.DrainComplete = observe.CoverageTailReady(t, e.FrontendSlot, e.ControlSlot, e.Bounds.FrontendControlBoundNS, e.Bounds.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
+	fixed := FixedCoverageBounds()
+	e.Results = observe.EvaluateClockCoverage(t, e.FrontendSlot, e.ControlSlot, fixed.FrontendControlBoundNS, fixed.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
+	if e.Bounds != fixed {
+		for i := range e.Results {
+			if !slices.Contains(e.Results[i].Causes, "clock-coverage-bound") {
+				e.Results[i].Causes = append(e.Results[i].Causes, "clock-coverage-bound")
+			}
+			sort.Strings(e.Results[i].Causes)
+		}
+	}
+	e.DrainComplete = observe.CoverageTailReady(t, e.FrontendSlot, e.ControlSlot, fixed.FrontendControlBoundNS, fixed.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
 }
 func TimestampNS(n int64) string { return fmt.Sprintf("%019d", n) }
 
@@ -190,4 +209,26 @@ func publicAttempts(attempts []CoverageAttempt) []CoverageAttempt {
 		a.Clocks = rows
 	}
 	return out
+}
+
+// HasFalsification includes cumulative counters: evicted probe details cannot
+// restore clock trust. A disabled prober supplies neither counters nor records.
+func HasFalsification(e Evidence) bool {
+	f := e.Falsification
+	if f == nil {
+		return false
+	}
+	if f.CountsByStatus["falsified"] > 0 {
+		return true
+	}
+	for _, record := range f.Records {
+		if record.Status == "falsified" {
+			return true
+		}
+	}
+	return false
+}
+func (e CoverageEvidence) Qualification() observe.CoverageQualification {
+	e.Evaluate()
+	return observe.CoverageQualification{Results: e.Results, Falsified: e.Falsified}
 }
