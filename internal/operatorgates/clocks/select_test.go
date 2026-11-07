@@ -184,13 +184,43 @@ func TestClockSelectPostWindowStateAndFreshness(t *testing.T) {
 				in.Hosts[0].Lease.ReferenceUnixNS = fmt.Sprint(n)
 			}
 			_, err := Select(in, p)
-			require.Error(t, err)
+			want := map[string]string{"leap": "clock-select-leap", "reference": "clock-select-break", "expired": "clock-lease-expired", "stale": "clock-select-stale"}[field]
+			if err == nil || err.Error() != want {
+				t.Fatalf("MUTATION: post-window-%s: got %v, want %s", field, err, want)
+			}
 		})
 	}
 	in, p := selectionFixture()
 	n := in.Hosts[0].Tracking.Rows[len(in.Hosts[0].Tracking.Rows)-1].UnixSeconds*1000000000 + 60000000000
 	in.Hosts[0].Lease.MeasuredUnixNS, in.Hosts[0].Lease.ReferenceUnixNS = fmt.Sprint(n), fmt.Sprint(n)
 	selectGood(t, in, p)
+}
+
+func TestClockSelectLeaseFreshness(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		offset  int64
+		refuses bool
+	}{
+		{"early", -1000000001, true}, {"lower-boundary", -1000000000, false},
+		{"same-row", 0, false}, {"upper-boundary", 60000000000, false}, {"late", 60000000001, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for i, slot := range selectionSlots {
+				in, p := selectionFixture()
+				last := in.Hosts[i].Tracking.Rows[len(in.Hosts[i].Tracking.Rows)-1].UnixSeconds * 1000000000
+				in.Hosts[i].Lease.MeasuredUnixNS, in.Hosts[i].Lease.ReferenceUnixNS = fmt.Sprint(last+tc.offset), fmt.Sprint(last+tc.offset)
+				_, err := Select(in, p)
+				if tc.refuses {
+					if err == nil || err.Error() != "clock-select-stale" {
+						t.Fatalf("MUTATION: lease-freshness-%s: slot %s: %v", tc.name, slot, err)
+					}
+				} else {
+					require.NoError(t, err, "slot %s at inclusive freshness boundary", slot)
+				}
+			}
+		})
+	}
 }
 
 func TestClockSelectAddsFrontendError(t *testing.T) {

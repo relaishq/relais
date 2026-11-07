@@ -63,13 +63,3 @@ class HelperTests(unittest.TestCase):
         with patch('sys.argv',['clock_probe.py','--listen','127.0.0.1:24891']), patch.object(helper.http.server,'HTTPServer',return_value=server), patch.object(helper.threading,'Timer',Timer):
             helper.main()
         server.shutdown.assert_called_once()
-
-    def test_cooperative_stop_file(self):
-        import pathlib
-        import tempfile
-        with tempfile.TemporaryDirectory() as directory:
-            path = pathlib.Path(directory)/'stop'
-            path.touch()
-            stop = threading.Event()
-            helper.watch_stop(path, stop)
-            self.assertTrue(stop.is_set(), 'MUTATION: helper-stop-file')

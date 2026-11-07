@@ -367,8 +367,12 @@
     "clock-admission-forget-observations",
     "clock-admission-clear-falsified",
     "clock-admission-no-seed-margin",
-    "clock-admission-cancel-keeps-helpers",
-    "clock-admission-ignore-stop-file"
+    "clock-select-ignore-post-window-leap",
+    "clock-select-ignore-post-window-reference",
+    "clock-select-ignore-expired-lease",
+    "clock-select-ignore-early-lease",
+    "clock-select-ignore-late-lease",
+    "clock-admission-ignore-parent-cancel"
   ],
   "killed": [
     {
@@ -3226,16 +3230,44 @@
       "guardFingerprint": ""
     },
     {
-      "id": "clock-admission-cancel-keeps-helpers",
-      "test": "TestClockSelectionPartialStartWaits",
-      "package": "./internal/operatorrehearsal",
+      "id": "clock-select-ignore-post-window-leap",
+      "test": "TestClockSelectPostWindowStateAndFreshness/leap",
+      "package": "./internal/operatorgates/clocks",
       "evidence": "killed",
       "guardFingerprint": ""
     },
     {
-      "id": "clock-admission-ignore-stop-file",
-      "test": "TestClockProbeHostAsset",
-      "package": "./internal/operatorgates/host",
+      "id": "clock-select-ignore-post-window-reference",
+      "test": "TestClockSelectPostWindowStateAndFreshness/reference",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-ignore-expired-lease",
+      "test": "TestClockSelectPostWindowStateAndFreshness/expired",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-ignore-early-lease",
+      "test": "TestClockSelectLeaseFreshness/early",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-ignore-late-lease",
+      "test": "TestClockSelectLeaseFreshness/late",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-ignore-parent-cancel",
+      "test": "TestClockSelectionPartialStartWaits",
+      "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
     }

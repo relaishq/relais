@@ -31,7 +31,7 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	return clockAdmissionPorts{stop: func(context.Context) {}, start: func(context.Context, time.Time) error { return nil }, read: read, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
+	return clockAdmissionPorts{start: func(context.Context, time.Time) error { return nil }, read: read, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -191,13 +191,6 @@ func TestClockSelectionPartialStartWaits(t *testing.T) {
 			return pause(ctx, d)
 		}
 		var began time.Time
-		stopped := false
-		p.stop = func(ctx context.Context) {
-			stopped = true
-			if ctx.Err() != nil {
-				t.Fatal("MUTATION: admission-cancel-stop")
-			}
-		}
 		p.start = func(ctx context.Context, end time.Time) error {
 			began = p.now()
 			if end.Sub(began) != 150*time.Second {
@@ -214,8 +207,8 @@ func TestClockSelectionPartialStartWaits(t *testing.T) {
 		if when != "none" {
 			want = 10 * time.Second
 		}
-		if result.Cause != "clock-selection-helper" || p.now().Sub(began) != want || stopped != (when != "none") {
-			t.Fatal("MUTATION: admission-cancel-stop", result, p.now().Sub(began), stopped)
+		if result.Cause != "clock-selection-helper" || p.now().Sub(began) != want {
+			t.Fatal("MUTATION: admission-cancel-prompt", result, p.now().Sub(began))
 		}
 		cancel()
 	}

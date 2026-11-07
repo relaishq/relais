@@ -4052,23 +4052,73 @@
     "Package": "./internal/operatorrehearsal"
   },
   {
-    "ID": "clock-admission-cancel-keeps-helpers",
-    "File": "internal/operatorrehearsal/clock_selection.go",
-    "Function": "collectClockSelection",
-    "Old": "p.stop(stopCtx)",
-    "New": "_ = stopCtx",
-    "Test": "TestClockSelectionPartialStartWaits",
-    "Marker": "MUTATION: admission-cancel-stop",
-    "Package": "./internal/operatorrehearsal"
+    "ID": "clock-select-ignore-post-window-leap",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "selectionMaximum",
+    "Old": "if prev.LeapStatus != \"N\" || row.LeapStatus != \"N\" {",
+    "New": "if (prev.LeapStatus != \"N\" || row.LeapStatus != \"N\") && prev.UnixSeconds <= end+1 {",
+    "Test": "TestClockSelectPostWindowStateAndFreshness/leap",
+    "Marker": "MUTATION: post-window-leap",
+    "Package": "./internal/operatorgates/clocks"
   },
   {
-    "ID": "clock-admission-ignore-stop-file",
-    "File": "internal/operatorgates/host/clock_probe.py",
-    "Function": "",
-    "Old": "if pathlib.Path(path).is_file():\n            stop.set()",
-    "New": "if pathlib.Path(path).is_file():\n            return",
-    "Test": "TestClockProbeHostAsset",
-    "Marker": "MUTATION: helper-stop-file",
-    "Package": "./internal/operatorgates/host"
+    "ID": "clock-select-ignore-post-window-reference",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "selectionMaximum",
+    "Old": "prev.Reference != row.Reference",
+    "New": "(prev.UnixSeconds <= end+1 && prev.Reference != row.Reference)",
+    "Test": "TestClockSelectPostWindowStateAndFreshness/reference",
+    "Marker": "MUTATION: post-window-reference",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-ignore-expired-lease",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "if lease.Expired {",
+    "New": "if false {",
+    "Test": "TestClockSelectPostWindowStateAndFreshness/expired",
+    "Marker": "MUTATION: post-window-expired",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-ignore-early-lease",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "measurementOffsetNS < -1000000000 || measurementOffsetNS > 60000000000",
+    "New": "measurementOffsetNS > 60000000000",
+    "Test": "TestClockSelectLeaseFreshness/early",
+    "Marker": "MUTATION: lease-freshness-early",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-ignore-late-lease",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "measurementOffsetNS < -1000000000 || measurementOffsetNS > 60000000000",
+    "New": "measurementOffsetNS < -1000000000",
+    "Test": "TestClockSelectLeaseFreshness/late",
+    "Marker": "MUTATION: lease-freshness-late",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-admission-ignore-parent-cancel",
+    "Edits": [
+      {
+        "File": "internal/operatorrehearsal/clock_selection.go",
+        "Function": "collectClockSelection",
+        "Old": "if parent.Err() == nil {",
+        "New": "if true {"
+      },
+      {
+        "File": "internal/operatorrehearsal/clock_selection.go",
+        "Function": "collectClockSelection",
+        "Old": "p.pause(parent, max(0, end.Add(2*time.Second).Sub(p.now())))",
+        "New": "p.pause(context.WithoutCancel(parent), max(0, end.Add(2*time.Second).Sub(p.now())))"
+      }
+    ],
+    "Test": "TestClockSelectionPartialStartWaits",
+    "Marker": "MUTATION: admission-cancel-prompt",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

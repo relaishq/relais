@@ -155,7 +155,9 @@ func Select(input SelectionEvidence, policy SelectionPolicy) (ClockSelection, er
 		}
 		measuredNS, _ := strconv.ParseInt(h.Lease.MeasuredUnixNS, 10, 64)
 		lastRowNS := h.Tracking.Rows[len(h.Tracking.Rows)-1].UnixSeconds * 1000000000
-		if measuredNS-lastRowNS > 60000000000 {
+		// Tracking rows have one-second resolution; measurement freshness is bidirectional.
+		measurementOffsetNS := measuredNS - lastRowNS
+		if measurementOffsetNS < -1000000000 || measurementOffsetNS > 60000000000 {
 			return out, fmt.Errorf("clock-select-stale")
 		}
 		// RecordLease produced this rational; it need not fit the input text limit.
