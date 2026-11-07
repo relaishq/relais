@@ -12,6 +12,7 @@ import stat
 import re
 import subprocess
 import time
+from decimal import Decimal
 
 
 def require(ok, message):
@@ -24,6 +25,7 @@ def require(ok, message):
 TRACKING_LOG = pathlib.Path('/var/log/chrony/tracking.log')
 READ_LIMIT = 64 * 1024
 ENCODED_LIMIT = 220000  # Leave room for the cursor and existing chronyc evidence.
+WIRE_LIMIT = 23998
 
 
 def tracking_row(line):
@@ -60,7 +62,7 @@ def discard_line(log, end):
     return True
 
 
-def tracking_evidence(cursor=None, run_start_unix_ms=0):
+def tracking_evidence(cursor=None, run_start_unix_ms=0, precision=False):
     rows, breaks = [], []
     before = time.monotonic_ns()
     wall = time.time_ns()
@@ -132,6 +134,8 @@ def tracking_evidence(cursor=None, run_start_unix_ms=0):
                     line = raw.decode().strip()
                     if line and not line.startswith(('=', 'Date', '#')):
                         row = tracking_row(line)
+                        if precision:
+                            row['maxErrorDecimal'] = line.split()[13]
                         at = row['unixSeconds']
                         row['beforeRun'] = before_run(at)
                         if row['leapStatus'] != 'N':
@@ -151,7 +155,8 @@ def tracking_evidence(cursor=None, run_start_unix_ms=0):
                     previous = None
                 added = sum(len(json.dumps(b)) + 1 for b in breaks[count:])
                 if row is not None:
-                    added += len(json.dumps(row)) + 1
+                    baseline_row = {k: v for k, v in row.items() if k != 'maxErrorDecimal'} if precision else row
+                    added += len(json.dumps(baseline_row)) + 1
                 if encoded_size + added > ENCODED_LIMIT:
                     del breaks[count:]
                     previous, capped = prior, True
@@ -186,12 +191,25 @@ def tracking_evidence(cursor=None, run_start_unix_ms=0):
     return result
 
 
-def read_clock(cursor=None, run_start_unix_ms=0, probe_file='', probe_cursor=None):
+def read_clock(cursor=None, run_start_unix_ms=0, probe_file='', probe_cursor=None, lease=False):
     result = clock_evidence()
-    result['trackingLog'] = tracking_evidence(cursor, run_start_unix_ms)
+    result['trackingLog'] = (tracking_evidence(cursor, run_start_unix_ms, precision=True) if lease
+                             else tracking_evidence(cursor, run_start_unix_ms))
+    if lease:
+        raw = json.dumps(result).encode()
+        if len(raw) > 256000 or len(base64.b64encode(gzip.compress(raw))) > WIRE_LIMIT:
+            # Precision is optional; preserve the baseline rows and cursor
+            # before considering the pre-existing baseline overflow fallback.
+            timeline = result['trackingLog']
+            for row in timeline['rows']:
+                row.pop('maxErrorDecimal', None)
+            if isinstance(timeline['cursor'], dict) and isinstance(timeline['cursor'].get('lastRow'), dict):
+                prior = dict(timeline['cursor']['lastRow'])
+                prior.pop('maxErrorDecimal', None)
+                timeline['cursor']['lastRow'] = prior
     # Match operator.MaxHostOutputBytes, reserving the print newline. A hostile
     # high-entropy log must not turn recorded diagnostics into a failed read.
-    if len(base64.b64encode(gzip.compress(json.dumps(result).encode()))) > 23998:
+    if len(base64.b64encode(gzip.compress(json.dumps(result).encode()))) > WIRE_LIMIT:
         timeline = result['trackingLog']
         prior = cursor.get('lastRow') if isinstance(cursor, dict) else None
         now = int(result['measuredUnixNs']) // 10**9
@@ -200,8 +218,64 @@ def read_clock(cursor=None, run_start_unix_ms=0, probe_file='', probe_cursor=Non
         timeline['rows'] = []
         timeline['breaks'] = [dict(kind='cursor-gap', fromUnixSeconds=min(since, now), unixSeconds=max(since, now), beforeRun=False)]
     if probe_file:
-        return add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)
+        result = add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)
+    if lease:
+        # New launchers opt in. Existing reads have identical commands, timing
+        # and output. Extension pressure cannot evict baseline rows or probes.
+        extra = lease_evidence()
+        candidate = dict(result, lease=extra)
+        raw = json.dumps(candidate).encode()
+        if len(raw) <= 256000 and len(base64.b64encode(gzip.compress(raw))) <= WIRE_LIMIT:
+            result = candidate
     return result
+
+
+def lease_tracking():
+    # -c preserves numeric seconds and exposes the reference update time.
+    raw = subprocess.run(['/usr/bin/chronyc', '-c', 'tracking'], capture_output=True,
+                         text=True, timeout=1, check=True).stdout.strip().split(',')
+    require(len(raw) == 14 and raw[13] == 'Normal', 'Invalid lease tracking')
+    for i in range(2, 13):
+        require(len(raw[i]) <= 80 and Decimal(raw[i]).is_finite(), 'Invalid lease number')
+    require(min(Decimal(raw[i]) for i in (9, 10, 11, 12)) >= 0, 'Invalid lease bound')
+    return raw
+
+
+def lease_poll():
+    output = subprocess.run(['/usr/bin/chronyc', '-c', 'sources'], capture_output=True,
+                            text=True, timeout=1, check=True).stdout
+    selected = [line.split(',') for line in output.splitlines() if len(line.split(',')) >= 5 and line.split(',')[1] == '*']
+    require(len(selected) == 1, 'Missing selected clock source')
+    # sources reports Poll (power of two); refclock dpoll is not this column.
+    exponent = int(selected[0][4])
+    require(-7 <= exponent <= 24, 'Invalid poll exponent')
+    return Decimal(2) ** exponent
+
+
+def lease_evidence():
+    try:
+        started = time.monotonic_ns()
+        first = lease_tracking()
+        first_done = time.monotonic_ns()
+        time.sleep(0.2)
+        second_send = time.monotonic_ns()
+        second = lease_tracking()
+        measured = time.time_ns()
+        poll = lease_poll()
+        elapsed = time.monotonic_ns() - started
+        require(first[0] == second[0] and first[3] == second[3], 'Clock update during lease read')
+        require(second_send > first_done and Decimal(second[11]) >= Decimal(first[11]), 'Invalid dispersion growth')
+        reference = int(Decimal(second[3]) * 10**9)
+        require(0 < reference <= measured, 'Invalid reference time')
+        error = abs(Decimal(second[4])) + Decimal(second[10]) / 2 + Decimal(second[11])
+        return dict(available=True, reason='', errorBoundNs=int((error * 10**9 + 2).to_integral_value(rounding='ROUND_CEILING')),
+                    measuredUnixNs=str(measured), referenceUnixNs=str(reference), referenceAgeNs=measured-reference,
+                    pollSeconds=str(poll), residualPpm=second[8], skewPpm=second[9],
+                    dispersionStartSeconds=first[11], dispersionEndSeconds=second[11],
+                    intervalNs=second_send-first_done, hostElapsedNs=elapsed)
+    except Exception:
+        # Optional diagnostic failures never alter the scalar clock admission.
+        return dict(available=False, reason='unavailable')
 
 
 # Mirror internal/clockprobe.ParseLine. A marker is file-wide, not a timestamp.

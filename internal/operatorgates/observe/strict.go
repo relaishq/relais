@@ -28,6 +28,17 @@ func DecodeLimit(data []byte, value any, contract Contract, limit int) error {
 	return json.Unmarshal(data, value)
 }
 
+// DecodeClosedLimit also rejects unknown fields for closed launcher schemas.
+// Token validation catches duplicate members; the typed value is decoded once.
+func DecodeClosedLimit(data []byte, value any, contract Contract, limit int) error {
+	if err := validateJSON(data, value, contract, limit); err != nil {
+		return err
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	return d.Decode(value)
+}
+
 func validateJSON(data []byte, value any, contract Contract, limit int) error {
 	if len(data) > limit {
 		return fmt.Errorf("observation exceeds %d bytes", limit)

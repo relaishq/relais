@@ -339,7 +339,21 @@
     "clock-coverage-drop-run-seed",
     "clock-coverage-drop-frontend-error",
     "clock-coverage-repair-gap-with-later-sample",
-    "clock-coverage-omit-final-coverage"
+    "clock-coverage-omit-final-coverage",
+    "clock-select-inward-rounding",
+    "clock-select-clip-ceiling",
+    "clock-select-latest-only-M",
+    "clock-select-duplicate-updates",
+    "clock-select-ignore-worker2",
+    "clock-select-wrong-slot",
+    "clock-select-omit-frontend",
+    "clock-select-omit-K",
+    "clock-select-double-K",
+    "clock-select-mixed-mode",
+    "clock-select-leap",
+    "clock-select-missing-column14-pad",
+    "clock-select-ignore-post-window-break",
+    "clock-select-control-hardcoded-shared"
   ],
   "killed": [
     {
@@ -3004,6 +3018,104 @@
       "id": "clock-coverage-omit-final-coverage",
       "test": "TestFinalJudgmentRefreshesClockCoverage",
       "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-inward-rounding",
+      "test": "TestClockSelectOutwardRounding",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-clip-ceiling",
+      "test": "TestClockSelectCeilingRefuses",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-latest-only-M",
+      "test": "TestClockSelectMaximumIncludesEarlierIntervals",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-duplicate-updates",
+      "test": "TestClockSelectDuplicateUpdatesDoNotCount",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-ignore-worker2",
+      "test": "TestClockSelectUsesBothWorkers",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-wrong-slot",
+      "test": "TestClockSelectInventorySlots",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-omit-frontend",
+      "test": "TestClockSelectAddsFrontendError",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-omit-K",
+      "test": "TestClockSelectSignalReserveExactlyOnce",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-double-K",
+      "test": "TestClockSelectSignalReserveExactlyOnce",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-mixed-mode",
+      "test": "TestClockSelectMixedModesRefuse",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-leap",
+      "test": "TestClockSelectLeapRefuses",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-missing-column14-pad",
+      "test": "TestClockSelectColumn14Padding",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-ignore-post-window-break",
+      "test": "TestClockSelectPostWindowBreakRefuses",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-select-control-hardcoded-shared",
+      "test": "TestClockSelectRelocatedControl",
+      "package": "./internal/operatorgates/clocks",
       "evidence": "killed",
       "guardFingerprint": ""
     }

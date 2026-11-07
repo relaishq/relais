@@ -121,6 +121,119 @@ timeline covering the run including its tail, no in-run breaks, and zero
 `omitted_refreshes`. An empty batch or a non-zero `At` alone proves no coverage.
 Coverage is enforced with the fixed bounds. Bound selection belongs to slice 5.
 
+## Recorded clock selection (slice 5a)
+
+`relais-gates clock-select -evidence admission.json -policy policy.json` writes
+a version-1 receipt and its SHA-256 digest to stdout. Refusal exits 1 and writes
+a fixed reason to stderr; it emits no receipt. The command performs no host,
+caller or judge operations. Selection and lease evidence are recorded only:
+existing gate bounds, caller flags, clock admission, coverage qualification and
+judge outputs stay unchanged. A receipt is not authorization to use its bounds.
+
+The launcher supplies `clocks.SelectionEvidence`: a run ID, inventory-resolved
+`frontendSlot` and `controlSlot`, `callerLeapMode`, admission start/end in Unix
+seconds, four `hosts` (`relay`, `shared`, `w1`, `w2`), and frontend
+`falsification` evidence. Each host supplies its slot, leap mode, complete
+tracking log and lease observation. All five leap modes must agree, either
+`smeared` or `unsmeared`; every covering tracking row must be Normal (`N`).
+There is no default launcher policy. For example, a rehearsal can use:
+
+```json
+{
+  "windowSeconds": 120,
+  "floorNs": 50000,
+  "scaleNumerator": 2,
+  "scaleDenominator": 1,
+  "allowanceNs": 10000,
+  "signalReserveNs": 50000,
+  "controlCeilingNs": 250000,
+  "workerCeilingNs": 350000,
+  "maxDispersionGrowthPpm": "2"
+}
+```
+
+These are rehearsal targets, not measured deployment guarantees. The declared
+dispersion-growth maximum must cover the measured total rate, including clock
+frequency uncertainty. It is not chrony's `maxclockerror` setting alone.
+
+The admission window lasts at least 120 seconds. Its end must equal the oldest
+latest retained server update minus one second; its start is that end minus
+`windowSeconds`. This admits only the trailing common window. Each server
+needs at least ten distinct updates within it, predecessor/closing coverage
+with one-second timestamp margins, no interval longer than 60 seconds and no
+overlapping tracking break (also allowing the break's one-second margin).
+Identical repeated rows do not count again; distinct equal-second updates do.
+Refuse any break from the start margin through the latest host state, even after
+the common window. Leap/reference checks continue through every host's last row.
+Expired leases refuse selection, as does a report time more than 60 seconds
+after that host's latest tracking row.
+Warm-up rows remain in evidence outside the window. Startup, a scheduled leap,
+loss or a source change cannot be hidden by counting later good rows.
+
+Falsification evidence must be enabled, have no losses or sticky falsification,
+and contain checked records for control and both workers throughout admission.
+The selector checks the raw four timestamps against the padded tracking
+envelopes again. At the one-Hz cadence, each target's endpoints must be within
+two seconds of the window endpoints and successive records at most two seconds
+apart. Missing, unchecked or contradicted observations refuse selection.
+
+Column 14 is retained as `maxErrorDecimal` by the explicit diagnostic reader.
+Chrony prints it with four significant digits (`%.3e`). Add half its last
+printed unit before taking each host's maximum: `4.244e-02` represents at most
+`0.042445` seconds. Old numeric-only rows cannot supply this receipt evidence.
+The selector does not infer missing precision from a binary float.
+
+For each host maximum M, compute `H(M) = ceil_ns(max(f, s*M) + A)` using exact
+rational arithmetic, then `B_control = H(M_frontend) + H(M_control)` and
+`B_worker = H(M_frontend) + H(max(M_w1, M_w2)) + K`. Each host rounds outward
+before the sum; K is added once. Co-located frontend and control still count
+twice. Above either ceiling, refuse rather than clip. Caller drift stays
+100 ppm. No pass threshold or trial population changes.
+
+The receipt records the formula, run, interval, roles, all five modes, policy,
+per-server update counts/padded maxima, declared and measured growth rates,
+recorded lease values, selected bounds and evidence digest. Digest the compact
+UTF-8 JSON from the Go receipt schema, excluding the enclosing `sha256` member
+and output newline. Host arrays are sorted by slot; rows must already be in
+timestamp order, preserving equal-second input order. The evidence digest covers normalized falsification records from
+`Falsification.MarshalJSON`, not original log or JSON bytes, and excludes opaque
+cursors. Input whitespace and JSON member order are accepted; recompute receipt
+bytes to compare digests.
+The receipt exposes fixed slots and numeric values, not source addresses.
+In slice 5b, binding will additionally compare evidence with the session's own
+pre-run rows, so recomputation alone is not proof of observation.
+
+`host.ClockWithLease` opts into `read_clock(..., lease=True)`. Existing
+`Clock`/`ClockWithProbes` reads remain unchanged, including command count and
+output. The diagnostic reader takes two bounded `chronyc -c tracking` reads,
+separated by 0.2 seconds, requiring the same reference update and identity.
+It reads the selected source's runtime Poll exponent from `chronyc -c sources`;
+refclock `dpoll` and the configured maxpoll limit are not that field. It never
+parses chrony configuration.
+
+At report time, `E = abs(System time) + RootDelay/2 + RootDispersion`. Add 2 ns
+for the printed nine-decimal values before rounding outward. Record
+the two dispersion values and the minimum possible elapsed interval (second
+request-send minus first completion). The Go recorder adds one nanosecond for
+the two printed dispersion rounding errors and calculates an outward bound on
+the total dispersion-growth rate. That measured total replaces the summed
+residual/skew/maxclockerror slope; residual and skew remain recorded and are
+not added again. Selection refuses a rate above the declared maximum.
+
+In 5a, `hostElapsedNs` records only monotonic time inside the host reader.
+`RecordLease` uses this host-only age and records an outward bound and remaining
+lifetime until the last update plus two runtime polls. Repeated reads do not renew an update. Changed
+updates, read failures, malformed optional lease data and wire pressure record
+unavailable evidence; they do not alter existing scalar admission. In 5b the
+gate must add its monotonic elapsed time from request-send, including transport;
+the host-only age in 5a does not prove this full age. The new
+lease fields are optional recorded data. No existing fault path checks them.
+
+Slice 5c will deploy a provider-neutral probe helper and archive receipts in
+rehearsal, still recorded only. Slice 5b will bind Init/config/caller/coverage
+to the receipt, enforce leases only on enumerated fault paths, keep restoration
+possible, and drain coverage before the final judge within its deadline.
+
 The opt-in frontend clock prober writes an append-only run-local file, capped
 at 4 MiB including one capacity marker. Each complete ASCII line is exactly
 84 bytes: `T FFFFFFFFFFFFFFFFFFF HHHHHHHHHHHHHHHHHHH SSSSSSSSSSSSSSSSSSS RRRRRRRRRRRRRRRRRRR C`

@@ -344,6 +344,10 @@ func (e Falsification) MarshalJSON() ([]byte, error) {
 // stripProbeLog isolates optional decoding before the strict policy decoder.
 // Non-probe members retain their original raw values and duplicate members.
 func stripProbeLog(data []byte) ([]byte, json.RawMessage, error) {
+	return stripClockMember(data, "probeLog")
+}
+
+func stripClockMember(data []byte, member string) ([]byte, json.RawMessage, error) {
 	d := json.NewDecoder(bytes.NewReader(data))
 	first, err := d.Token()
 	if err != nil || first != json.Delim('{') {
@@ -363,10 +367,10 @@ func stripProbeLog(data []byte) ([]byte, json.RawMessage, error) {
 			return nil, nil, err
 		}
 		name := key.(string)
-		if strings.EqualFold(name, "probeLog") {
+		if strings.EqualFold(name, member) {
 			seen++
 			probe = raw
-			if name != "probeLog" {
+			if name != member {
 				seen++
 			}
 			continue

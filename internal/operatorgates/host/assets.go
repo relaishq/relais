@@ -156,3 +156,22 @@ except Exception:
 PY
 `, args, runStartUnixMS)
 }
+
+// ClockWithLease is an explicit diagnostic opt-in. Existing gate reads keep
+// their original commands and timing until receipt enforcement is implemented.
+func ClockWithLease(cursor json.RawMessage, runStartUnixMS int64, path string, probeCursor json.RawMessage) string {
+	args, _ := encoded(struct {
+		Tracking json.RawMessage `json:"tracking"`
+		Probes   json.RawMessage `json:"probes"`
+		Path     string          `json:"path"`
+	}{cursor, probeCursor, path})
+	return "python3 - <<'PY'\n" + source("clock.py") + fmt.Sprintf(`
+import json,gzip,base64
+try:
+ args=json.loads(base64.b64decode('%s'))
+ print(base64.b64encode(gzip.compress(json.dumps(read_clock(args['tracking'], %d, args['path'], args['probes'], lease=True)).encode())).decode())
+except Exception:
+ print('CLOCK_UNKNOWN')
+PY
+`, args, runStartUnixMS)
+}

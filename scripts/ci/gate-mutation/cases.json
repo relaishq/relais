@@ -3777,5 +3777,145 @@
     "Test": "TestFinalJudgmentRefreshesClockCoverage",
     "Marker": "MUTATION: final-coverage-snapshot",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "clock-select-inward-rounding",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "ceilNS",
+    "Old": "n.Add(n, big.NewInt(1))",
+    "New": "n.Add(n, big.NewInt(0))",
+    "Test": "TestClockSelectOutwardRounding",
+    "Marker": "MUTATION: inward-rounding",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-clip-ceiling",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "return out, fmt.Errorf(\"clock-select-ceiling\")",
+    "New": "cb.SetInt64(min(cb.Int64(), policy.ControlCeilingNS)); wb.SetInt64(min(wb.Int64(), policy.WorkerCeilingNS))",
+    "Test": "TestClockSelectCeilingRefuses",
+    "Marker": "MUTATION: clip-ceiling",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-latest-only-M",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "selectionMaximum",
+    "Old": "if value.Cmp(m) > 0 {",
+    "New": "if true {",
+    "Test": "TestClockSelectMaximumIncludesEarlierIntervals",
+    "Marker": "MUTATION: latest-only-M",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-duplicate-updates",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "selectionMaximum",
+    "Old": "updates[identity] = true",
+    "New": "updates[TrackingRow{UnixSeconds: int64(k)}] = true",
+    "Test": "TestClockSelectDuplicateUpdatesDoNotCount",
+    "Marker": "MUTATION: duplicate-updates",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-ignore-worker2",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "if maximum[\"w2\"].Cmp(workerM) > 0 {",
+    "New": "if false {",
+    "Test": "TestClockSelectUsesBothWorkers",
+    "Marker": "MUTATION: ignore-worker2",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-wrong-slot",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "selectionHostBound(maximum[input.FrontendSlot], policy)",
+    "New": "selectionHostBound(maximum[\"relay\"], policy)",
+    "Test": "TestClockSelectInventorySlots",
+    "Marker": "MUTATION: wrong-slot",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-omit-frontend",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "cb := new(big.Int).Add(big.NewInt(front), big.NewInt(control))",
+    "New": "cb := new(big.Int).Add(big.NewInt(0), big.NewInt(control))",
+    "Test": "TestClockSelectAddsFrontendError",
+    "Marker": "MUTATION: omit-frontend",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-omit-K",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "wb.Add(wb, big.NewInt(policy.SignalReserveNS))",
+    "New": "wb.Add(wb, big.NewInt(0))",
+    "Test": "TestClockSelectSignalReserveExactlyOnce",
+    "Marker": "MUTATION: signal-reserve",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-double-K",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "wb.Add(wb, big.NewInt(policy.SignalReserveNS))",
+    "New": "wb.Add(wb, big.NewInt(2*policy.SignalReserveNS))",
+    "Test": "TestClockSelectSignalReserveExactlyOnce",
+    "Marker": "MUTATION: signal-reserve",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-mixed-mode",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Select",
+    "Old": "if h.LeapMode != input.CallerLeapMode {",
+    "New": "if false {",
+    "Test": "TestClockSelectMixedModesRefuse",
+    "Marker": "MUTATION: mixed-mode",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-leap",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "selectionMaximum",
+    "Old": "if prev.LeapStatus != \"N\" || row.LeapStatus != \"N\" {",
+    "New": "if false {",
+    "Test": "TestClockSelectLeapRefuses",
+    "Marker": "MUTATION: scheduled-leap",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-missing-column14-pad",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "Column14MaximumNS",
+    "Old": "n.Add(n, pad)",
+    "New": "n.Add(n, new(big.Rat).Mul(pad, big.NewRat(0, 1)))",
+    "Test": "TestClockSelectColumn14Padding",
+    "Marker": "MUTATION: missing-column14-pad",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-ignore-post-window-break",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "selectionMaximum",
+    "Old": "b.UnixSeconds >= start-2",
+    "New": "b.FromUnixSeconds <= end+2 && b.UnixSeconds >= start-2",
+    "Test": "TestClockSelectPostWindowBreakRefuses",
+    "Marker": "MUTATION: ignore-post-window-break",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-select-control-hardcoded-shared",
+    "File": "internal/operatorgates/clocks/select.go",
+    "Function": "selectionProbes",
+    "Old": "slot = input.ControlSlot",
+    "New": "slot = \"shared\"",
+    "Test": "TestClockSelectRelocatedControl",
+    "Marker": "MUTATION: relocated-control",
+    "Package": "./internal/operatorgates/clocks"
   }
 ]
