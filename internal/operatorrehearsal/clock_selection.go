@@ -22,7 +22,6 @@ import (
 )
 
 const clockProbePath = "/run/relais-clock-probes.bin"
-const clockStopPath = "/run/relais-clock-stop"
 
 type ClockSelectionReport struct {
 	Cause          string         `json:"cause"`
@@ -42,7 +41,6 @@ func clockSelectionCause(cause string) string {
 
 type clockAdmissionPorts struct {
 	start        func(context.Context, time.Time) error
-	stop         func(context.Context)
 	read         func(context.Context, string, string) (string, error)
 	selectBounds func(context.Context, clocks.SelectionEvidence, clocks.SelectionPolicy) (clocks.ClockSelection, string)
 	pause        func(context.Context, time.Duration) error
@@ -67,7 +65,7 @@ func (r *rehearsal) recordClockSelection(ctx context.Context) {
 	front, f := inventory.ComponentSlot(components, "signal")
 	control, c := inventory.ComponentSlot(components, "control")
 	r.recordClockSelectionReport(collectClockSelection(ctx, r.run, front, control, clockAdmissionPorts{
-		stop: r.stopClockHelpers, read: r.readAdmissionClock, selectBounds: r.selectClockBounds, pause: pause, now: time.Now,
+		read: r.readAdmissionClock, selectBounds: r.selectClockBounds, pause: pause, now: time.Now,
 		start: func(ctx context.Context, end time.Time) error {
 			if !f || !c {
 				return errors.New("clock-selection-helper")
@@ -120,7 +118,7 @@ func (r *rehearsal) startClockHelpers(ctx context.Context, front, control string
 		if seconds < 1 {
 			return errors.New("clock-selection-helper")
 		}
-		args := []string{"python3", "/run/relais-clock-helper.py", "--listen", r.topology.Hosts[slot].IP + ":24891", "--seconds", strconv.Itoa(seconds), "--stop-file", clockStopPath}
+		args := []string{"python3", "/run/relais-clock-helper.py", "--listen", r.topology.Hosts[slot].IP + ":24891", "--seconds", strconv.Itoa(seconds)}
 		if slot == front {
 			args = append(args, "--output", clockProbePath)
 			for _, target := range []string{"control", "w1", "w2"} {
@@ -153,11 +151,6 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		}
 		if parent.Err() == nil {
 			_ = p.pause(parent, max(0, end.Add(2*time.Second).Sub(p.now())))
-		}
-		if parent.Err() != nil {
-			stopCtx, stopDone := context.WithTimeout(context.Background(), 2*time.Second)
-			defer stopDone()
-			p.stop(stopCtx)
 		}
 	}()
 	result := &ClockSelectionReport{Cause: "clock-selection-unavailable"}
@@ -331,13 +324,4 @@ func mergeClockProbeRecords(records, updates []clocks.ProbeRecord) []clocks.Prob
 		}
 	}
 	return records
-}
-
-// Cooperative stop flags also cover a detached helper that starts after cancellation.
-func (r *rehearsal) stopClockHelpers(ctx context.Context) {
-	var workers sync.WaitGroup
-	for _, slot := range Slots {
-		workers.Go(func() { _, _ = r.clockHostCommand(ctx, slot, nil, nil, "touch", clockStopPath) })
-	}
-	workers.Wait()
 }

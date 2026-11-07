@@ -3,7 +3,6 @@ import argparse
 import http.server
 import ipaddress
 import json
-import pathlib
 import threading
 import time
 import http.client
@@ -110,20 +109,12 @@ def observe(targets, output, stop):
         thread.join()
 
 
-def watch_stop(path, stop):
-    while not stop.is_set():
-        if pathlib.Path(path).is_file():
-            stop.set()
-        stop.wait(0.1)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--listen', required=True)
     parser.add_argument('--seconds', type=int, default=150)
     parser.add_argument('--peer', action='append', default=[])
     parser.add_argument('--output', default='')
-    parser.add_argument('--stop-file', default='')
     args = parser.parse_args()
     address, port = args.listen.rsplit(':', 1)
     targets = peers(args.peer)
@@ -135,9 +126,6 @@ def main():
     serving.start()
     timer = threading.Timer(args.seconds, stop.set)
     timer.start()
-    watcher = threading.Thread(target=watch_stop, args=(args.stop_file, stop)) if args.stop_file else None
-    if watcher:
-        watcher.start()
     try:
         if targets:
             with open(args.output, 'xb') as output:
@@ -150,8 +138,6 @@ def main():
         server.shutdown()
         server.server_close()
         serving.join()
-        if watcher:
-            watcher.join()
 
 
 if __name__ == '__main__':

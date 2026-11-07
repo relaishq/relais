@@ -165,8 +165,9 @@ overlapping tracking break (also allowing the break's one-second margin).
 Identical repeated rows do not count again; distinct equal-second updates do.
 Refuse any break from the start margin through the latest host state, even after
 the common window. Leap/reference checks continue through every host's last row.
-Expired leases refuse selection, as does a report time more than 60 seconds
-after that host's latest tracking row.
+Expired leases refuse selection. Lease measurements must lie within the inclusive
+interval from one second before to 60 seconds after that host's latest retained
+row; otherwise selection refuses with `clock-select-stale`.
 Warm-up rows remain in evidence outside the window. Startup, a scheduled leap,
 loss or a source change cannot be hidden by counting later good rows.
 
@@ -1066,8 +1067,7 @@ The frontend also needs `--output RUN_LOCAL_FILE` and all three
 `--peer control=http://PRIVATE_IPV4:PORT`, `--peer w1=...`, `--peer w2=...`.
 Use an isolated private network: this unauthenticated helper accepts private IPv4,
 bypasses proxies, timestamps after TCP connect, and probes at 1 Hz (750 ms socket
-timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–300 s; optional `--stop-file PATH` requests cooperative
-shutdown when that file appears.
+timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–300 s.
 
 After negative controls restore, rehearsal establishes/drains cursors before
 starting helpers or the admission timer, without reading the probe file. This
@@ -1076,9 +1076,9 @@ breaks outside the selector's margin. Startup history remains recorded. Then
 parallel reads/selection start at 123 s within a fixed 150 s admission deadline;
 setup has ten seconds inside that deadline and helper lifetimes use the remainder.
 Non-cancelled exits wait through deadline +2 s before calibration (152 s plus
-preflight, at most 162 s). Parent cancellation requests cooperative stop files
-on all hosts with a two-second cleanup budget and returns promptly. Generated
-chrony configuration declares hosts and caller unsmeared.
+preflight, at most 162 s). Parent cancellation skips that wait and returns promptly;
+deployment cleanup removes the helpers with their containers. Generated chrony
+configuration declares hosts and caller unsmeared.
 
 The 5 ppm growth policy uses runs 42302414107/42330487259: their maximum
 successful-read residual-plus-skew was 0.251/0.147 ppm. Adding the configured
