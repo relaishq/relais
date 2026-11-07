@@ -3,10 +3,13 @@ package operatorgates
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -255,6 +258,23 @@ func TestPublicCategoryAllowlist(t *testing.T) {
 		}
 	}
 }
+func TestSessionRefusesUnvalidatedReceipt(t *testing.T) {
+	init := operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: []operator.Gate{operator.Rollout}, ClockReceiptSHA256: strings.Repeat("b", 64)}, ArmedAtUnixMS: "1000000", EndUnixMS: "7300000"}
+	raw, err := json.Marshal(operator.Frame{Type: "init", Session: "s", Init: &init})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := operatortransport.NewCodec(bytes.NewReader(append(raw, '\n')), new(bytes.Buffer)).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewSession(frame.Session, *frame.Init, &FakeClock{Now: time.UnixMilli(1000000)})
+	var refusal *clocks.BindingError
+	if s != nil || !errors.As(err, &refusal) || refusal.Cause != "clock-binding-not-active" {
+		t.Fatal("MUTATION: receipt-claim-not-active", err)
+	}
+}
+
 func TestScenarioDigestBoundary(t *testing.T) {
 	for _, digest := range []string{"", "customer-production-db", strings.Repeat("g", 64), strings.Repeat("A", 64), strings.Repeat("a", 64)} {
 		init := operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: digest, Gates: []operator.Gate{operator.Rollout}}, ArmedAtUnixMS: "1000000", EndUnixMS: "7300000"}

@@ -372,7 +372,36 @@
     "clock-select-ignore-expired-lease",
     "clock-select-ignore-early-lease",
     "clock-select-ignore-late-lease",
-    "clock-admission-ignore-parent-cancel"
+    "clock-admission-ignore-parent-cancel",
+    "clock-binding-swapped-run",
+    "clock-binding-wrong-slot",
+    "clock-binding-wrong-mode",
+    "clock-binding-config-bounds",
+    "clock-binding-caller-bounds",
+    "clock-binding-altered-digest",
+    "clock-binding-altered-evidence-digest",
+    "clock-binding-selected-bounds",
+    "clock-binding-forged-receipt",
+    "clock-binding-open-schema",
+    "clock-binding-host-count",
+    "clock-binding-host-slot",
+    "clock-binding-host-mode",
+    "clock-binding-incomplete",
+    "clock-binding-unordered",
+    "clock-binding-source-trust",
+    "clock-binding-before-run",
+    "clock-binding-run-boundary",
+    "clock-binding-missing-row",
+    "clock-binding-column14-token",
+    "clock-binding-omit-predecessor",
+    "clock-binding-omit-successor",
+    "clock-binding-freeze-gap",
+    "scenario-omit-receipt",
+    "scenario-invalid-receipt",
+    "scenario-unbound-wire-change",
+    "clock-binding-ignore-worker2",
+    "clock-binding-self-selected-policy",
+    "clock-binding-accept-unvalidated-claim"
   ],
   "killed": [
     {
@@ -3268,6 +3297,209 @@
       "id": "clock-admission-ignore-parent-cancel",
       "test": "TestClockSelectionPartialStartWaits",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-swapped-run",
+      "test": "TestReceiptBindingRefusals/run",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-wrong-slot",
+      "test": "TestReceiptBindingRefusals/roles",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-wrong-mode",
+      "test": "TestReceiptBindingRefusals/mode",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-config-bounds",
+      "test": "TestReceiptBindingRefusals/config",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-caller-bounds",
+      "test": "TestReceiptBindingRefusals/caller",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-altered-digest",
+      "test": "TestReceiptBindingRefusals/receipt-digest",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-altered-evidence-digest",
+      "test": "TestReceiptBindingRefusals/evidence-digest",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-selected-bounds",
+      "test": "TestReceiptBindingRefusals/selected-bounds",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-forged-receipt",
+      "test": "TestReceiptBindingRefusals/selection",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-open-schema",
+      "test": "TestReceiptBindingRefusals/unknown",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-host-count",
+      "test": "TestReceiptBindingRefusals/host-count",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-host-slot",
+      "test": "TestReceiptBindingRefusals/host-slot",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-host-mode",
+      "test": "TestReceiptBindingRefusals/host-mode",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-incomplete",
+      "test": "TestReceiptBindingRefusals/incomplete",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-unordered",
+      "test": "TestReceiptBindingRefusals/order",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-source-trust",
+      "test": "TestReceiptBindingRefusals/source",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-before-run",
+      "test": "TestReceiptBindingRefusals/before-run",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-run-boundary",
+      "test": "TestReceiptBindingRefusals/run-boundary",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-missing-row",
+      "test": "TestReceiptBindingRefusals/missing-row",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-column14-token",
+      "test": "TestReceiptBindingRefusals/token",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-omit-predecessor",
+      "test": "TestReceiptBindingRefusals/predecessor",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-omit-successor",
+      "test": "TestReceiptBindingRefusals/successor",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-freeze-gap",
+      "test": "TestReceiptBindingFrozenReadback",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "scenario-omit-receipt",
+      "test": "TestScenarioIdentityBindsReceipt",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "scenario-invalid-receipt",
+      "test": "TestScenarioIdentityBindsReceipt",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "scenario-unbound-wire-change",
+      "test": "TestScenarioIdentityUnbound",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-ignore-worker2",
+      "test": "TestReceiptBindingEveryHost/w2",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-self-selected-policy",
+      "test": "TestReceiptBindingRefusals/policy",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-accept-unvalidated-claim",
+      "test": "TestSessionRefusesUnvalidatedReceipt",
+      "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""
     }
