@@ -33,7 +33,9 @@ type Mailbox interface {
 }
 
 type Adapter struct {
-	Topology *Topology
+	// LeaseProbeFiles is trusted launcher configuration, keyed by host slot.
+	LeaseProbeFiles map[string]string
+	Topology        *Topology
 	// Containers is a snapshot from Deployment.ContainerIDs after successful boot.
 	Containers  map[string]string
 	Runner      Runner
@@ -47,7 +49,7 @@ type Adapter struct {
 func (a *Adapter) Capabilities() []operator.Operation {
 	var ops []operator.Operation
 	if a.Topology != nil && a.Runner != nil {
-		ops = append(ops, operator.HostExecute, operator.HostReadBatch)
+		ops = append(ops, operator.HostExecute, operator.HostReadBatch, operator.HostLeaseRead, operator.HostLeaseReadBatch)
 	}
 	if a.Caller != nil {
 		ops = append(ops, operator.CallerReady, operator.CallerStart, operator.CallerStop)
@@ -101,6 +103,8 @@ func (a *Adapter) Execute(ctx context.Context, req operator.Request) operator.Re
 		default:
 			return a.Caller.Stop(bounded, req)
 		}
+	case operator.HostLeaseRead, operator.HostLeaseReadBatch:
+		return a.executeLeaseRead(bounded, req)
 	case operator.HostReadBatch:
 		return a.executeReadBatch(bounded, req)
 	case operator.HostExecute:

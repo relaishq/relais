@@ -208,7 +208,7 @@ func TestLeaseGuardBoundedRefresh(t *testing.T) {
 func TestLeaseReadRequestSend(t *testing.T) {
 	for _, batch := range []bool{false, true} {
 		s, c := fixtureSession(t)
-		s.capabilities[operator.HostReadBatch] = batch
+		s.capabilities[operator.HostLeaseRead], s.capabilities[operator.HostLeaseReadBatch] = true, batch
 		p := &observationPeer{respond: func(req operator.Request) operator.Reply {
 			c.Advance(100 * time.Millisecond)
 			raw := []byte(`{"errorBoundNs":1,"rateErrorPpm":0,"measuredUnixNs":"1793930000000000000"}`)

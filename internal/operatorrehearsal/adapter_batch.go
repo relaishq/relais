@@ -28,12 +28,12 @@ func (a *Adapter) executeReadBatch(ctx context.Context, req operator.Request) op
 		}
 	}
 	deadline, _ := ctx.Deadline()
-	if ctx.Err() != nil || time.Until(deadline) < operator.HostSubmissionMinimum {
+	if ctx.Err() != nil || req.Operation == operator.HostReadBatch && time.Until(deadline) < operator.HostSubmissionMinimum {
 		return refusal(req.ID, "deadline-before-submission")
 	}
 	out := operator.HostReadBatchOutput{Replies: make([]operator.Reply, len(Slots))}
 	for i, read := range args.Reads {
-		child := operator.Request{ID: read.Target, Operation: operator.HostReadBatch, Target: read.Target, Action: req.Action, Script: read.Script}
+		child := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}
 		out.Replies[i] = a.executeHost(ctx, child)
 	}
 	payload, err := json.Marshal(out)

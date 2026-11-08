@@ -34,13 +34,17 @@ const (
 	// HostReadBatch is optional. It groups four independent inventory or clock
 	// reads; adapters must join every result and must never retry a child.
 	HostReadBatch Operation = "host.read-batch"
-	CallerReady   Operation = "caller.ready"
-	CallerStart   Operation = "caller.start"
-	CallerStop    Operation = "caller.stop"
-	MailboxRead   Operation = "mailbox.read"
-	MailboxCreate Operation = "mailbox.create"
-	StoreObserve  Operation = "store.observe"
-	StoreFailover Operation = "store.failover"
+	// Lease observations carry typed inputs only; adapters generate the reader.
+	// Unlike arbitrary host scripts, these reads may use a bounded 4P deadline.
+	HostLeaseRead      Operation = "host.lease-read"
+	HostLeaseReadBatch Operation = "host.lease-read-batch"
+	CallerReady        Operation = "caller.ready"
+	CallerStart        Operation = "caller.start"
+	CallerStop         Operation = "caller.stop"
+	MailboxRead        Operation = "mailbox.read"
+	MailboxCreate      Operation = "mailbox.create"
+	StoreObserve       Operation = "store.observe"
+	StoreFailover      Operation = "store.failover"
 	// CallerAdmission is an optional negotiation marker. Its effects use the
 	// existing caller and mailbox operations with the admission-boundary phase.
 	CallerAdmission Operation = "caller.admission"
@@ -124,4 +128,17 @@ type HostRead struct {
 // transport certainty, exit status and bounded HostOutput. Blobs are forbidden.
 type HostReadBatchOutput struct {
 	Replies []Reply `json:"replies"`
+}
+
+// HostLeaseReadArgs permits one host, or all four ordered hosts for a batch.
+// No script is accepted. Cursors are opaque JSON data consumed by the fixed reader.
+type HostLeaseReadArgs struct {
+	Reads []HostLeaseReadInput `json:"reads"`
+}
+type HostLeaseReadInput struct {
+	Target         string          `json:"target"`
+	Cursor         json.RawMessage `json:"cursor"`
+	RunStartUnixMS int64           `json:"runStartUnixMs"`
+	ProbeFile      string          `json:"probeFile"`
+	ProbeCursor    json.RawMessage `json:"probeCursor"`
 }
