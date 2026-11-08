@@ -292,7 +292,7 @@ def signal_cpu():
 def signal_usage():
     try:
         return resource.getrusage(resource.RUSAGE_THREAD)
-    except (AttributeError, OSError):
+    except OSError:
         return None
 
 
@@ -305,19 +305,17 @@ def kill_main(unit, pid):
     """
     fd = os.pidfd_open(pid)
     diagnostics, previous = {"priority": "unchanged"}, None
-    kind = getattr(os, "PRIO_PROCESS", None)
     try:
         if int(command(["systemctl", "show", "--value", "-p", "MainPID", unit])) != pid:
             raise ValueError("predecessor changed before signal")
         # This one-shot thread normally inherits the launcher's low priority.
         # Boost only the bracket; never elevate systemctl or exit polling.
-        if kind is not None:
-            try:
-                old = os.getpriority(kind, 0)
-                os.setpriority(kind, 0, -20)
-                previous, diagnostics["priority"] = old, "nice--20"
-            except (AttributeError, OSError):
-                pass
+        try:
+            old = os.getpriority(os.PRIO_PROCESS, 0)
+            os.setpriority(os.PRIO_PROCESS, 0, -20)
+            previous, diagnostics["priority"] = old, "nice--20"
+        except OSError:
+            pass
         cpu_before, usage_before = signal_cpu(), signal_usage()
         before = time.time_ns()
         signal.pidfd_send_signal(fd, signal.SIGKILL)
@@ -326,7 +324,7 @@ def kill_main(unit, pid):
     finally:
         if previous is not None:
             try:
-                os.setpriority(kind, 0, previous)
+                os.setpriority(os.PRIO_PROCESS, 0, previous)
             except OSError:
                 diagnostics["priority"] = "nice--20-restore-failed"
         os.close(fd)

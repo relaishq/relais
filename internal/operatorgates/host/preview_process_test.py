@@ -50,9 +50,10 @@ class Transcript:
         self.priorities, self.closed = [], []
         def priority(_, __, value):
             self.priorities.append(value)
+            self.calls.append(["setpriority", value])
             if value == getattr(self, "refuse_priority", None):
                 raise PermissionError()
-        with patch.object(host.os, "close", self.closed.append), patch.object(host.os, "getpriority", return_value=10, create=True), patch.object(host.os, "setpriority", priority, create=True):
+        with patch.object(host.os, "close", self.closed.append), patch.object(host.os, "getpriority", return_value=10, create=True), patch.object(host.os, "setpriority", priority, create=True), patch.object(host.resource, "RUSAGE_THREAD", 0, create=True):
             yield
 
     def signals(self):
@@ -179,20 +180,22 @@ class ProcessTests(unittest.TestCase):
 
     def test_signal_bracket_times_only_the_kill(self):
         # The bracket contains only the signal, without systemctl observation time.
-        t, order = Transcript(), []
-        base = t.command
-        def command(args):
-            order.append(args[0])
-            return base(args)
-        t.command = command
+        t = Transcript()
+        order = t.calls
         clock = iter(range(1_000_000_000_000_000_000, 1_000_000_000_000_000_000 + 1000, 100))
         def time_ns():
-            order.append("clock")
+            order.append(["clock"])
             return next(clock)
         with patch.object(host.time, "time_ns", time_ns):
             result, _ = self.run_step("worker-down", t)
-        start = order.index("clock")
-        self.assertEqual(order[start:start + 3], ["clock", "signal", "clock"])
+        start = order.index(["clock"])
+        self.assertEqual(order[start:start + 3], [["clock"], ["signal", 333, host.signal.SIGKILL], ["clock"]])
+        inherited = 10
+        for call in order:
+            if call[0] == "setpriority":
+                inherited = call[1]
+            elif call[0] == "systemctl":
+                self.assertEqual(inherited, 10, "systemctl must run at inherited priority")
         self.assertEqual(int(result["signalAfterUnixNs"]) - int(result["signalBeforeUnixNs"]), 100)
         changed = Transcript()
         changed.default = "444"
@@ -213,10 +216,10 @@ class ProcessTests(unittest.TestCase):
             self.assertEqual(t.closed, [333])
 
     def test_signal_diagnostics_unavailable(self):
-        with patch.object(host, "signal_cpu", return_value=None), patch.object(host, "signal_usage", return_value=None), patch.object(host.os, "PRIO_PROCESS", None):
+        with patch.object(host, "signal_cpu", return_value=None), patch.object(host, "signal_usage", return_value=None):
             result, _ = self.run_step("worker-down")
-        self.assertEqual(result["signalDiagnostics"], dict(priority="unchanged"))
-        with patch.object(host.pathlib.Path, "read_text", side_effect=OSError()), patch.object(host.resource, "getrusage", side_effect=OSError()):
+        self.assertEqual(result["signalDiagnostics"], dict(priority="nice--20"))
+        with patch.object(host.pathlib.Path, "read_text", side_effect=OSError()), patch.object(host.resource, "RUSAGE_THREAD", 0, create=True), patch.object(host.resource, "getrusage", side_effect=OSError()):
             self.assertIsNone(host.signal_cpu())
             self.assertIsNone(host.signal_usage())
         fields = ["R"] + ["0"] * 36

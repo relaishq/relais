@@ -1117,6 +1117,7 @@ are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
 
 Signal brackets optionally retain `signalDiagnostics`: helper CPU IDs before/after,
 thread involuntary/voluntary context-switch deltas, thread CPU time, and priority.
+`threadCPUTimeNs` comes from `ru_utime`/`ru_stime` at microsecond resolution.
 Usage deltas include the adjacent `getrusage` calls; CPU reads are outside them.
 The one-shot helper attempts nice −20 around the signal, restores its original
 priority before any subprocess or exit polling, and records `unchanged` if denied.
