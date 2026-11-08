@@ -4833,7 +4833,7 @@
   {
     "ID": "clock-artifacts-wire-limit-dropped",
     "Function": "fitsWire",
-    "Old": "len(a.ReceiptGZIP) <= clockArtifactsWireLimit && len(a.EvidenceGZIP) <= clockArtifactsWireLimit-len(a.ReceiptGZIP)",
+    "Old": "len(a.EvidenceGZIP) <= clockArtifactsWireLimit-len(a.ReceiptGZIP)",
     "New": "true",
     "Test": "TestClockBindingArtifactsLimits/wire",
     "Marker": "MUTATION: clock-artifacts-wire-limit",
@@ -4857,6 +4857,55 @@
     "New": "if len(raw) == 0 || len(raw) > ClockArtifactLimit {",
     "Test": "TestClockBindingArtifactsLimits/corrupt",
     "Marker": "MUTATION: clock-artifacts-corrupt",
+    "File": "pkg/operator/clock_artifacts.go",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "clock-artifacts-half-frame-reserve-dropped",
+    "Old": "const clockArtifactsWireLimit = MaxFrameBytes / 2",
+    "New": "const clockArtifactsWireLimit = MaxFrameBytes",
+    "Test": "TestClockBindingArtifactsExactWireLimit",
+    "Marker": "MUTATION: clock-artifacts-exact-wire-limit",
+    "File": "pkg/operator/clock_artifacts.go",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "clock-artifacts-combined-budget-dropped",
+    "Function": "fitsWire",
+    "Old": "len(a.EvidenceGZIP) <= clockArtifactsWireLimit-len(a.ReceiptGZIP)",
+    "New": "len(a.EvidenceGZIP) <= clockArtifactsWireLimit",
+    "Test": "TestClockBindingArtifactsExactWireLimit",
+    "Marker": "MUTATION: clock-artifacts-exact-wire-limit",
+    "File": "pkg/operator/clock_artifacts.go",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "clock-artifacts-wire-boundary-exclusive",
+    "Function": "fitsWire",
+    "Old": "len(a.EvidenceGZIP) <= clockArtifactsWireLimit-len(a.ReceiptGZIP)",
+    "New": "len(a.EvidenceGZIP) < clockArtifactsWireLimit-len(a.ReceiptGZIP)",
+    "Test": "TestClockBindingArtifactsExactWireLimit",
+    "Marker": "MUTATION: clock-artifacts-exact-wire-limit",
+    "File": "pkg/operator/clock_artifacts.go",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "clock-artifacts-receipt-boundary-exclusive",
+    "Function": "PackClockBindingArtifacts",
+    "Old": "len(receipt) > ClockArtifactLimit",
+    "New": "len(receipt) >= ClockArtifactLimit",
+    "Test": "TestClockBindingArtifactsExactRawLimit",
+    "Marker": "MUTATION: clock-artifacts-exact-raw-limit",
+    "File": "pkg/operator/clock_artifacts.go",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "clock-artifacts-evidence-boundary-exclusive",
+    "Function": "PackClockBindingArtifacts",
+    "Old": "len(evidence) > ClockArtifactLimit",
+    "New": "len(evidence) >= ClockArtifactLimit",
+    "Test": "TestClockBindingArtifactsExactRawLimit",
+    "Marker": "MUTATION: clock-artifacts-exact-raw-limit",
     "File": "pkg/operator/clock_artifacts.go",
     "Package": "./pkg/operator"
   }

@@ -445,7 +445,12 @@
     "clock-artifacts-raw-limit-dropped",
     "clock-artifacts-wire-limit-dropped",
     "clock-artifacts-decoded-limit-dropped",
-    "clock-artifacts-crc-ignored"
+    "clock-artifacts-crc-ignored",
+    "clock-artifacts-half-frame-reserve-dropped",
+    "clock-artifacts-combined-budget-dropped",
+    "clock-artifacts-wire-boundary-exclusive",
+    "clock-artifacts-receipt-boundary-exclusive",
+    "clock-artifacts-evidence-boundary-exclusive"
   ],
   "killed": [
     {
@@ -3851,6 +3856,41 @@
     {
       "id": "clock-artifacts-crc-ignored",
       "test": "TestClockBindingArtifactsLimits/corrupt",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-half-frame-reserve-dropped",
+      "test": "TestClockBindingArtifactsExactWireLimit",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-combined-budget-dropped",
+      "test": "TestClockBindingArtifactsExactWireLimit",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-wire-boundary-exclusive",
+      "test": "TestClockBindingArtifactsExactWireLimit",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-receipt-boundary-exclusive",
+      "test": "TestClockBindingArtifactsExactRawLimit",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-evidence-boundary-exclusive",
+      "test": "TestClockBindingArtifactsExactRawLimit",
       "package": "./pkg/operator",
       "evidence": "killed",
       "guardFingerprint": ""

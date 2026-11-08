@@ -9,6 +9,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 func clockSelect(args []string, out, diagnostics io.Writer) int {
@@ -42,7 +43,7 @@ func readClockSelection(path string, v any) error {
 		return err
 	}
 	defer f.Close()
-	const limit = 8 << 20
+	const limit = operator.ClockArtifactLimit
 	b, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return err

@@ -44,13 +44,7 @@ func TestClockBindingArtifactsRoundTrip(t *testing.T) {
 }
 
 func TestClockBindingArtifactsLimits(t *testing.T) {
-	pack := func(raw []byte) []byte {
-		var out bytes.Buffer
-		w := gzip.NewWriter(&out)
-		_, _ = w.Write(raw)
-		_ = w.Close()
-		return out.Bytes()
-	}
+	pack := clockArtifactGZIP
 	t.Run("raw", func(t *testing.T) {
 		for _, oversized := range []bool{false, true} {
 			for _, receiptFirst := range []bool{false, true} {
@@ -115,4 +109,105 @@ func TestClockBindingArtifactsLimits(t *testing.T) {
 			}
 		}
 	})
+}
+
+func clockArtifactGZIP(raw []byte) []byte {
+	var out bytes.Buffer
+	w := gzip.NewWriter(&out)
+	_, _ = w.Write(raw)
+	_ = w.Close()
+	return out.Bytes()
+}
+
+// Find a deterministic incompressible input using the real gzip encoder, rather
+// than pinning a compressor-specific overhead or padding invalid gzip bytes.
+func clockArtifactRawAtCompressedSize(t *testing.T, size int) []byte {
+	t.Helper()
+	noise := make([]byte, size)
+	rng := rand.New(rand.NewPCG(17, 23))
+	for i := range noise {
+		noise[i] = byte(rng.Uint32())
+	}
+	n := size
+	for range 8 {
+		packed := clockArtifactGZIP(noise[:n])
+		if len(packed) == size {
+			return noise[:n]
+		}
+		n += size - len(packed)
+		if n <= 0 || n > len(noise) {
+			break
+		}
+	}
+	t.Fatalf("cannot construct compressed-size fixture: %d", size)
+	return nil
+}
+
+func TestClockBindingArtifactsExactWireLimit(t *testing.T) {
+	// Pin the protocol's half-frame reservation independently of its implementation.
+	const wantLimit = 128 << 10
+	receipt := clockArtifactRawAtCompressedSize(t, wantLimit/4)
+	for _, extra := range []int{0, 1} {
+		evidence := clockArtifactRawAtCompressedSize(t, wantLimit*3/4+extra)
+		for _, swap := range []bool{false, true} {
+			r, e := receipt, evidence
+			if swap {
+				r, e = e, r
+			}
+			a, err := PackClockBindingArtifacts(r, e)
+			if extra != 0 {
+				if err == nil {
+					t.Fatal("MUTATION: clock-artifacts-exact-wire-limit")
+				}
+				// Also enforce the combined limit on independently received bytes.
+				a = ClockBindingArtifacts{clockArtifactGZIP(r), clockArtifactGZIP(e)}
+				if len(a.ReceiptGZIP)+len(a.EvidenceGZIP) != wantLimit+1 {
+					t.Fatal("fixture missed the combined limit+1")
+				}
+				if _, _, err := a.Unpack(); err == nil {
+					t.Fatal("MUTATION: clock-artifacts-exact-wire-limit")
+				}
+				continue
+			}
+			if err != nil || len(a.ReceiptGZIP)+len(a.EvidenceGZIP) != wantLimit {
+				t.Fatal("MUTATION: clock-artifacts-exact-wire-limit", err)
+			}
+			// Model the future Init envelope without adding a live protocol field.
+			body := struct {
+				Init
+				ClockBinding ClockBindingArtifacts `json:"clockBinding"`
+			}{Init: Init{Scenario: Scenario{SchemaVersion: 1, Gates: []Gate{Rollout}}, ArmedAtUnixMS: "1793930000000", EndUnixMS: "1793936300000", Capabilities: []Operation{HostExecute, HostReadBatch, CallerReady, CallerStart, CallerStop, MailboxRead}}, ClockBinding: a}
+			frame := struct {
+				Type    string `json:"type"`
+				Session string `json:"session"`
+				Init    any    `json:"init"`
+			}{"init", "test-run", body}
+			wire, err := json.Marshal(frame)
+			if err != nil || len(wire)+1 > MaxFrameBytes {
+				t.Fatal("MUTATION: clock-artifacts-exact-wire-limit", err, len(wire))
+			}
+			rawReceipt, rawEvidence, err := a.Unpack()
+			if err != nil || !bytes.Equal(rawReceipt, r) || !bytes.Equal(rawEvidence, e) {
+				t.Fatal("MUTATION: clock-artifacts-exact-wire-limit", err)
+			}
+		}
+	}
+}
+
+func TestClockBindingArtifactsExactRawLimit(t *testing.T) {
+	large, small := make([]byte, ClockArtifactLimit), []byte(`{}`)
+	for _, swap := range []bool{false, true} {
+		r, e := large, small
+		if swap {
+			r, e = e, r
+		}
+		a, err := PackClockBindingArtifacts(r, e)
+		if err != nil {
+			t.Fatal("MUTATION: clock-artifacts-exact-raw-limit", err)
+		}
+		rawReceipt, rawEvidence, err := a.Unpack()
+		if err != nil || !bytes.Equal(rawReceipt, r) || !bytes.Equal(rawEvidence, e) {
+			t.Fatal("MUTATION: clock-artifacts-exact-raw-limit", err)
+		}
+	}
 }

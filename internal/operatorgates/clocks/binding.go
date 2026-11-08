@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 // BindingError is a definite refusal before execution. Cause contains no host data.
@@ -48,7 +49,7 @@ func BindReceipt(in ReceiptBindingInput) (ReceiptBinding, error) {
 	var receipt SelectionReceipt
 	var evidence SelectionEvidence
 	refuse := func(cause string) (ReceiptBinding, error) { return ReceiptBinding{}, &BindingError{cause} }
-	const limit = 8 << 20 // Same closed artifact limit as clock-select.
+	const limit = operator.ClockArtifactLimit
 	if observe.DecodeClosedLimit(in.ReceiptJSON, &receipt, nil, limit) != nil || observe.DecodeClosedLimit(in.EvidenceJSON, &evidence, nil, limit) != nil {
 		return refuse("clock-binding-invalid")
 	}

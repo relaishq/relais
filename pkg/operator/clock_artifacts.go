@@ -7,8 +7,8 @@ import (
 	"io"
 )
 
-// ClockArtifactLimit matches the selector and binding module's per-artifact
-// limit. Compression makes admission evidence fit without enlarging wire frames.
+// ClockArtifactLimit bounds each selector, binding and transport artifact.
+// Compression makes admission evidence fit without enlarging wire frames.
 const ClockArtifactLimit = 8 << 20
 
 // Leave room for base64 expansion, scenario identity and the enclosing frame.
@@ -44,7 +44,7 @@ func PackClockBindingArtifacts(receipt, evidence []byte) (ClockBindingArtifacts,
 }
 
 func (a ClockBindingArtifacts) fitsWire() bool {
-	return len(a.ReceiptGZIP) > 0 && len(a.EvidenceGZIP) > 0 && len(a.ReceiptGZIP) <= clockArtifactsWireLimit && len(a.EvidenceGZIP) <= clockArtifactsWireLimit-len(a.ReceiptGZIP)
+	return len(a.EvidenceGZIP) <= clockArtifactsWireLimit-len(a.ReceiptGZIP)
 }
 
 func (a ClockBindingArtifacts) Unpack() (receipt, evidence []byte, err error) {
