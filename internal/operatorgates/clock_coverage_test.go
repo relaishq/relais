@@ -218,7 +218,7 @@ func TestClockCoverageOverflowKeepsPrefixAndSeparateBudgets(t *testing.T) {
 	require.Len(t, e.DrainAttempts, 1)
 	require.Zero(t, e.OmittedDrainAttempts)
 	s.clockBrackets = make([]observe.CoverageBracket, 4096)
-	s.retainClockBracket("w1", "1793930010000000000", "1793930010000000100")
+	s.retainClockBracket("w1", "1793930010000000000", "1793930010000000100", nil)
 	after := s.coverageSnapshot(e.Bounds)
 	require.Equal(t, 1, after.OmittedBrackets)
 	require.Equal(t, 2, after.OmittedAttempts)
@@ -333,5 +333,39 @@ func TestFinalJudgmentRefreshesClockCoverage(t *testing.T) {
 	})
 	if result.Pool == nil || result.Pool.Status != operator.Inconclusive || len(result.Pool.UndecidedMetrics) != 1 || !slices.Contains(result.Pool.UndecidedMetrics[0].Causes, "clock-coverage-missing") {
 		t.Fatal("MUTATION: final-coverage-snapshot", result.Pool)
+	}
+}
+
+func TestSignalDiagnosticsAreRecordedOnly(t *testing.T) {
+	for _, diagnostic := range []any{nil, map[string]any{"priority": "nice--20", "involuntarySwitches": 1, "cpuBefore": 2, "cpuAfter": 3}, map[string]any{"involuntarySwitches": "malformed"}} {
+		r, p, _ := runtimeFixture(t)
+		r.Bounds = new(clocks.Bounds)
+		*r.Bounds = clocks.FixedCoverageBounds()
+		base := p.respond
+		p.respond = func(q operator.Request) operator.Reply {
+			if q.Action != "worker-down" {
+				return base(q)
+			}
+			data := map[string]any{"completed": true, "signalBeforeUnixNs": "1793930010000000000", "signalAfterUnixNs": "1793930010000000100"}
+			if diagnostic != nil {
+				data["signalDiagnostics"] = diagnostic
+			}
+			return hostReply(t, oracleJSON(map[string]any{"kind": "ok", "started": r.Session.clock.Wall(), "ended": r.Session.clock.Wall(), "data": data}))
+		}
+		_, err := r.Step(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"})
+		require.NoError(t, err)
+		require.False(t, r.Session.Latched())
+		e := r.Session.coverageSnapshot(clocks.FixedCoverageBounds())
+		require.Len(t, e.KillBrackets, 1)
+		raw, err := json.Marshal(e)
+		require.NoError(t, err)
+		if d, ok := diagnostic.(map[string]any); ok && d["priority"] == "nice--20" {
+			require.Contains(t, string(raw), `"signalDiagnostics":{"priority":"nice--20","involuntarySwitches":1,"cpuBefore":2,"cpuAfter":3}`)
+		} else {
+			require.NotContains(t, string(raw), "signalDiagnostics")
+		}
+		q := e.Qualification()
+		e.KillBrackets[0].Diagnostics = nil
+		require.Equal(t, q, e.Qualification())
 	}
 }

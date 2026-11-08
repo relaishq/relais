@@ -789,8 +789,8 @@
     "ID": "bracket-around-subprocess",
     "GuardFingerprint": "0b74dfe5220376aae0766ad92ec9e7c1adc739ca39a90cb10c06b0585c161c13",
     "File": "internal/operatorgates/host/preview_process.py",
-    "Old": "        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n        before = time.time_ns()\n",
-    "New": "        before = time.time_ns()\n        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n",
+    "Old": "        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n        # This one-shot thread normally inherits the launcher's low priority.\n        # Boost only the bracket; never elevate systemctl or exit polling.\n        try:\n            old = os.getpriority(os.PRIO_PROCESS, 0)\n            os.setpriority(os.PRIO_PROCESS, 0, -20)\n            previous, diagnostics[\"priority\"] = old, \"nice--20\"\n        except OSError:\n            pass\n        cpu_before, usage_before = signal_cpu(), signal_usage()\n        before = time.time_ns()\n",
+    "New": "        before = time.time_ns()\n        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n        # This one-shot thread normally inherits the launcher's low priority.\n        # Boost only the bracket; never elevate systemctl or exit polling.\n        try:\n            old = os.getpriority(os.PRIO_PROCESS, 0)\n            os.setpriority(os.PRIO_PROCESS, 0, -20)\n            previous, diagnostics[\"priority\"] = old, \"nice--20\"\n        except OSError:\n            pass\n        cpu_before, usage_before = signal_cpu(), signal_usage()\n",
     "Package": "./internal/operatorgates/host",
     "Test": "TestPythonGuards/bracket-around-subprocess",
     "Marker": "MUTATION: python-guard bracket-around-subprocess",
@@ -4790,5 +4790,34 @@
     "Test": "TestResourceRunnerCallerStartBudget/coverage-drain",
     "Marker": "MUTATION: resource-final-drain",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boost-before-mainpid-recheck",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n        # This one-shot thread normally inherits the launcher's low priority.\n        # Boost only the bracket; never elevate systemctl or exit polling.\n        try:\n            old = os.getpriority(os.PRIO_PROCESS, 0)\n            os.setpriority(os.PRIO_PROCESS, 0, -20)\n            previous, diagnostics[\"priority\"] = old, \"nice--20\"\n        except OSError:\n            pass\n",
+    "New": "        # This one-shot thread normally inherits the launcher's low priority.\n        # Boost only the bracket; never elevate systemctl or exit polling.\n        try:\n            old = os.getpriority(os.PRIO_PROCESS, 0)\n            os.setpriority(os.PRIO_PROCESS, 0, -20)\n            previous, diagnostics[\"priority\"] = old, \"nice--20\"\n        except OSError:\n            pass\n        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/boost-before-mainpid-recheck",
+    "Marker": "MUTATION: python-guard boost-before-mainpid-recheck",
+    "PythonTest": "preview_process_test.ProcessTests.test_signal_bracket_times_only_the_kill"
+  },
+  {
+    "ID": "restore-after-exit-poll",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/host/preview_process.py",
+        "Old": "        if previous is not None:\n            try:\n                os.setpriority(os.PRIO_PROCESS, 0, previous)\n            except OSError:\n                diagnostics[\"priority\"] = \"nice--20-restore-failed\"\n",
+        "New": "        diagnostics[\"restoreNice\"] = previous\n"
+      },
+      {
+        "File": "internal/operatorgates/host/preview_process.py",
+        "Old": "        result = {\"completed\": True, \"signalBeforeUnixNs\": str(before), \"signalAfterUnixNs\": str(after)}",
+        "New": "        if op == \"worker-down\" and diagnostics.get(\"restoreNice\") is not None:\n            os.setpriority(os.PRIO_PROCESS, 0, diagnostics.pop(\"restoreNice\"))\n        result = {\"completed\": True, \"signalBeforeUnixNs\": str(before), \"signalAfterUnixNs\": str(after)}"
+      }
+    ],
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/restore-after-exit-poll",
+    "Marker": "MUTATION: python-guard restore-after-exit-poll",
+    "PythonTest": "preview_process_test.ProcessTests.test_signal_bracket_times_only_the_kill"
   }
 ]

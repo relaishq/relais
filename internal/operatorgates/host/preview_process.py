@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import resource
 import signal
 import time
 from urllib.parse import urlparse
@@ -226,7 +227,7 @@ def execute(op, p):
         if old <= 0:
             raise ValueError("missing predecessor")
         if op == "worker-down":
-            before, after = kill_main(unit, old)
+            before, after, diagnostics = kill_main(unit, old)
         else:
             before = time.time_ns()
             command(["systemctl", "stop", unit])
@@ -237,7 +238,10 @@ def execute(op, p):
             time.sleep(0.1)
         else:
             raise ValueError("predecessor exit unconfirmed")
-        return {"completed": True, "signalBeforeUnixNs": str(before), "signalAfterUnixNs": str(after)}
+        result = {"completed": True, "signalBeforeUnixNs": str(before), "signalAfterUnixNs": str(after)}
+        if op == "worker-down":
+            result["signalDiagnostics"] = diagnostics
+        return result
     elif op == "relay-inspect":
         units = {u: int(command(["systemctl", "show", "--value", "-p", "MainPID", u])) for u in ("relais-relay.service", "relais-relay-standby.service")}
         address = urlparse(p["relay"]).netloc
@@ -277,6 +281,21 @@ def execute(op, p):
     return {"completed": True}
 
 
+def signal_cpu():
+    try:
+        # Field 39; comm can itself contain spaces and closing parentheses.
+        return int(pathlib.Path("/proc/thread-self/stat").read_text().rsplit(")", 1)[1].split()[36])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def signal_usage():
+    try:
+        return resource.getrusage(resource.RUSAGE_THREAD)
+    except OSError:
+        return None
+
+
 def kill_main(unit, pid):
     """SIGKILL the unit's exact main process and bracket only that signal.
 
@@ -285,15 +304,39 @@ def kill_main(unit, pid):
     pins the process, so a reused PID can never receive the signal.
     """
     fd = os.pidfd_open(pid)
+    diagnostics, previous = {"priority": "unchanged"}, None
     try:
         if int(command(["systemctl", "show", "--value", "-p", "MainPID", unit])) != pid:
             raise ValueError("predecessor changed before signal")
+        # This one-shot thread normally inherits the launcher's low priority.
+        # Boost only the bracket; never elevate systemctl or exit polling.
+        try:
+            old = os.getpriority(os.PRIO_PROCESS, 0)
+            os.setpriority(os.PRIO_PROCESS, 0, -20)
+            previous, diagnostics["priority"] = old, "nice--20"
+        except OSError:
+            pass
+        cpu_before, usage_before = signal_cpu(), signal_usage()
         before = time.time_ns()
         signal.pidfd_send_signal(fd, signal.SIGKILL)
         after = time.time_ns()
+        usage_after, cpu_after = signal_usage(), signal_cpu()
     finally:
+        if previous is not None:
+            try:
+                os.setpriority(os.PRIO_PROCESS, 0, previous)
+            except OSError:
+                diagnostics["priority"] = "nice--20-restore-failed"
         os.close(fd)
-    return before, after
+    if cpu_before is not None:
+        diagnostics["cpuBefore"] = cpu_before
+    if cpu_after is not None:
+        diagnostics["cpuAfter"] = cpu_after
+    if usage_before is not None and usage_after is not None:
+        diagnostics["involuntarySwitches"] = usage_after.ru_nivcsw - usage_before.ru_nivcsw
+        diagnostics["voluntarySwitches"] = usage_after.ru_nvcsw - usage_before.ru_nvcsw
+        diagnostics["threadCPUTimeNs"] = round(1e9 * ((usage_after.ru_utime - usage_before.ru_utime) + (usage_after.ru_stime - usage_before.ru_stime)))
+    return before, after, diagnostics
 
 
 def configure(unit, role, target):

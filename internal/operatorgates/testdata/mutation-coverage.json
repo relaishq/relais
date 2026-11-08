@@ -439,7 +439,9 @@
     "drain-failure-hidden",
     "drain-judge-reserve-dropped",
     "resource-drain-prepared-dropped",
-    "resource-drain-report-dropped"
+    "resource-drain-report-dropped",
+    "boost-before-mainpid-recheck",
+    "restore-after-exit-poll"
   ],
   "killed": [
     {
@@ -3804,6 +3806,20 @@
       "id": "resource-drain-report-dropped",
       "test": "TestResourceRunnerCallerStartBudget/coverage-drain",
       "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "boost-before-mainpid-recheck",
+      "test": "TestPythonGuards/boost-before-mainpid-recheck",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "restore-after-exit-poll",
+      "test": "TestPythonGuards/restore-after-exit-poll",
+      "package": "./internal/operatorgates/host",
       "evidence": "killed",
       "guardFingerprint": ""
     }

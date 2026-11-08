@@ -272,7 +272,14 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			if observe.Decode(envelope.Data, &bracket, observe.Contract{"signalBeforeUnixNs", "signalAfterUnixNs"}) != nil {
 				return operator.Unknown
 			}
-			r.Session.retainClockBracket(slot, bracket.Before, bracket.After)
+			var diagnostic struct {
+				Signal *observe.SignalDiagnostics `json:"signalDiagnostics"`
+			}
+			// Optional diagnostics cannot change operation certainty.
+			if json.Unmarshal(envelope.Data, &diagnostic) != nil {
+				diagnostic.Signal = nil
+			}
+			r.Session.retainClockBracket(slot, bracket.Before, bracket.After, diagnostic.Signal)
 			workerError, bound := int64(0), int64(0)
 			if lease != nil {
 				workerError, e = lease.Guard.workerError()
