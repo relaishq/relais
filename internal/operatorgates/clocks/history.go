@@ -49,11 +49,16 @@ func ReadHistoricalTracking(ctx context.Context, boundary, first, last int64, re
 			}
 			return refuse("invalid")
 		}
-		if page.RunStartUnixMS != boundary || len(page.Breaks) != 0 {
+		if page.RunStartUnixMS != boundary {
 			return refuse("gap")
 		}
+		for _, b := range page.Breaks {
+			if historicalBreakTouches(b, first, last) {
+				return refuse("gap")
+			}
+		}
 		for _, r := range page.Rows {
-			if r.UnixSeconds < first || r.UnixSeconds > last || !r.BeforeRun || (r.UnixSeconds+1)*1000 > boundary {
+			if r.UnixSeconds < first || r.UnixSeconds > last || !r.BeforeRun {
 				return refuse("invalid")
 			}
 			v, e := strconv.ParseFloat(r.MaxErrorDecimal, 64)
@@ -75,10 +80,28 @@ func ReadHistoricalTracking(ctx context.Context, boundary, first, last int64, re
 			out.ReadComplete = true
 			return out, nil
 		}
-		if len(page.Cursor) == 0 || string(page.Cursor) == "null" || string(page.Cursor) == string(cursor) {
+		if len(page.Cursor) == 0 || string(page.Cursor) == "null" {
 			return refuse("incomplete")
 		}
 		cursor = page.Cursor
 	}
 	return refuse("limit")
+}
+
+// State changes happen at the reported update. A missing-update span starts
+// after its predecessor. Log loss can also affect that predecessor's second.
+func historicalBreakTouches(b TrackingBreak, first, last int64) bool {
+	if b.FromUnixSeconds < 0 || b.UnixSeconds < b.FromUnixSeconds {
+		return true
+	}
+	start := b.FromUnixSeconds
+	switch b.Kind {
+	case "source-change", "leap-status", "self-consistency", "clock-step":
+		start = b.UnixSeconds
+	case "cursor-gap":
+		if start < b.UnixSeconds {
+			start++
+		}
+	}
+	return start <= last && b.UnixSeconds >= first
 }

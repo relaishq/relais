@@ -1,7 +1,21 @@
 """Appended to clock.py only for historical reads; existing commands stay intact."""
 
 
+class HistoricalOS:
+    def __init__(self, original, end):
+        self.original, self.end = original, end
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+    def fstat(self, descriptor):
+        fields = list(self.original.fstat(descriptor))
+        fields[6] = min(fields[6], self.end)  # st_size, including parser lookahead.
+        return self.original.stat_result(fields)
+
+
 def historical_tracking(cursor, boundary, first, last):
+    global READ_LIMIT, ENCODED_LIMIT, os
     def check(ok, cause):
         if not ok:
             raise ValueError('clock-history-' + cause)
@@ -18,40 +32,51 @@ def historical_tracking(cursor, boundary, first, last):
         digest = hashlib.sha256(data).hexdigest()
         if cursor:
             check(cursor['key'] == key and cursor['file'] == identity and info.st_size >= size
-                  and len(data) == size and cursor['sha256'] == digest, 'changed')
+                  and cursor['sha256'] == digest, 'changed')
             tracking = cursor['tracking']
+            end = cursor['end']
         else:
-            position, offset, closed = None, 0, False
+            position, offset, end = None, 0, None
             for raw in data.splitlines(keepends=True):
-                line = raw.decode().strip()
-                if line and not line.startswith(('=', 'Date', '#')):
-                    row = tracking_row(line)
-                    if position is None and row['unixSeconds'] >= first:
-                        position = offset
-                    if row['unixSeconds'] > last:
-                        closed = True
-                        break
+                try:
+                    at = int(datetime.datetime.strptime(raw[:19].decode(), '%Y-%m-%d %H:%M:%S').replace(tzinfo=datetime.timezone.utc).timestamp())
+                except (ValueError, UnicodeError):
+                    offset += len(raw)
+                    continue
+                if position is None and at >= first:
+                    position = offset
+                if at > last:
+                    end = offset
+                    break
                 offset += len(raw)
-            check(position is not None and closed, 'incomplete')
+            check(position is not None and end is not None, 'incomplete')
             before = time.monotonic_ns()
             wall = time.time_ns()
             tracking = dict(file=str(info.st_dev)+':'+str(info.st_ino), position=position,
                             anchor=hashlib.sha256(data[max(0, position-256):position]).hexdigest(),
                             daemon=daemon_identity(), wallNs=wall, monotonicNs=before,
                             readWidthNs=time.monotonic_ns()-before, lastRow=None, skipLine=False)
-        # Only this separately rendered command uses these smaller page limits.
-        global READ_LIMIT, ENCODED_LIMIT
+        # The existing parser sees only the requested bytes, including during
+        # lookahead. Linux CLOCK_MONOTONIC is shared across helper processes.
         READ_LIMIT, ENCODED_LIMIT = 4096, 20000
-        page = tracking_evidence(tracking, boundary, precision=True)
-        check(not any(b['fromUnixSeconds'] <= last and b['unixSeconds'] >= first for b in page['breaks']), 'gap')
-        page['readComplete'] = any(r['unixSeconds'] > last for r in page['rows'])
+        original_os = os
+        os = HistoricalOS(original_os, end)
+        try:
+            page = tracking_evidence(tracking, boundary, precision=True)
+        finally:
+            os = original_os
+        next_line = data[page['cursor']['position']:].split(b'\n', 1)[0]
+        try:
+            next_at = int(datetime.datetime.strptime(next_line[:19].decode(), '%Y-%m-%d %H:%M:%S').replace(tzinfo=datetime.timezone.utc).timestamp())
+        except (ValueError, UnicodeError):
+            next_at = first
+        page['readComplete'] = next_at > last
         page['rows'] = [r for r in page['rows'] if first <= r['unixSeconds'] <= last]
-        check(all(re.fullmatch(r'[0-9]\.[0-9]{3}e[+-][0-9]{2,3}', r['maxErrorDecimal']) for r in page['rows']), 'precision')
         with TRACKING_LOG.open('rb') as log:
             after = os.fstat(log.fileno())
             check(identity == [after.st_dev, after.st_ino] and hashlib.sha256(log.read(size)).hexdigest() == digest, 'changed')
         check(page['cursor'] is not None and (page['readComplete'] or page['cursor']['position'] > tracking['position']), 'incomplete')
-        page['cursor'] = dict(key=key, size=size, file=identity, sha256=digest, tracking=page['cursor'])
+        page['cursor'] = dict(key=key, size=size, file=identity, sha256=digest, end=end, tracking=page['cursor'])
         check(len(json.dumps(page).encode()) <= 256000
               and len(base64.b64encode(gzip.compress(json.dumps(page).encode()))) <= WIRE_LIMIT, 'limit')
         return page
