@@ -14,15 +14,19 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorcaller"
+	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/oracletest"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
 // Run the real resource preparation, command and collection wiring. Only the
-// peer's fixed protocol replies and elapsed sleeps are simulated.
+// peer's fixed protocol replies and elapsed sleeps are simulated. The coverage
+// case retains one receipt and checks that open-tail drainage happens once,
+// with byte-identical coverage in the final judge input and report.
 func TestResourceRunnerCallerStartBudget(t *testing.T) {
-	for _, mode := range []string{"two-minute-preparation", "two-minute-caller-start", "late-caller-start"} {
+	for _, mode := range []string{"two-minute-preparation", "two-minute-caller-start", "late-caller-start", "coverage-drain"} {
 		t.Run(mode, func(t *testing.T) {
 			runtime, peer, _ := runtimeFixture(t)
 			s := runtime.Session
@@ -49,6 +53,8 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			var mediaStart time.Time
 			replies := map[string][]byte{}
 			prepared, procedure, collection, observedAfterStart := false, false, false, false
+			drainReads := 0
+			var judgedCoverage []byte
 			original := peer.respond
 			peer.respond = func(q operator.Request) operator.Reply {
 				payload := func(v any) operator.Reply {
@@ -96,7 +102,7 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 							for range operatorcaller.ClockBurstCount {
 								burst.Probes = append(burst.Probes, operatorcaller.Probe{RTTNS: 1, CallerSend: burst.StartedAt, CallerReceive: burst.FinishedAt, ServerReceive: burst.StartedAt, ServerSend: burst.StartedAt})
 							}
-							ack := operatorcaller.Ack{RunID: manifest.RunID, Job: "caller-1", Sequence: feed.Sequence, OperationID: feed.OperationID, OK: true, ClockProbes: oracletest.Marshal(t, burst)}
+							ack := operatorcaller.Ack{RunID: manifest.RunID, Job: "caller-1", Sequence: feed.Sequence, OperationID: feed.OperationID, Identities: feed.Payload.Identities, OK: true, ClockProbes: oracletest.Marshal(t, burst)}
 							replies[manifest.Job()+"/acks/"+fmt.Sprintf("%05d", feed.Sequence)+".json"] = oracletest.Marshal(t, ack)
 						}
 						if feed.Payload.Kind == "start" {
@@ -125,8 +131,20 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 					}
 					return payload(operatorcaller.MailboxValue{Found: &found, Data: data})
 				}
+				if mode == "coverage-drain" && q.Action == "drain" {
+					move := controlplane.MoveResult{ID: "original", From: "w1", To: "w2", Kind: "move", Start: clock.Wall(), End: clock.Wall()}
+					return hostReply(t, oracletest.Marshal(t, map[string]any{"kind": "ok", "started": clock.Wall(), "ended": clock.Wall(), "data": controlplane.DrainResult{Moves: []controlplane.MoveResult{move}}}))
+				}
+				// Stop the simulated procedure after one real receipt has been fed.
+				if mode == "coverage-drain" && q.Action == "worker-empty" {
+					return hostReply(t, []byte(`{"kind":"failed","code":"not-empty"}`))
+				}
 				if q.Action == "status" {
 					status := controlplane.Status{Ready: true}
+					if mode == "coverage-drain" {
+						status.Pool.Cap = 2
+						status.Calls = []controlplane.CallStatus{{ID: "original", Owner: "w1", Epoch: 1}}
+					}
 					for _, w := range []string{"w1", "w2"} {
 						status.Workers = append(status.Workers, controlplane.WorkerStatus{Name: w, Address: runtime.Config.Parameters.Workers[w].Media})
 					}
@@ -146,13 +164,31 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			runner := ResourceRunner{Config: ResourceConfig{Parameters: runtime.Config.Parameters, Pins: runtime.Pins, Bounds: *runtime.Bounds, Architecture: "arm64", Token: strings.Repeat("x", 64), JudgeBinary: binary, Endpoints: operatorcaller.Endpoints{RunID: "run-budget", Signaling: "https://signal.test/calls", Relay: runtime.Config.Parameters.Workers["w1"].Media.String(), DriftPPM: 1}}, Sleep: func(ctx context.Context, d time.Duration) error {
 				procedure = true
 				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > time.Duration(manifest.Deadline-start.UnixMilli())*time.Millisecond-2*time.Minute-clock.Elapsed()+time.Second {
+				if mode != "coverage-drain" && (!ok || time.Until(deadline) > time.Duration(manifest.Deadline-start.UnixMilli())*time.Millisecond-2*time.Minute-clock.Elapsed()+time.Second) {
 					t.Fatal("MUTATION: resource-budget-procedure-cutoff")
 				}
 				clock.Advance(d)
 				return nil
 			}, Finished: func(_ *Session, r ResourceResult) { result = r }}
+			if mode == "coverage-drain" {
+				runner.Config.Bounds = clocks.FixedCoverageBounds()
+				runner.Judge = mediaJudgeFunc(func(_ context.Context, p operatorevidence.Pool) (operatorevidence.Summary, error) {
+					var err error
+					judgedCoverage, err = json.Marshal(p.ClockCoverage)
+					return operatorevidence.Summary{Status: operator.Inconclusive}, err
+				})
+				runner.CoverageRead = func(context.Context, string, string) (string, error) {
+					drainReads++
+					return packedCoverageSample(t, 1793930021, false), nil
+				}
+			}
 			runner.Run(context.Background(), s, peer)
+			if mode == "coverage-drain" {
+				reportCoverage, err := json.Marshal(result.ClockCoverage)
+				if err != nil || drainReads != 40 || result.ClockCoverage == nil || len(result.ClockCoverage.Windows) != 1 || len(result.ClockCoverage.DrainAttempts) != 10 || string(judgedCoverage) != string(reportCoverage) {
+					t.Fatalf("MUTATION: resource-final-drain reads=%d procedures=%+v", drainReads, result.Procedures)
+				}
+			}
 			if !prepared {
 				t.Fatal("caller preparation was not exercised")
 			}

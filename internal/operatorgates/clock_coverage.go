@@ -130,20 +130,19 @@ func (s *Session) retainClockBracket(worker, before, after string) {
 
 // collectCoverage bypasses the policy cache and retains every diagnostic read.
 // A missing isolated adapter is explicit incomplete evidence, never a media error.
-func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, windows []observe.CoverageWindow, read ClockCoverageReader, pause func(context.Context, time.Duration) error) *clocks.CoverageEvidence {
+func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, windows []observe.CoverageWindow, read ClockCoverageReader, pause func(context.Context, time.Duration) error, cutoff time.Duration) *clocks.CoverageEvidence {
 	e := s.coverageSnapshot(bounds)
 	e.Windows = windows
 	e.Evaluate()
 	if e.DrainComplete || read == nil || ctx.Err() != nil {
 		return e
 	}
-	// Media judgment has already completed. Only the final collection/cleanup
-	// reserve is available; diagnostics never extend the session budget.
+	// Drainage consumes the original collection reserve; it never extends it.
 	limit := 10 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		limit = min(limit, max(0, time.Until(deadline)))
 	}
-	end := min(s.Budget.end, s.clock.Elapsed()+limit)
+	end := min(s.Budget.end, s.clock.Elapsed()+limit, cutoff)
 	bounded, cancel := context.WithTimeout(ctx, max(0, end-s.clock.Elapsed()))
 	defer cancel()
 	s.mu.Lock()

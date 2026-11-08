@@ -994,11 +994,16 @@ check both paths at both pinned releases. The synthetic coverage fixture is
 input, not a reconstruction of measurements missing from an archive.
 
 `EvidenceRuntime.Media` only snapshots retained coverage on each phase judgment;
-it does no host reads or waiting. Finalization first collects and judges the
-final pool and accepts its result under the unchanged deadline check. Only then
-does `FinalizeDiagnostics` run a drain; its latency cannot change pool acceptance.
-The final report holds this completed diagnostic snapshot; per-judgment pool
-artifacts contain the snapshot available before that judgment.
+it does no host reads or waiting. Final pool preparation drains tracking tails
+before constructing the final judge input, within the original pool collection
+cutoff, leaving 110 seconds of the existing two-minute pool budget for the judge.
+When less time remains, drain stops at that reserve or is skipped.
+Falsification observed during drainage adds `clock-coverage-falsified` to the final judge input and fails closed.
+A clean closing tail can remove `clock-coverage-missing` qualification;
+unclosed tails remain undecided. Independent failures and refusals stay intact.
+`FinalizeDiagnostics` still runs only after the pool deadline decision. It retains
+diagnostics on pool decoding failure when no final judge ran. The final report
+and judge input share the drained snapshot when final judging succeeds.
 An optional isolated `ClockCoverageReader` can drain tracking evidence outside
 `Session.Exchange`, whose unknown replies must still latch policy requests.
 The rehearsal adapter provides this isolated reader. Without one, an uncovered
@@ -1013,8 +1018,8 @@ pair bound for frontend endpoints. The additive tracking-log `readComplete`
 field distinguishes a complete read from a capped prefix or partial final
 line. It is false when absent in older evidence. Collection repeats bounded
 reads with one-second waits only while that condition is unmet. It uses at most
-ten seconds within the remaining final collection/cleanup context; it never
-runs before a judge and cannot extend the session budget. Windows with missing
+ten seconds within the original collection context and elapsed cutoff, before
+the final judge; it cannot extend the pool or session budget. Windows with missing
 receipts/brackets or invalid timestamps are not drain-resolvable and do not
 hold the stop condition open. Their diagnostic causes remain. `drainComplete`
 means no resolvable tail remains, rather than that every event is covered.

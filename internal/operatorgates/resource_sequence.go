@@ -148,6 +148,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		runtime.ClockObserved = r.Timing.RecordClocks
 	}
 	pool := &EvidenceRuntime{RunID: c.Endpoints.RunID, Judge: judge}
+	coveragePrepared := false
 	pool.Coverage = func(windows []observe.CoverageWindow) *clocks.CoverageEvidence {
 		e := s.coverageSnapshot(c.Bounds)
 		e.Windows = windows
@@ -301,14 +302,18 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 				return out
 			}, stop)
 		},
-		Finalize: func(ctx context.Context, _ time.Duration) (*MediaSummary, error) {
-			summary, err := pool.Media(ctx)
+		Finalize: func(ctx context.Context, end time.Duration) (*MediaSummary, error) {
+			summary, coverage, err := s.finalizePool(ctx, end, pool, c.Bounds, r.CoverageRead, pause)
+			if coverage != nil {
+				result.ClockCoverage, coveragePrepared = coverage, true
+			}
 			result.PoolError = err != nil
 			return summary, err
 		},
-		FinalizeDiagnostics: func(ctx context.Context, _ time.Duration) {
-			if result.ClockCoverage != nil {
-				result.ClockCoverage = s.collectCoverage(ctx, c.Bounds, result.ClockCoverage.Windows, r.CoverageRead, pause)
+		FinalizeDiagnostics: func(ctx context.Context, end time.Duration) {
+			// Preserve diagnostics on pool decoding failure, when no judge ran.
+			if !coveragePrepared && result.ClockCoverage != nil {
+				result.ClockCoverage = s.collectCoverage(ctx, c.Bounds, result.ClockCoverage.Windows, r.CoverageRead, pause, end)
 			}
 		},
 	})
