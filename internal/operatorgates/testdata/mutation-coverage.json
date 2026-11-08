@@ -469,7 +469,9 @@
     "history-last-second-truncated",
     "history-page-recheck-ignored",
     "history-progress-ignored",
-    "history-window-read-ahead"
+    "history-window-read-ahead",
+    "history-log-loss-outside-ignored",
+    "history-unparseable-next-complete"
   ],
   "killed": [
     {
@@ -4043,6 +4045,20 @@
     {
       "id": "history-window-read-ahead",
       "test": "TestPythonGuards/history-window-read-ahead",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-log-loss-outside-ignored",
+      "test": "TestHistoricalMalformedFirstCopy",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-unparseable-next-complete",
+      "test": "TestPythonGuards/history-unparseable-next-complete",
       "package": "./internal/operatorgates/host",
       "evidence": "killed",
       "guardFingerprint": ""

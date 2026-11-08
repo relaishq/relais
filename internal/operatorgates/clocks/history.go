@@ -89,8 +89,11 @@ func ReadHistoricalTracking(ctx context.Context, boundary, first, last int64, re
 }
 
 // State changes happen at the reported update. A missing-update span starts
-// after its predecessor. Log loss can also affect that predecessor's second.
+// after its predecessor. The parser's EOF cap confines every log loss to this read.
 func historicalBreakTouches(b TrackingBreak, first, last int64) bool {
+	if b.Kind == "log-loss" {
+		return true
+	}
 	if b.FromUnixSeconds < 0 || b.UnixSeconds < b.FromUnixSeconds {
 		return true
 	}

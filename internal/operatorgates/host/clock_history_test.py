@@ -110,3 +110,14 @@ class HistoryTests(unittest.TestCase):
             return dict(rows=[], breaks=[], runStartUnixMs=boundary, cursor=dict(cursor, wallNs=cursor['wallNs']+1))
         with patch.dict(self.ns, tracking_evidence=stalled):
             self.assertEqual(self.page().get('cause'), 'clock-history-incomplete')
+
+    def test_unparseable_next_line_is_incomplete(self):
+        first = self.row(100)
+        # Put a malformed timestamp exactly at the next page's byte offset.
+        padding = '#' * (4096 - len(first) - 1) + '\n'
+        self.path.write_text(first + padding + 'unparseable\n' + ''.join(self.row(s) for s in range(101, 302)))
+        page = self.page()
+        self.assertEqual(page['cursor']['tracking']['position'], 4096)
+        self.assertEqual(len(page['rows']), 1)
+        self.assertFalse(page['readComplete'])
+        self.assertTrue(any(b['kind'] == 'log-loss' for b in self.page(page['cursor'])['breaks']))

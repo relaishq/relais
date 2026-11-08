@@ -5098,5 +5098,25 @@
     "Test": "TestPythonGuards/history-window-read-ahead",
     "Marker": "MUTATION: python-guard history-window-read-ahead",
     "PythonTest": "clock_history_test.HistoryTests.test_post_interval_events_and_old_malformed_rows"
+  },
+  {
+    "ID": "history-log-loss-outside-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "historicalBreakTouches",
+    "Old": "b.Kind == \"log-loss\"",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalMalformedFirstCopy",
+    "Marker": "MUTATION: history-malformed-first-copy"
+  },
+  {
+    "ID": "history-unparseable-next-complete",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "next_at = first",
+    "New": "next_at = last + 1",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-unparseable-next-complete",
+    "Marker": "MUTATION: python-guard history-unparseable-next-complete",
+    "PythonTest": "clock_history_test.HistoryTests.test_unparseable_next_line_is_incomplete"
   }
 ]

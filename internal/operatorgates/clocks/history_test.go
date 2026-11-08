@@ -7,8 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func historyWire(v any) string {
@@ -120,7 +125,7 @@ func TestHistoricalBreakScope(t *testing.T) {
 				b.FromUnixSeconds--
 			}
 			want := at >= 100 && at <= 300
-			if kind == "log-loss" && at == 301 {
+			if kind == "log-loss" {
 				want = true
 			}
 			_, err := ReadHistoricalTracking(context.Background(), 400000, 100, 300, func(context.Context, string) (string, error) {
@@ -130,5 +135,37 @@ func TestHistoricalBreakScope(t *testing.T) {
 				t.Fatalf("MUTATION: history-break-scope %s %d: %v", kind, at, err)
 			}
 		}
+	}
+}
+
+func TestHistoricalMalformedFirstCopy(t *testing.T) {
+	const base = int64(1792886400)
+	row := func(second int64) string {
+		return time.Unix(base+second, 0).UTC().Format("2006-01-02 15:04:05") + " GPS 2 0 0 0 N 1 0 0 0 0 1.234e-05\n"
+	}
+	// The first of two updates in the first second is malformed. With no
+	// predecessor, the parser stamps the loss at the current wall time.
+	text := strings.Replace(row(100), "GPS 2", "GPS broken", 1)
+	for second := int64(100); second <= 301; second++ {
+		text += row(second)
+	}
+	path := filepath.Join(t.TempDir(), "tracking.log")
+	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	log, err := ReadHistoricalTracking(context.Background(), (base+400)*1000, base+100, base+300, func(ctx context.Context, script string) (string, error) {
+		body := strings.TrimSuffix(strings.TrimPrefix(script, "python3 - <<'PY'\n"), "PY\n")
+		at := strings.LastIndex(body, "\nprint(")
+		if at < 0 {
+			t.Fatal("missing historical reader entry point")
+		}
+		setup := fmt.Sprintf("\nTRACKING_LOG=pathlib.Path(%q)\ndaemon_identity=lambda:'test-daemon'\n", path)
+		cmd := exec.CommandContext(ctx, "python3", "-B", "-c", body[:at]+setup+body[at:])
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	})
+	var refusal *BindingError
+	if !errors.As(err, &refusal) || refusal.Cause != "clock-history-gap" || len(log.Rows) != 0 {
+		t.Fatalf("MUTATION: history-malformed-first-copy: rows=%d err=%v", len(log.Rows), err)
 	}
 }
