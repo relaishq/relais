@@ -450,7 +450,14 @@
     "clock-artifacts-combined-budget-dropped",
     "clock-artifacts-wire-boundary-exclusive",
     "clock-artifacts-receipt-boundary-exclusive",
-    "clock-artifacts-evidence-boundary-exclusive"
+    "clock-artifacts-evidence-boundary-exclusive",
+    "history-snapshot-change-ignored",
+    "history-gap-ignored",
+    "history-precision-lost",
+    "history-open-interval",
+    "history-wire-limit-ignored",
+    "history-decode-ignored",
+    "history-incomplete-accepted"
   ],
   "killed": [
     {
@@ -3892,6 +3899,55 @@
       "id": "clock-artifacts-evidence-boundary-exclusive",
       "test": "TestClockBindingArtifactsExactRawLimit",
       "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-snapshot-change-ignored",
+      "test": "TestPythonGuards/history-snapshot-change-ignored",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-gap-ignored",
+      "test": "TestPythonGuards/history-gap-ignored",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-precision-lost",
+      "test": "TestPythonGuards/history-precision-lost",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-open-interval",
+      "test": "TestPythonGuards/history-open-interval",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-wire-limit-ignored",
+      "test": "TestHistoricalTracking/wire-limit",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-decode-ignored",
+      "test": "TestHistoricalTracking/json",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-incomplete-accepted",
+      "test": "TestHistoricalTracking/partial",
+      "package": "./internal/operatorgates/clocks",
       "evidence": "killed",
       "guardFingerprint": ""
     }
