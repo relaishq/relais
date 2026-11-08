@@ -16,17 +16,7 @@ import (
 )
 
 // SelectionPolicy is launcher policy. There are no built-in paid-run numbers.
-type SelectionPolicy struct {
-	WindowSeconds          int64  `json:"windowSeconds"`
-	FloorNS                int64  `json:"floorNs"`
-	ScaleNumerator         int64  `json:"scaleNumerator"`
-	ScaleDenominator       int64  `json:"scaleDenominator"`
-	AllowanceNS            int64  `json:"allowanceNs"`
-	SignalReserveNS        int64  `json:"signalReserveNs"`
-	ControlCeilingNS       int64  `json:"controlCeilingNs"`
-	WorkerCeilingNS        int64  `json:"workerCeilingNs"`
-	MaxDispersionGrowthPPM string `json:"maxDispersionGrowthPpm"`
-}
+type SelectionPolicy = observe.SelectionPolicy
 
 type SelectionHost struct {
 	Slot     string           `json:"slot"`
@@ -48,29 +38,9 @@ type SelectionEvidence struct {
 	Falsification    Falsification   `json:"falsification"`
 }
 
-type SelectedHost struct {
-	Slot              string        `json:"slot"`
-	LeapMode          string        `json:"leapMode"`
-	Updates           int           `json:"updates"`
-	MaximumNS         string        `json:"maximumNs"`
-	DeclaredGrowthPPM string        `json:"declaredGrowthPpm"`
-	MeasuredLease     RecordedLease `json:"measuredLease"`
-}
+type SelectedHost = observe.SelectedHost
 
-type SelectionReceipt struct {
-	Version          int             `json:"version"`
-	Formula          string          `json:"formula"`
-	RunID            string          `json:"runId"`
-	FrontendSlot     string          `json:"frontendSlot"`
-	ControlSlot      string          `json:"controlSlot"`
-	CallerLeapMode   string          `json:"callerLeapMode"`
-	StartUnixSeconds int64           `json:"startUnixSeconds"`
-	EndUnixSeconds   int64           `json:"endUnixSeconds"`
-	Policy           SelectionPolicy `json:"policy"`
-	Hosts            []SelectedHost  `json:"hosts"`
-	Bounds           Bounds          `json:"bounds"`
-	EvidenceSHA256   string          `json:"evidenceSha256"`
-}
+type SelectionReceipt = observe.SelectionReceipt
 
 type ClockSelection struct {
 	Receipt SelectionReceipt `json:"receipt"`
@@ -83,23 +53,7 @@ var selectionRunPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // Column14MaximumNS includes half the last printed unit of chrony's %.3e
 // column 14. It returns an exact rational, before any policy scaling/rounding.
-func Column14MaximumNS(raw string) (*big.Rat, error) {
-	m := column14Pattern.FindStringSubmatch(raw)
-	if m == nil {
-		return nil, fmt.Errorf("clock-select-column14")
-	}
-	n, err := exact(raw)
-	if err != nil || n.Sign() < 0 {
-		return nil, fmt.Errorf("clock-select-column14")
-	}
-	exponent, _ := strconv.Atoi(m[1])
-	if exponent < -60 || exponent > 8 {
-		return nil, fmt.Errorf("clock-select-column14")
-	}
-	pad, _ := exact("5e" + strconv.Itoa(exponent-4))
-	n.Add(n, pad)
-	return n.Mul(n, big.NewRat(1e9, 1)), nil
-}
+func Column14MaximumNS(raw string) (*big.Rat, error) { return observe.ClockMaximumNS(raw) }
 
 // Select only records a decision. It neither changes fixed bounds nor invokes
 // a judge, caller, process, clock, or transport.
@@ -121,7 +75,7 @@ func Select(input SelectionEvidence, policy SelectionPolicy) (ClockSelection, er
 	maximum := map[string]*big.Rat{}
 	hosts := map[string]SelectionHost{}
 	latest := int64(maxSafeInteger)
-	r := SelectionReceipt{Version: 1, Formula: "ceil(max(f,s*M_f)+A)+ceil(max(f,s*M_h)+A);worker:+K", RunID: input.RunID, FrontendSlot: input.FrontendSlot, ControlSlot: input.ControlSlot, CallerLeapMode: input.CallerLeapMode, StartUnixSeconds: input.StartUnixSeconds, EndUnixSeconds: input.EndUnixSeconds, Policy: policy, Hosts: []SelectedHost{}}
+	r := SelectionReceipt{Version: 1, Formula: observe.ClockSelectionFormula, RunID: input.RunID, FrontendSlot: input.FrontendSlot, ControlSlot: input.ControlSlot, CallerLeapMode: input.CallerLeapMode, StartUnixSeconds: input.StartUnixSeconds, EndUnixSeconds: input.EndUnixSeconds, Policy: policy, Hosts: []SelectedHost{}}
 	for i, h := range input.Hosts {
 		if !slices.Contains(selectionSlots, h.Slot) || hosts[h.Slot].Slot != "" || len(h.Tracking.Rows) > 16384 || len(h.Tracking.Breaks) > 16384 || !h.Tracking.ReadComplete {
 			return out, fmt.Errorf("clock-select-admission")

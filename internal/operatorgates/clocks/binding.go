@@ -39,10 +39,7 @@ type ReceiptBindingInput struct {
 
 // ReceiptBinding is a value-only identity for later Init/coverage integration.
 // This module has no execution call sites until atomic activation.
-type ReceiptBinding struct {
-	ReceiptSHA256, EvidenceSHA256 string
-	Bounds                        Bounds
-}
+type ReceiptBinding = observe.ReceiptBinding
 
 // BindReceipt validates the original trailing-at-freeze selection, then checks
 // its frozen rows against independent reads. Later rows never move that window;

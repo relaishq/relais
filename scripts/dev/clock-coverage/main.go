@@ -42,6 +42,7 @@ func evaluate(args []string, out io.Writer) error {
 		}
 		report.CallerTiming = report.HeadCaller.CallerTiming
 		report.Coverage = report.HeadCaller.Coverage
+		report.ClockReceiptSHA256 = report.HeadCaller.ClockReceiptSHA256
 	}
 	e := report.Coverage
 	historical := e == nil
@@ -57,6 +58,11 @@ func evaluate(args []string, out io.Writer) error {
 	}
 	if *control != "" {
 		e.ControlSlot = *control
+	}
+	if report.ClockReceiptSHA256 != "" || observe.IsBound(e.ClockReceiptSHA256, e.Binding) {
+		if historical || e.ValidateBinding(report.ClockReceiptSHA256) != nil || report.Bounds != e.Bounds {
+			return fmt.Errorf("clock-coverage-binding")
+		}
 	}
 	if *poolPath != "" {
 		data, err := os.ReadFile(*poolPath)
@@ -75,6 +81,9 @@ func evaluate(args []string, out io.Writer) error {
 		var pool operatorevidence.Pool
 		if err := json.Unmarshal(data, &pool); err != nil {
 			return fmt.Errorf("invalid pool JSON")
+		}
+		if pool.ClockReceiptSHA256 != e.ClockReceiptSHA256 || e.ClockReceiptSHA256 != "" && (pool.PreCoverageEvidence || pool.RunID != e.Binding.Receipt.RunID) {
+			return fmt.Errorf("clock-coverage-binding")
 		}
 		if historical || len(e.Windows) == 0 {
 			e.Windows = operatorevidence.CoverageWindows(pool)

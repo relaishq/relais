@@ -152,19 +152,24 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 			}
 			// Exercise PinnedJudge.Judge's production projection as well as the
 			// compact command entry above, including sanitized coverage input.
-			for _, supplied := range []bool{false, true} {
+			for _, supplied := range []int{0, 1, 2} {
 				raw, _ := json.Marshal(rawPoolSample())
 				var pool operatorevidence.Pool
 				if err := json.Unmarshal(raw, &pool); err != nil {
 					t.Fatal(err)
 				}
 				pool.SourceCommit, pool.PreCoverageEvidence = commit, false
-				if supplied {
+				if supplied > 0 {
 					pool.ClockCoverage = coverageEvidenceFixture(t)
+				}
+				if supplied == 2 {
+					_, e := boundPoolFixture(t)
+					pool.ClockCoverage = e
+					pool.ClockReceiptSHA256 = e.ClockReceiptSHA256
 				}
 				got, err := judge.Judge(ctx, pool)
 				want := "inconclusive"
-				if supplied {
+				if supplied > 0 {
 					want = "passed"
 				}
 				if err != nil || string(got.Status) != want {

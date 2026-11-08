@@ -23,9 +23,7 @@ import (
 // using a control that still passes the unchanged judges.
 func completePoolFixture(t *testing.T) previewPoolInput {
 	t.Helper()
-	input := rawPoolSample()
-	q := coverageEvidenceFixture(t).Qualification()
-	input.ClockCoverage = &q
+	input, _ := boundPoolFixture(t)
 	for i := range input.Phases {
 		phase := &input.Phases[i]
 		for j := range phase.Receipts {

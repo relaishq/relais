@@ -13,11 +13,12 @@ import (
 )
 
 type storedReport struct {
-	HeadCaller   *storedReport            `json:"headCaller"`
-	Clocks       []clocks.Evidence        `json:"clocks"`
-	Bounds       clocks.Bounds            `json:"bounds"`
-	Coverage     *clocks.CoverageEvidence `json:"clockCoverage"`
-	CallerTiming []struct {
+	ClockReceiptSHA256 string                   `json:"clockReceiptSha256"`
+	HeadCaller         *storedReport            `json:"headCaller"`
+	Clocks             []clocks.Evidence        `json:"clocks"`
+	Bounds             clocks.Bounds            `json:"bounds"`
+	Coverage           *clocks.CoverageEvidence `json:"clockCoverage"`
+	CallerTiming       []struct {
 		Gate   string `json:"gate"`
 		Events []struct {
 			Kind        string `json:"kind"`

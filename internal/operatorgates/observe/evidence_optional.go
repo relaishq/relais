@@ -23,11 +23,20 @@ type optionalEvidenceRule struct {
 	applies func(map[string]any) bool
 }
 
+func unboundClock(object map[string]any) bool {
+	q, _ := object["clockCoverage"].(map[string]any)
+	return (object["clockReceiptSha256"] == nil || object["clockReceiptSha256"] == "") && object["binding"] == nil && (q == nil || (q["clockReceiptSha256"] == nil || q["clockReceiptSha256"] == "") && q["binding"] == nil)
+}
+
 var evidenceConditionalOptional = map[string]optionalEvidenceRule{
-	"main.previewPoolInput.ClockCoverage":       {"Only explicit pre-coverage archives may omit measured coverage.", func(object map[string]any) bool { return object["preCoverageEvidence"] == true }},
-	"operatorevidence.Pool.ClockCoverage":       {"Only explicit pre-coverage archives may omit measured coverage.", func(object map[string]any) bool { return object["preCoverageEvidence"] == true }},
-	"main.previewPoolInput.PreCoverageEvidence": {"Coverage-bearing runs need no historical replay marker.", func(object map[string]any) bool { return object["clockCoverage"] != nil }},
-	"operatorevidence.Pool.PreCoverageEvidence": {"Coverage-bearing runs need no historical replay marker.", func(object map[string]any) bool { return object["clockCoverage"] != nil }},
+	"observe.CoverageQualification.ClockReceiptSHA256": {"Unbound qualification carries no receipt marker.", unboundClock},
+	"observe.CoverageQualification.Binding":            {"Unbound qualification carries no receipt proof; bound validation requires it.", unboundClock},
+	"main.previewPoolInput.ClockReceiptSHA256":         {"Unbound scenarios carry no receipt commitment.", unboundClock},
+	"operatorevidence.Pool.ClockReceiptSHA256":         {"Unbound scenarios carry no receipt commitment.", unboundClock},
+	"main.previewPoolInput.ClockCoverage":              {"Only explicit pre-coverage archives may omit measured coverage.", func(object map[string]any) bool { return object["preCoverageEvidence"] == true }},
+	"operatorevidence.Pool.ClockCoverage":              {"Only explicit pre-coverage archives may omit measured coverage.", func(object map[string]any) bool { return object["preCoverageEvidence"] == true }},
+	"main.previewPoolInput.PreCoverageEvidence":        {"Coverage-bearing runs need no historical replay marker.", func(object map[string]any) bool { return object["clockCoverage"] != nil }},
+	"operatorevidence.Pool.PreCoverageEvidence":        {"Coverage-bearing runs need no historical replay marker.", func(object map[string]any) bool { return object["clockCoverage"] != nil }},
 
 	"controlplane.MoveResult.Start": {"Historical takeovers may omit start; qualification uses independent signal timing.", func(object map[string]any) bool { return object["kind"] == "takeover" }},
 	"loadgen.Message.Call":          {"Call payload belongs only to call messages.", func(object map[string]any) bool { return object["type"] != "call" }},

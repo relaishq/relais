@@ -282,14 +282,22 @@ func printDiagnostics(writers []io.Writer, label string, stdout, stderr []byte) 
 // MarshalJudgeInput sends evaluated results once, not raw tracking timelines.
 // The existing total input limit is still checked by invoke.
 func MarshalJudgeInput(pool Pool) ([]byte, error) {
+	bound := pool.ClockReceiptSHA256 != "" || pool.ClockCoverage != nil && observe.IsBound(pool.ClockCoverage.ClockReceiptSHA256, pool.ClockCoverage.Binding)
+	if bound {
+		if pool.PreCoverageEvidence || pool.ClockCoverage == nil || pool.ClockCoverage.ValidateBinding(pool.ClockReceiptSHA256) != nil || pool.ClockCoverage.Binding.Receipt.RunID != pool.RunID {
+			return nil, errors.New("clock-coverage-binding")
+		}
+	}
 	type wire struct {
 		RunID               string                         `json:"runId"`
 		Phases              []MediaInput                   `json:"phases"`
 		Missing             bool                           `json:"missing"`
 		PreCoverageEvidence bool                           `json:"preCoverageEvidence,omitempty"`
 		ClockCoverage       *observe.CoverageQualification `json:"clockCoverage,omitempty"`
+		ClockReceiptSHA256  string                         `json:"clockReceiptSha256,omitempty"`
 	}
 	out := wire{RunID: pool.RunID, Phases: pool.Phases, Missing: pool.Missing, PreCoverageEvidence: pool.PreCoverageEvidence}
+	out.ClockReceiptSHA256 = pool.ClockReceiptSHA256
 	if pool.ClockCoverage != nil {
 		q := pool.ClockCoverage.Qualification()
 		out.ClockCoverage = &q

@@ -51,6 +51,7 @@ func publicPhaseIssue(issue observe.EvidenceIssue) observe.EvidenceIssue {
 // Duplicate outer members invalidate the envelope; duplicate members inside a
 // phase quarantine that phase without hiding independently valid siblings.
 type poolEnvelope struct {
+	ClockReceiptSHA256  string                         `json:"clockReceiptSha256,omitempty"`
 	PreCoverageEvidence bool                           `json:"preCoverageEvidence,omitempty"`
 	ClockCoverage       *observe.CoverageQualification `json:"clockCoverage,omitempty"`
 	RunID               string                         `json:"runId"`
@@ -120,8 +121,11 @@ func decodePoolEnvelope(data []byte) (wire poolEnvelope, err error) {
 		if !valid {
 			// Supplied but incomplete coverage never falls back to historical
 			// policy. Quarantine only coverage; retain independent media loss.
-			wire.ClockCoverage = &observe.CoverageQualification{Falsified: q.Falsified}
+			wire.ClockCoverage = &observe.CoverageQualification{Falsified: q.Falsified, ClockReceiptSHA256: q.ClockReceiptSHA256, Binding: q.Binding}
 		}
+	}
+	if (wire.ClockReceiptSHA256 != "" || wire.ClockCoverage != nil && observe.IsBound(wire.ClockCoverage.ClockReceiptSHA256, wire.ClockCoverage.Binding)) && wire.PreCoverageEvidence {
+		return wire, fmt.Errorf("clock-coverage-binding")
 	}
 	return wire, nil
 }

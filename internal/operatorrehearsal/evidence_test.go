@@ -15,10 +15,39 @@ import (
 
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/operator"
 )
+
+func TestSanitizedBoundReceipt(t *testing.T) {
+	raw, err := os.ReadFile("../operatorgates/clocks/testdata/bound-receipt.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s clocks.ClockSelection
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	e, err := (clocks.CoverageEvidence{FrontendSlot: s.Receipt.FrontendSlot, ControlSlot: s.Receipt.ControlSlot}).WithBinding(clocks.ReceiptBinding{ReceiptSHA256: s.SHA256, EvidenceSHA256: s.Receipt.EvidenceSHA256, Bounds: s.Receipt.Bounds}, s.Receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"matching", "unbound-pool", "wrong-run"} {
+		pool := operatorevidence.Pool{RunID: s.Receipt.RunID, ClockReceiptSHA256: s.SHA256, ClockCoverage: &e}
+		if mode == "unbound-pool" {
+			pool.ClockReceiptSHA256 = ""
+		}
+		if mode == "wrong-run" {
+			pool.RunID = "other-run"
+		}
+		_, err := SanitizeMediaEvidence(pool)
+		if (mode == "matching") != (err == nil) {
+			t.Fatal("MUTATION: sanitized-bound-receipt", mode, err)
+		}
+	}
+}
 
 func TestEvidenceArtifactScrubsTextWithoutFillingMissingFields(t *testing.T) {
 	secret := "arbitrary-credential-value"

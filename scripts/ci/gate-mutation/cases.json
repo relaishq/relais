@@ -3742,8 +3742,8 @@
     "ID": "clock-coverage-drop-frontend-error",
     "File": "internal/operatorgates/observe/clock_coverage.go",
     "Function": "evaluateClockCoverage",
-    "Old": "f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound)",
-    "New": "f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound)\n f = 0",
+    "Old": "f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound, padded)",
+    "New": "f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound, padded)\n f = 0",
     "Test": "TestClockCoverage/omit-frontend-error",
     "Marker": "MUTATION: clock-coverage-omit-frontend-error",
     "Package": "./internal/operatorgates/observe"
@@ -3890,8 +3890,8 @@
   },
   {
     "ID": "clock-select-missing-column14-pad",
-    "File": "internal/operatorgates/clocks/select.go",
-    "Function": "Column14MaximumNS",
+    "File": "internal/operatorgates/observe/clock_decimal.go",
+    "Function": "ClockMaximumNS",
     "Old": "n.Add(n, pad)",
     "New": "n.Add(n, new(big.Rat).Mul(pad, big.NewRat(0, 1)))",
     "Test": "TestClockSelectColumn14Padding",
@@ -4410,5 +4410,245 @@
     "Test": "TestSessionRefusesUnvalidatedReceipt",
     "Marker": "MUTATION: receipt-claim-not-active",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "clock-bound-fixed-source",
+    "File": "internal/operatorgates/clocks/bound_coverage.go",
+    "Function": "coverageParameters",
+    "Old": "return e.Binding.Binding.Bounds, e.Binding.Receipt.Policy.SignalReserveNS, nil",
+    "New": "return FixedCoverageBounds(), e.Binding.Receipt.Policy.SignalReserveNS, nil",
+    "Test": "TestBoundCoverage/fixed-source",
+    "Marker": "MUTATION: bound-fixed-source",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-stripped-binding",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "WindowCausesForReceipt",
+    "Old": "if expected != \"\" || q != nil && IsBound(q.ClockReceiptSHA256, q.Binding) {",
+    "New": "if false && (expected != \"\" || q != nil && IsBound(q.ClockReceiptSHA256, q.Binding)) {",
+    "Test": "TestBoundJudge",
+    "Marker": "MUTATION: bound-judge-stripped",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "clock-bound-missing-pad",
+    "File": "internal/operatorgates/observe/clock_decimal.go",
+    "Function": "ClockMaximumNS",
+    "Old": "n.Add(n, pad)",
+    "New": "n.Add(n, new(big.Rat).Mul(pad,big.NewRat(0,1)))",
+    "Test": "TestBoundCoverage/pad",
+    "Marker": "MUTATION: bound-pad",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-omit-K",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "reserve = reserveNS",
+    "New": "reserve = reserveNS * 0",
+    "Test": "TestBoundCoverage/omit-K",
+    "Marker": "MUTATION: bound-omit-K",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-double-K",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "reserve = reserveNS",
+    "New": "reserve = reserveNS * 2",
+    "Test": "TestBoundCoverage/K-once",
+    "Marker": "MUTATION: bound-K-once",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-rule4-adds-K",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "h+f > s.bound-s.half",
+    "New": "h+f > s.bound-s.half-reserve",
+    "Test": "TestBoundCoverage/rule4-no-K",
+    "Marker": "MUTATION: bound-rule4-no-K",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-precoverage",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "WindowCausesForReceipt",
+    "Old": "if preCoverage || q == nil",
+    "New": "if false || q == nil",
+    "Test": "TestBoundCoverageConsumers",
+    "Marker": "MUTATION: bound-precoverage",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-precoverage-wrapper",
+    "File": "internal/operatorevidence/judge.go",
+    "Function": "MarshalJudgeInput",
+    "Old": "if pool.PreCoverageEvidence || pool.ClockCoverage == nil",
+    "New": "if false || pool.ClockCoverage == nil",
+    "Test": "TestBoundJudge",
+    "Marker": "MUTATION: bound-precoverage-wrapper",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "clock-bound-precoverage-decoder",
+    "File": "internal/operatorevidence/judge-src/validation.go",
+    "Function": "decodePoolEnvelope",
+    "Old": "if (wire.ClockReceiptSHA256 != \"\" || wire.ClockCoverage != nil && observe.IsBound(wire.ClockCoverage.ClockReceiptSHA256, wire.ClockCoverage.Binding)) && wire.PreCoverageEvidence {",
+    "New": "if false && (wire.ClockReceiptSHA256 != \"\" || wire.ClockCoverage != nil && observe.IsBound(wire.ClockCoverage.ClockReceiptSHA256, wire.ClockCoverage.Binding)) && wire.PreCoverageEvidence {",
+    "Test": "TestBoundJudge",
+    "Marker": "MUTATION: bound-precoverage-decoder",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "clock-binding-equal-second-predecessor",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingFrozenRows",
+    "Old": "first = sort.Search(len(rows), func(i int) bool { return rows[i].UnixSeconds >= from })",
+    "New": "first = max(first, sort.Search(len(rows), func(i int) bool { return rows[i].UnixSeconds >= from }))",
+    "Test": "TestReceiptBindingEqualSecondBoundaries/predecessor",
+    "Marker": "MUTATION: binding-equal-second",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-binding-equal-second-successor",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "bindingFrozenRows",
+    "Old": "last = sort.Search(len(rows), func(i int) bool { return rows[i].UnixSeconds > to })",
+    "New": "last = min(last, sort.Search(len(rows), func(i int) bool { return rows[i].UnixSeconds > to }))",
+    "Test": "TestReceiptBindingEqualSecondBoundaries/successor",
+    "Marker": "MUTATION: binding-equal-second",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-ignore-receipt-digest",
+    "File": "internal/operatorgates/observe/clock_binding.go",
+    "Function": "Valid",
+    "Old": "fmt.Sprintf(\"%x\", sha256.Sum256(raw)) == expected",
+    "New": "fmt.Sprintf(\"%x\", sha256.Sum256(raw)) != \"\"",
+    "Test": "TestBoundCoverage/altered",
+    "Marker": "MUTATION: bound-altered",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-token-private",
+    "File": "internal/operatorgates/clocks/coverage.go",
+    "Function": "publicAttempts",
+    "Old": "t.Rows[j].MaxErrorDecimal = \"unavailable\"",
+    "New": "t.Rows[j].MaxErrorDecimal = raw",
+    "Test": "TestBoundCoverage/token-private",
+    "Marker": "MUTATION: bound-token-private",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-offline-bypass",
+    "File": "scripts/dev/clock-coverage/main.go",
+    "Function": "evaluate",
+    "Old": "if historical || e.ValidateBinding(report.ClockReceiptSHA256) != nil || report.Bounds != e.Bounds {",
+    "New": "if false && (historical || e.ValidateBinding(report.ClockReceiptSHA256) != nil || report.Bounds != e.Bounds) {",
+    "Test": "TestBoundOffline",
+    "Marker": "MUTATION: bound-offline",
+    "Package": "./scripts/dev/clock-coverage"
+  },
+  {
+    "ID": "clock-bound-check-fixed",
+    "File": "internal/operatorgates/clocks/bound_coverage.go",
+    "Function": "Check",
+    "Old": "b.FrontendWorkerBoundNS -= k",
+    "New": "b=FixedCoverageBounds(); b.FrontendWorkerBoundNS -= k",
+    "Test": "TestBoundCoverageConsumers",
+    "Marker": "MUTATION: bound-check",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-signal-fixed",
+    "File": "internal/operatorgates/clocks/bound_coverage.go",
+    "Function": "SignalMidpoint",
+    "Old": "return SignalMidpoint(before, after, workerBound, b.FrontendWorkerBoundNS)",
+    "New": "return SignalMidpoint(before, after, workerBound, max(b.FrontendWorkerBoundNS,CoverageWorkerBoundNS))",
+    "Test": "TestBoundCoverageConsumers",
+    "Marker": "MUTATION: bound-signal",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-drain-fixed",
+    "File": "internal/operatorgates/clocks/coverage.go",
+    "Function": "Evaluate",
+    "Old": "observe.CoverageTailReady(t, e.FrontendSlot, e.ControlSlot, bounds.FrontendControlBoundNS, bounds.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)",
+    "New": "observe.CoverageTailReady(t, e.FrontendSlot, e.ControlSlot, CoverageControlBoundNS, bounds.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)",
+    "Test": "TestBoundCoverageConsumers",
+    "Marker": "MUTATION: bound-drain",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-offline-pool-stripped",
+    "File": "scripts/dev/clock-coverage/main.go",
+    "Function": "evaluate",
+    "Old": "if pool.ClockReceiptSHA256 != e.ClockReceiptSHA256 || e.ClockReceiptSHA256 != \"\" && (pool.PreCoverageEvidence || pool.RunID != e.Binding.Receipt.RunID) {",
+    "New": "if e.ClockReceiptSHA256 != \"\" && (pool.PreCoverageEvidence || pool.ClockReceiptSHA256 != e.ClockReceiptSHA256 || pool.RunID != e.Binding.Receipt.RunID) {",
+    "Test": "TestBoundOffline",
+    "Marker": "MUTATION: bound-offline",
+    "Package": "./scripts/dev/clock-coverage"
+  },
+  {
+    "ID": "clock-bound-sanitizer-unbound-pool",
+    "File": "internal/operatorrehearsal/evidence.go",
+    "Function": "SanitizeMediaEvidence",
+    "Old": "if pool.ClockReceiptSHA256 != \"\" || coverage != nil && observe.IsBound(coverage.ClockReceiptSHA256, coverage.Binding) {",
+    "New": "if pool.ClockReceiptSHA256 != \"\" {",
+    "Test": "TestSanitizedBoundReceipt",
+    "Marker": "MUTATION: sanitized-bound-receipt",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-bound-sanitizer-run",
+    "File": "internal/operatorrehearsal/evidence.go",
+    "Function": "SanitizeMediaEvidence",
+    "Old": " || coverage.Binding.Receipt.RunID != pool.RunID",
+    "New": "",
+    "Test": "TestSanitizedBoundReceipt",
+    "Marker": "MUTATION: sanitized-bound-receipt",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-bound-check-omit-K",
+    "File": "internal/operatorgates/clocks/bound_coverage.go",
+    "Function": "Check",
+    "Old": "b.FrontendWorkerBoundNS -= k",
+    "New": "b.FrontendWorkerBoundNS -= 0 * k",
+    "Test": "TestBoundCheckReserve",
+    "Marker": "MUTATION: bound-check-K",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "clock-bound-wrapper-wrong-run",
+    "File": "internal/operatorevidence/judge.go",
+    "Function": "MarshalJudgeInput",
+    "Old": " || pool.ClockCoverage.Binding.Receipt.RunID != pool.RunID",
+    "New": "",
+    "Test": "TestBoundJudgeRunID",
+    "Marker": "MUTATION: bound-run-wrapper",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "clock-bound-decoder-wrong-run",
+    "File": "internal/operatorevidence/judge-src/clock_coverage.go",
+    "Function": "coverageForPhase",
+    "Old": "if input.ClockReceiptSHA256 != \"\" && input.ClockCoverage != nil && input.ClockCoverage.Binding != nil && input.ClockCoverage.Binding.Receipt.RunID != input.RunID {",
+    "New": "if false && input.ClockReceiptSHA256 != \"\" && input.ClockCoverage != nil && input.ClockCoverage.Binding != nil && input.ClockCoverage.Binding.Receipt.RunID != input.RunID {",
+    "Test": "TestBoundJudgeRunID",
+    "Marker": "MUTATION: bound-run-decoder",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "clock-bound-rebind",
+    "File": "internal/operatorgates/clocks/bound_coverage.go",
+    "Function": "WithBinding",
+    "Old": "if observe.IsBound(e.ClockReceiptSHA256, e.Binding) {",
+    "New": "if false {",
+    "Test": "TestBoundCoverageRebind",
+    "Marker": "MUTATION: bound-rebind",
+    "Package": "./internal/operatorgates/clocks"
   }
 ]
