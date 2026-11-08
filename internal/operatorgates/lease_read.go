@@ -63,7 +63,11 @@ func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (Le
 		e.Falsification = s.clockProbeHistory.Snapshot(front, map[string]string{"control": control, "w1": "w1", "w2": "w2"})
 	}
 	s.mu.Unlock()
-	return LeaseRead{Evidence: e, Sent: sent}, err
+	read := LeaseRead{Evidence: e, Sent: sent}
+	if s.leaseReadObserved != nil {
+		s.leaseReadObserved(read, s.clock.Elapsed())
+	}
+	return read, err
 }
 
 func (s *Session) observeLeases(ctx context.Context, p Peer, end time.Duration, input func(string) operator.HostLeaseReadInput, decode func(string, string) error, sent func(string, time.Duration)) error {

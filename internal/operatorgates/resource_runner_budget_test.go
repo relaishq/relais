@@ -1,6 +1,7 @@
 package operatorgates
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -200,7 +201,12 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 					return packedCoverageSample(t, 1793930021, false), nil
 				}
 			}
+			var leaseDiagnostics bytes.Buffer
+			runner.Timing = &TimingRecorder{Writer: &leaseDiagnostics}
 			runner.Run(context.Background(), s, peer)
+			if !strings.Contains(leaseDiagnostics.String(), `"type":"clock-lease-observation"`) {
+				t.Fatal("MUTATION: lease-observation-wired", leaseDiagnostics.String())
+			}
 			if mode == "coverage-drain" {
 				reportCoverage, err := json.Marshal(result.ClockCoverage)
 				if err != nil || drainReads != 40 || result.ClockCoverage == nil || len(result.ClockCoverage.Windows) != 1 || len(result.ClockCoverage.DrainAttempts) != 10 || string(judgedCoverage) != string(reportCoverage) {

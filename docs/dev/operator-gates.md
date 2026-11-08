@@ -1144,6 +1144,13 @@ benchmark measured warm four-host reads at 1.20–1.32 s and first reads at
 The rehearsal records `clock-lease-read` duration/budget and `clock-lease-exec`
 duration per slot, including failures, to measure actual exec and cold costs.
 These diagnostics do not enter verdict inputs. No warm-up read is added.
+Every bound preparation refusal retains its fixed `clock-lease-missing`,
+`clock-lease-expired`, `clock-lease-bound` or `clock-config-differ` cause in the
+gate reason and `precondition-check` diagnostics, including head-caller reports.
+`clock-lease-observation` JSON records retain sanitized lease observations and
+gate-owned `sentNs`/`receivedNs` for successful and refused guard reads, within
+the existing 256-refresh diagnostic cap. This allows replay of leases at read receipt;
+normalized coverage rows alone cannot reconstruct reference ages or expiry.
 
 `operator.ClockBindingArtifacts` carries receipt and evidence in Init, compressed
 separately with an 8 MiB decoded limit each and a half-frame combined wire limit.

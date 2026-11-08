@@ -62,7 +62,12 @@ func ValidateProcessParameters(p ProcessParameters) error {
 	}
 	return nil
 }
-func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) error {
+func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) (refusal error) {
+	defer func() {
+		if r.Session != nil && isLeaseRefusal(refusal) {
+			r.Session.observationFailure("hosts", "clock", refusal)
+		}
+	}()
 	if r.Leases == nil {
 		return fault("clock-lease-missing")
 	}

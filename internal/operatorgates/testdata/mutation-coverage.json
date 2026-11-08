@@ -514,7 +514,14 @@
     "lease-per-child-attempt-floor",
     "lease-serial-service-floor",
     "lease-serial-service-boundary",
-    "worker-stop-always-restores"
+    "worker-stop-always-restores",
+    "lease-refusal-public-cause",
+    "lease-guard-diagnostic-dropped",
+    "lease-observation-not-wired",
+    "lease-observation-read-dropped",
+    "lease-observation-age-stripped",
+    "lease-observation-source-leak",
+    "lease-observation-unbounded"
   ],
   "killed": [
     {
@@ -4403,6 +4410,55 @@
     {
       "id": "worker-stop-always-restores",
       "test": "TestProductionWorkerStopRequiresLease/missing",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-refusal-public-cause",
+      "test": "TestLeaseRefusalPublicCause/clock-lease-expired",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-guard-diagnostic-dropped",
+      "test": "TestBoundClockRefusalDiagnostic/clock-lease-expired",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-observation-not-wired",
+      "test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-observation-read-dropped",
+      "test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-observation-age-stripped",
+      "test": "TestLeaseObservationDiagnostics",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-observation-source-leak",
+      "test": "TestLeaseObservationDiagnostics",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-observation-unbounded",
+      "test": "TestLeaseObservationLimit",
       "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""

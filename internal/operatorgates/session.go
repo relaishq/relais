@@ -59,6 +59,7 @@ type Session struct {
 	uncertainties   []operator.Uncertainty
 	uncertaintySink func(operator.Uncertainty)
 
+	leaseReadObserved         func(LeaseRead, time.Duration)
 	liveLeaseGuard            *LeaseGuard
 	clockArtifacts            operator.ClockBindingArtifacts
 	clockBinding              *observe.ClockBinding

@@ -182,3 +182,38 @@ func TestProductionWorkerStopRequiresLease(t *testing.T) {
 		})
 	}
 }
+
+func TestBoundClockRefusalDiagnostic(t *testing.T) {
+	for _, cause := range []string{"clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ"} {
+		t.Run(cause, func(t *testing.T) {
+			r, _, _ := runtimeFixture(t)
+			c := &leaseTestClock{tick: time.Second}
+			r.Session.clock, r.Session.Budget.clock = c, c
+			g, read := leaseGuardFixture(t, c)
+			r.Leases = g
+			switch cause {
+			case "clock-lease-missing":
+				r.Leases = nil
+			case "clock-lease-expired":
+				c.advance(2 * time.Second)
+				g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
+			case "clock-lease-bound":
+				read.Evidence.Clocks["shared"].Lease.ErrorBoundNS = 200000
+				require.NoError(t, g.accept(read))
+			case "clock-config-differ":
+				g.invalid = true
+			}
+			calls := 0
+			r.Session.SetObservationFailureSink(func(slot, action string, err error) {
+				calls++
+				if slot != "hosts" || action != "clock" || err.Error() != cause {
+					t.Fatal("MUTATION: lease-guard-diagnostic", slot, action, err)
+				}
+			})
+			err := r.VerifyClocks(context.Background(), c.Elapsed()+time.Second)
+			if err == nil || code(err) != cause || calls != 1 || r.Session.Latched() {
+				t.Fatal("MUTATION: lease-guard-diagnostic", err, calls)
+			}
+		})
+	}
+}

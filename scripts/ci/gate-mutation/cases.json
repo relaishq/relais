@@ -5559,5 +5559,75 @@
     "Test": "TestProductionWorkerStopRequiresLease/missing",
     "Marker": "MUTATION: worker-stop-lease",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-refusal-public-cause",
+    "File": "internal/operatorrehearsal/report.go",
+    "Function": "publicCode",
+    "Old": "case \"clock-lease-missing\", \"clock-lease-expired\", \"clock-lease-bound\", \"clock-config-differ\":\n\t\treturn s",
+    "New": "",
+    "Test": "TestLeaseRefusalPublicCause/clock-lease-expired",
+    "Marker": "MUTATION: lease-refusal-public-cause",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-guard-diagnostic-dropped",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "VerifyClocks",
+    "Old": "if r.Session != nil && isLeaseRefusal(refusal) {",
+    "New": "if false && r.Session != nil && isLeaseRefusal(refusal) {",
+    "Test": "TestBoundClockRefusalDiagnostic/clock-lease-expired",
+    "Marker": "MUTATION: lease-guard-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-not-wired",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Old": "s.leaseReadObserved = r.Timing.RecordLeaseRead",
+    "New": "s.leaseReadObserved = nil",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+    "Marker": "MUTATION: lease-observation-wired",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-read-dropped",
+    "File": "internal/operatorgates/lease_read.go",
+    "Function": "ReadLeases",
+    "Old": "s.leaseReadObserved(read, s.clock.Elapsed())",
+    "New": "",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+    "Marker": "MUTATION: lease-observation-wired",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-age-stripped",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordLeaseRead",
+    "Old": "sent, int64(received),",
+    "New": "sent, 0,",
+    "Test": "TestLeaseObservationDiagnostics",
+    "Marker": "MUTATION: lease-observation-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-source-leak",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordLeaseRead",
+    "Old": "clocks.PublicEvidence(read.Evidence)",
+    "New": "read.Evidence",
+    "Test": "TestLeaseObservationDiagnostics",
+    "Marker": "MUTATION: lease-observation-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-unbounded",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordLeaseRead",
+    "Old": "if r.refreshes >= 256 {",
+    "New": "if false {",
+    "Test": "TestLeaseObservationLimit",
+    "Marker": "MUTATION: lease-observation-limit",
+    "Package": "./internal/operatorgates"
   }
 ]

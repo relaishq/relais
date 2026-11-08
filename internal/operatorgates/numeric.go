@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
@@ -72,6 +73,31 @@ func (r *TimingRecorder) RecordClocks(e clocks.Evidence) {
 		Refresh  int             `json:"refresh"`
 		Evidence clocks.Evidence `json:"evidence"`
 	}{"host-clocks", r.refreshes, e})
+}
+
+// RecordLeaseRead retains the gate-owned send/receive ages even when the guard
+// refuses the observation. PublicEvidence removes source labels and opaque cursors.
+func (r *TimingRecorder) RecordLeaseRead(read LeaseRead, received time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.refreshes >= 256 {
+		r.omittedRefreshes++
+		return
+	}
+	r.refreshes++
+	sent := map[string]int64{}
+	for _, slot := range []string{"relay", "shared", "w1", "w2"} {
+		if at, ok := read.Sent[slot]; ok {
+			sent[slot] = int64(at)
+		}
+	}
+	r.write(struct {
+		Type       string           `json:"type"`
+		Refresh    int              `json:"refresh"`
+		SentNS     map[string]int64 `json:"sentNs"`
+		ReceivedNS int64            `json:"receivedNs"`
+		Evidence   clocks.Evidence  `json:"evidence"`
+	}{"clock-lease-observation", r.refreshes, sent, int64(received), clocks.PublicEvidence(read.Evidence)})
 }
 
 func (r *TimingRecorder) Finish() {
