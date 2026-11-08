@@ -80,11 +80,7 @@ type Session struct {
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
-	// Setup may be unbound; a receipt claim must carry its artifacts.
-	// The resource runner validates binding before any caller or gate.
-	if init.Scenario.ClockReceiptSHA256 != "" && init.ClockBinding == nil {
-		return nil, &clocks.BindingError{Cause: "clock-binding-missing"}
-	}
+	// Setup may be unbound. BindClock owns receipt validation before any caller.
 	if id == "" || len(id) > 128 || !digestPattern.MatchString(init.Scenario.Digest) || init.Scenario.SchemaVersion != 1 || len(init.Scenario.Gates) == 0 || len(init.Scenario.Gates) > 6 {
 		return nil, errors.New("invalid-init")
 	}

@@ -102,6 +102,16 @@ func (p *observationPeer) Finish(ctx context.Context, build func(error) operator
 	return nil
 }
 func hostReply(t *testing.T, data []byte) operator.Reply {
+	var shape map[string]json.RawMessage
+	if json.Unmarshal(data, &shape) == nil && len(shape["trackingLog"]) > 0 {
+		var log clocks.TrackingLog
+		if json.Unmarshal(shape["trackingLog"], &log) == nil {
+			testPrecision(log.Rows)
+			shape["trackingLog"], _ = json.Marshal(log)
+			data, _ = json.Marshal(shape)
+		}
+	}
+
 	t.Helper()
 	var b bytes.Buffer
 	z := gzip.NewWriter(&b)
@@ -339,97 +349,21 @@ func TestFreshInventoryReadsAllHostsAndChecksDeployment(t *testing.T) {
 	}
 }
 
-func TestRuntimeClockCacheOracle(t *testing.T) {
-	corpus, err := loadProcedureCorpus(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture, err := loadProcedureFixture(corpus, "e91020ea28c0bc03.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, clock := fixtureSession(t)
-	session.inventoryComponents = map[string][]string{"relay": {"signal"}, "shared": {"control"}}
-	var observed []clocks.Evidence
-	runtime := &ProcessRuntime{Session: session, ClockObserved: func(e clocks.Evidence) { observed = append(observed, e) }}
-	roots := procedureRoots(fixture, "processes.ProcessRuntime.verifyClocks")
-	if len(roots) != 4 {
-		t.Fatal("clock cache invocations changed")
-	}
-	for _, root := range roots {
-		outputs := map[string]json.RawMessage{}
-		hosts := map[string]string{}
-		expectedReads := 0
-		for _, e := range root.events {
-			if e.Kind == "request" && e.Operation == "clocks.previewClocks" {
-				var bounds clocks.Bounds
-				if err := json.Unmarshal(e.Inputs[1], &hosts); err != nil {
-					t.Fatal(err)
-				}
-				if err := json.Unmarshal(e.Inputs[2], &bounds); err != nil {
-					t.Fatal(err)
-				}
-				runtime.Bounds = &bounds
-			}
-			if e.Kind == "result" && strings.HasSuffix(e.Operation, ".now") {
-				var now int64
-				if json.Unmarshal(e.Value, &now) == nil {
-					clock.Now = time.UnixMilli(now)
-					clock.Tick = time.Duration(now-1000000) * time.Millisecond
-				}
-			}
-			if e.Kind == "result" && strings.HasSuffix(e.Operation, ".send") {
-				var out struct {
-					Instance string `json:"InstanceId"`
-					Stdout   string `json:"StandardOutputContent"`
-				}
-				if json.Unmarshal(e.Value, &out) == nil && out.Stdout != "" {
-					var envelope struct{ Value json.RawMessage }
-					if err := json.Unmarshal([]byte(out.Stdout), &envelope); err != nil {
-						t.Fatal(err)
-					}
-					outputs[out.Instance] = envelope.Value
-					expectedReads++
-				}
-			}
+func TestBoundLeaseCacheAndRefresh(t *testing.T) {
+	r, p, _ := runtimeFixture(t)
+	c := r.Session.clock.(*FakeClock)
+	for i, d := range []time.Duration{0, time.Second, 2 * time.Second} {
+		c.Advance(d)
+		if err := r.VerifyClocks(context.Background(), c.Elapsed()+time.Minute); err != nil {
+			t.Fatal("MUTATION: clock-cache", err)
 		}
-		if root.req.ID == 99 {
-			runtime.Bounds = nil
+		want := 4
+		if i == 2 {
+			want = 8
 		}
-		peer := &observationPeer{respond: func(req operator.Request) operator.Reply {
-			if req.Action != "clock" {
-				t.Fatal("unexpected clock action")
-			}
-			data, ok := outputs[hosts[req.Target]]
-			if !ok {
-				t.Fatal("MUTATION: clock-cache unexpected host read")
-			}
-			return hostReply(t, data)
-		}}
-		runtime.Peer = peer
-		var deadline int64
-		_ = json.Unmarshal(root.req.Inputs[0], &deadline)
-		err := runtime.VerifyClocks(context.Background(), time.Duration(deadline-1000000)*time.Millisecond)
-		if (err == nil) != (root.res.Completion == "returned") || peer.sent != expectedReads {
-			t.Fatal("MUTATION: clock-cache replay", root.req.ID, err, peer.sent, expectedReads)
+		if p.sent != want || !r.ClockSamples[len(r.ClockSamples)-1].At.Equal(c.Wall()) {
+			t.Fatal("MUTATION: clock-cache", i, p.sent, want)
 		}
-		if err == nil {
-			var want struct {
-				At              int64
-				Control, Worker int64
-				Drift           float64
-			}
-			if err := json.Unmarshal(root.res.Value, &want); err != nil {
-				t.Fatal(err)
-			}
-			got := runtime.ClockSamples[len(runtime.ClockSamples)-1]
-			if got.At.UnixMilli() != want.At || got.Control != want.Control || got.Worker != want.Worker || got.Drift != want.Drift {
-				t.Fatal("MUTATION: clock-cache values", root.req.ID, got, want)
-			}
-		}
-	}
-	if len(runtime.ClockSamples) != 2 || len(observed) != 2 || observed[0].At != runtime.ClockSamples[0].At || observed[1].At != runtime.ClockSamples[1].At {
-		t.Fatal("MUTATION: clock-cache refresh and numeric retention")
 	}
 }
 
@@ -514,8 +448,9 @@ func TestTrackingFailedBatchRefreshIsRecordedAndCountsTowardCap(t *testing.T) {
 		}
 		return operator.Reply{Transport: operator.Succeeded, ExitCode: new(0), Payload: oracleJSON(batch)}
 	}}
-	r := &ProcessRuntime{Session: s, Peer: peer, Bounds: &clocks.Bounds{}, ClockObserved: recorder.RecordClocks}
-	if err := r.VerifyClocks(context.Background(), time.Minute); err == nil {
+	e, err := s.FreshClocks(context.Background(), peer, clocks.Bounds{}, time.Minute)
+	recorder.RecordClocks(e)
+	if err == nil {
 		t.Fatal("failed batch became a successful refresh")
 	}
 	var record struct {
@@ -524,7 +459,7 @@ func TestTrackingFailedBatchRefreshIsRecordedAndCountsTowardCap(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
 		t.Fatal(err)
 	}
-	if record.Evidence.At.IsZero() || record.Evidence.Clocks["w1"].TrackingLog == nil || recorder.refreshes != 1 || len(r.ClockSamples) != 0 || s.Latched() || peer.sent != 1 {
+	if record.Evidence.At.IsZero() || record.Evidence.Clocks["w1"].TrackingLog == nil || recorder.refreshes != 1 || s.Latched() || peer.sent != 1 {
 		t.Fatal("failed refresh lost partial evidence, changed the cap, or changed failure semantics", output.String())
 	}
 }

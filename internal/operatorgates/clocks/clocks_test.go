@@ -2,9 +2,11 @@ package clocks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/oracletest"
 )
@@ -116,5 +118,22 @@ func TestPublicTrackingRetainsTimelineWithoutRawCursorOrSource(t *testing.T) {
 	}
 	if source.TrackingLog.Rows[0].Reference != "203.0.113.15" {
 		t.Fatal("public projection mutated the cursor source")
+	}
+}
+
+func TestSignalBracketRangeAndEnvelope(t *testing.T) {
+	for _, n := range []int64{2000000000, 9223372034854775807} {
+		stamp := fmt.Sprintf("%019d", n)
+		at := time.Unix(0, n)
+		got, err := SignalMidpoint(stamp, stamp, 0, 1, at, at)
+		if err != nil || got != stamp {
+			t.Fatal("MUTATION: bracket-range-boundary", stamp, got, err)
+		}
+	}
+	for _, before := range []string{"bad", "0000000000000000000", "0000000001999999999", "9223372034854775808"} {
+		_, err := SignalMidpoint(before, "1793930000000000000", 0, 170000)
+		if err == nil || errors.Is(err, ErrSignalBracketWide) {
+			t.Fatal("MUTATION: bracket-malformed-wide", before, err)
+		}
 	}
 }

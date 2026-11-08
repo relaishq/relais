@@ -22,6 +22,7 @@ import (
 // ProcessRuntime generate every host request. Fixed waits advance a fake clock.
 // This pins transport counts, not media qualification or real readiness latency.
 type roundTripWorld struct {
+	fixedWaits     time.Duration
 	runtime        *ProcessRuntime
 	clock          *FakeClock
 	call           controlplane.CallStatus
@@ -75,7 +76,7 @@ func (w *roundTripWorld) data(op string) any {
 		if w.call.Owner == e.Worker {
 			w.move(other(e.Worker), "takeover")
 		}
-		return map[string]any{"completed": true, "signalBeforeUnixNs": "1792886400000000000", "signalAfterUnixNs": "1792886400000000000"}
+		return map[string]any{"completed": true, "signalBeforeUnixNs": fmt.Sprint(time.Unix(1793930000, 0).Add(w.clock.Elapsed()).UnixNano()), "signalAfterUnixNs": fmt.Sprint(time.Unix(1793930000, 0).Add(w.clock.Elapsed()).UnixNano())}
 	case "worker-stop":
 		w.dead[e.Worker] = true
 	case "worker-start":
@@ -111,6 +112,7 @@ func newRoundTripWorld(t *testing.T, batch bool) (*roundTripWorld, ProcedurePort
 	r.BeforeMutation = nil
 	if batch {
 		r.Session.capabilities[operator.HostReadBatch] = true
+		r.Session.capabilities[operator.HostLeaseReadBatch] = true
 	}
 	w := &roundTripWorld{runtime: r, clock: clock, call: controlplane.CallStatus{ID: "original", Owner: "w1", Epoch: 1}, dead: map[string]bool{}, draining: map[string]bool{}, relayEpoch: 1, counts: map[string]int{}}
 	original := peer.respond
@@ -132,11 +134,11 @@ func newRoundTripWorld(t *testing.T, batch bool) (*roundTripWorld, ProcedurePort
 			}
 		}
 		data := w.data(req.Action)
-		return hostReply(t, oracleJSON(map[string]any{"kind": "ok", "started": clock.Wall(), "ended": clock.Wall(), "data": data}))
+		return hostReply(t, oracleJSON(map[string]any{"kind": "ok", "started": time.Unix(1793930000, 0).Add(w.clock.Elapsed()), "ended": time.Unix(1793930000, 0).Add(w.clock.Elapsed()), "data": data}))
 	}
 	peer.respond = func(req operator.Request) operator.Reply {
 		w.counts[req.Action]++
-		if req.Operation != operator.HostReadBatch {
+		if req.Operation != operator.HostReadBatch && req.Operation != operator.HostLeaseReadBatch {
 			return single(req)
 		}
 		var args operator.HostReadBatchArgs
@@ -145,7 +147,7 @@ func newRoundTripWorld(t *testing.T, batch bool) (*roundTripWorld, ProcedurePort
 		}
 		out := operator.HostReadBatchOutput{}
 		for _, read := range args.Reads {
-			child := single(operator.Request{Action: req.Action, Target: read.Target})
+			child := single(operator.Request{Operation: req.Operation, Action: req.Action, Target: read.Target})
 			child.ID = read.Target
 			out.Replies = append(out.Replies, child)
 		}
@@ -153,7 +155,7 @@ func newRoundTripWorld(t *testing.T, batch bool) (*roundTripWorld, ProcedurePort
 		return operator.Reply{Transport: operator.Succeeded, ExitCode: &zero, Payload: oracleJSON(out)}
 	}
 	broker := &testGateBroker{reg: Registration{Near: true, Sessions: []string{"original"}, RegisteredAt: &registered}}
-	p := ProcedurePorts{Clock: clock, Broker: broker, Sleep: func(_ context.Context, d time.Duration) error { clock.Advance(d); return nil }, Step: func(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
+	p := ProcedurePorts{Clock: clock, Broker: broker, Sleep: func(_ context.Context, d time.Duration) error { w.fixedWaits += d; clock.Advance(d); return nil }, Step: func(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
 		w.extra = extra
 		return r.Step(ctx, op, slot, end, extra)
 	}}
@@ -173,7 +175,7 @@ func newRoundTripWorld(t *testing.T, batch bool) (*roundTripWorld, ProcedurePort
 var procedureHostCounts = map[operator.Gate]map[string]int{
 	operator.Rollout:         {"clock": 44, "drain": 2, "freeze": 1, "inventory": 96, "move": 5, "replace": 5, "status": 31, "unfreeze": 1, "worker-down": 3, "worker-empty": 2, "worker-start": 5, "worker-stop": 2},
 	operator.ControlRestart:  {"clock": 48, "control-start": 2, "control-stop": 2, "drain": 1, "inventory": 116, "move": 6, "replace": 6, "status": 38, "worker-down": 5, "worker-empty": 1, "worker-start": 6, "worker-stop": 1},
-	operator.UpgradeRollback: {"clock": 40, "control-start": 2, "control-stop": 2, "drain": 4, "freeze": 2, "inventory": 188, "move": 3, "relay-inspect": 4, "relay-replenish": 2, "relay-stage": 2, "relay-stop": 2, "replace": 7, "signal-start": 2, "signal-stop": 2, "status": 39, "unfreeze": 1, "worker-down": 3, "worker-empty": 4, "worker-start": 7, "worker-stop": 4},
+	operator.UpgradeRollback: {"clock": 32, "control-start": 2, "control-stop": 2, "drain": 4, "freeze": 2, "inventory": 188, "move": 3, "relay-inspect": 4, "relay-replenish": 2, "relay-stage": 2, "relay-stop": 2, "replace": 7, "signal-start": 2, "signal-stop": 2, "status": 39, "unfreeze": 1, "worker-down": 3, "worker-empty": 4, "worker-start": 7, "worker-stop": 4},
 	operator.RelayDeploy:     {"clock": 4, "inventory": 12, "relay-inspect": 2, "relay-replenish": 1, "relay-stage": 1, "relay-stop": 1, "status": 1},
 	operator.Failover:        {"clock": 12, "inventory": 20, "move": 1, "replace": 1, "status": 9, "telemetry": 12, "worker-down": 1, "worker-start": 1, "worker-status": 6},
 	operator.Load:            {"status": 1, "telemetry": 4, "worker-status": 2},
@@ -203,8 +205,8 @@ func TestProcedureRoundTripCounts(t *testing.T) {
 				} else {
 					out = RunProcessGate(context.Background(), gate, w.runtime.Config, p, GateMaximum)
 				}
-				if want := map[operator.Gate]time.Duration{operator.Rollout: 690 * time.Second, operator.ControlRestart: 750 * time.Second, operator.UpgradeRollback: 720 * time.Second, operator.RelayDeploy: 90 * time.Second}[gate]; w.clock.Elapsed() != want {
-					t.Fatalf("fixed waits changed: got %s want %s", w.clock.Elapsed(), want)
+				if want := map[operator.Gate]time.Duration{operator.Rollout: 690 * time.Second, operator.ControlRestart: 750 * time.Second, operator.UpgradeRollback: 720 * time.Second, operator.RelayDeploy: 90 * time.Second}[gate]; w.fixedWaits != want {
+					t.Fatalf("fixed waits changed: got %s want %s", w.fixedWaits, want)
 				}
 				if !out.Completed {
 					t.Fatalf("procedure incomplete: %+v counts=%v", out, w.counts)

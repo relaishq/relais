@@ -165,10 +165,7 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 			break
 		}
 		if until-g.clock.Elapsed() < leaseReadAttempt {
-			if err := g.pause(ctx, until-g.clock.Elapsed()); err != nil {
-				return err
-			}
-			break
+			return fault("clock-lease-expired")
 		}
 		wait, done := context.WithTimeout(ctx, until-g.clock.Elapsed())
 		r, err := g.readAttempt(wait, until)
@@ -202,7 +199,9 @@ func leaseRestoration(op string, rollback, recovery bool) bool {
 		return true
 	case "replace":
 		return rollback || recovery
-	case "freeze", "drain", "worker-stop", "relay-stage", "relay-stop", "control-stop", "signal-stop":
+	case "worker-stop":
+		return rollback || recovery
+	case "freeze", "drain", "relay-stage", "relay-stop", "control-stop", "signal-stop":
 		return rollback
 	}
 	return false

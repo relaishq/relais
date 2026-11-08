@@ -15,10 +15,10 @@ import (
 
 func finalDrainFixture(t *testing.T) (*Session, *FakeClock, *EvidenceRuntime) {
 	t.Helper()
-	s, c := fixtureSession(t)
+	s, c := coverageFixtureSession(t)
 	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
-	s.retainClockAttempt(clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: 1793930021, LeapStatus: "N"}}}}}})
-	pool := &EvidenceRuntime{RunID: "run", Judge: finalCoverageJudge{}, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
+	retainTestClockAttempt(s, clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: 1793930021, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}}}}}})
+	pool := &EvidenceRuntime{ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, RunID: "run", Judge: finalCoverageJudge{}, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
 		e := s.coverageSnapshot(clocks.FixedCoverageBounds())
 		e.Windows = []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}
 		e.Evaluate()

@@ -33,6 +33,10 @@ func (r *rehearsal) clockConfig(judge string) operatorgates.ResourceConfig {
 	return operatorgates.ResourceConfig{ClockPolicy: rehearsalClockPolicy(), ClockLeapMode: "unsmeared", Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: judge, Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
 }
 func (r *rehearsal) bindAdmission(ctx context.Context, scenario operator.Scenario) error {
+	clean := func() bool { return r.session != nil && !r.session.Latched() && len(r.session.Uncertainties()) == 0 }
+	if !clean() {
+		return errors.New("command-result-unknown")
+	}
 	if r.report.ClockSelection == nil || r.report.ClockSelection.Cause != "" || r.report.ClockSelection.Bounds == nil {
 		return errors.New("clock-binding-missing")
 	}
@@ -78,6 +82,10 @@ func (r *rehearsal) bindAdmission(ctx context.Context, scenario operator.Scenari
 	if err != nil {
 		_ = peer.Close()
 		return err
+	}
+	if !clean() {
+		_ = peer.Close()
+		return errors.New("command-result-unknown")
 	}
 	_ = r.peer.Close()
 	r.peer = peer

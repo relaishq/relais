@@ -55,8 +55,10 @@ func TestProbeEvidenceCannotChangePolicyOrReadSuccess(t *testing.T) {
 				return hostReply(t, raw)
 			}}
 			var observed clocks.Evidence
-			runtime := &ProcessRuntime{Session: s, Peer: peer, Config: &ProcessConfig{Parameters: ProcessParameters{ClockProbeFile: file}}, Bounds: &clocks.Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 1}, ClockObserved: func(e clocks.Evidence) { observed = e }}
-			require.NoError(t, runtime.VerifyClocks(context.Background(), time.Minute))
+			s.clockProbeFile = file
+			var err error
+			observed, err = s.FreshClocks(context.Background(), peer, clocks.Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 1}, time.Minute)
+			require.NoError(t, err)
 			require.False(t, s.Latched())
 			require.Equal(t, 4, peer.sent)
 			if mode == "absent" {
@@ -96,7 +98,9 @@ func TestProbeEvidenceCannotChangePolicyOrReadSuccess(t *testing.T) {
 func TestClockCacheHitDoesNotTouchSessionState(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, c := fixtureSession(t)
-		r := &ProcessRuntime{Session: s, Config: &ProcessConfig{}, Bounds: &clocks.Bounds{}, ClockSamples: []clocks.Evidence{{At: c.Wall()}}}
+		r := &ProcessRuntime{Session: s}
+		c.Advance(time.Second)
+		r.Leases, _ = leaseGuardFixture(t, c)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		require.NoError(t, r.VerifyClocks(context.Background(), time.Minute))

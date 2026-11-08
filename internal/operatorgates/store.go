@@ -33,10 +33,7 @@ func (s SessionStoreCapability) Observe(ctx context.Context, end time.Duration) 
 	return observation, nil
 }
 func (s SessionStoreCapability) Failover(ctx context.Context, end time.Duration) error {
-	if s.Session.clockBinding != nil {
-		return s.FailoverWithLeases(ctx, end, s.Guard)
-	}
-	return s.failover(ctx, end, nil)
+	return s.FailoverWithLeases(ctx, end, s.Guard)
 }
 
 func (s SessionStoreCapability) FailoverWithLeases(ctx context.Context, end time.Duration, guard *LeaseGuard) error {

@@ -148,6 +148,12 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 			var requests []string
 			peer := &idlePeer{respond: func(req operator.Request) operator.Reply {
 				requests = append(requests, req.Target+":"+req.Action)
+				if repair && r.process.Operation == "rollback" {
+					t.Fatal("MUTATION: repair-operation", r.process.Operation)
+				}
+				if repair && req.Action == "worker-stop" && !bytes.Contains(req.Script, []byte("'--operation','upgrade'")) {
+					t.Fatal("MUTATION: repair-operation", req.Action)
+				}
 				var data []byte
 				switch req.Action {
 				case "clock":
@@ -215,7 +221,7 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 				}
 				return hostReply(t, data)
 			}}
-			r.runtime = &operatorgates.ProcessRuntime{Session: session, Peer: peer, Config: r.process, Pins: pins, Architecture: "x86_64", Bounds: &clocks.Bounds{FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000}}
+			r.runtime = &operatorgates.ProcessRuntime{Session: session, Peer: peer, Config: r.process, Pins: pins, Architecture: "x86_64"}
 			session.SetObservationFailureSink(r.preconditionDiagnostic)
 			if mode == "missing-unit-sequence" {
 				err = deployment.NegativeControls(context.Background(), func(ctx context.Context, control string) error {

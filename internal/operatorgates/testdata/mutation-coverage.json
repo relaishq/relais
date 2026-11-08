@@ -494,7 +494,20 @@
     "lease-queue-budget",
     "lease-refusal-latched",
     "lease-queue-timeout",
-    "helper-run-deadline"
+    "helper-run-deadline",
+    "store-unleased",
+    "bracket-malformed-wide",
+    "verify-bound-ignore",
+    "bind-admission",
+    "admission-latch-cleared",
+    "admission-uncertainty-cleared",
+    "admission-late-uncertainty-cleared",
+    "admission-probe-files",
+    "lease-attempt-context",
+    "lease-attempt-deadline",
+    "bracket-envelope-dropped",
+    "lease-short-budget-waits",
+    "repair-operation-mutates"
   ],
   "killed": [
     {
@@ -4244,6 +4257,97 @@
       "id": "helper-run-deadline",
       "test": "TestPythonGuards/helper-run-deadline",
       "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "store-unleased",
+      "test": "TestBoundStoreRequiresGuard",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "bracket-malformed-wide",
+      "test": "TestSignalBracketRangeAndEnvelope",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "verify-bound-ignore",
+      "test": "TestVerifyBoundSnapshotError",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "bind-admission",
+      "test": "TestBindAdmission/valid",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "admission-latch-cleared",
+      "test": "TestBindAdmission/latched",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "admission-uncertainty-cleared",
+      "test": "TestBindAdmission/uncertain",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "admission-late-uncertainty-cleared",
+      "test": "TestBindAdmission/late-uncertain",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "admission-probe-files",
+      "test": "TestBindAdmission/valid",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-attempt-context",
+      "test": "TestLeaseAttemptContext/queued",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-attempt-deadline",
+      "test": "TestLeaseAttemptContext/deadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "bracket-envelope-dropped",
+      "test": "TestActivatedBracketCertainty/outside-start",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-short-budget-waits",
+      "test": "TestLeaseGuardReturnsKnownExpiry",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "repair-operation-mutates",
+      "test": "TestCalibrationCleanupChecksNativeDeploymentState/missing-unit-sequence",
+      "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
     }

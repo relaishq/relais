@@ -1378,13 +1378,13 @@
   {
     "ID": "skip-independent-clock-proof",
     "GuardFingerprint": "3b2fd031a7a9d349df86f862945293bbda1787a374efa6da32b755e30040d81c",
-    "File": "internal/operatorgates/runtime.go",
-    "Function": "step",
-    "Old": "err = r.VerifyClocks(ctx, end)",
-    "New": "err = nil",
     "Test": "TestRuntimeMissingClockStopsMutation",
     "Marker": "MUTATION:",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "if lease.Guard == nil {\n\t\t\t\treturn StepResult{}, fault(\"clock-lease-missing\")\n\t\t\t}",
+    "New": "if lease.Guard == nil { return StepResult{}, nil }"
   },
   {
     "ID": "skip-real-fault-hook",
@@ -4403,13 +4403,13 @@
   },
   {
     "ID": "clock-binding-accept-unvalidated-claim",
-    "File": "internal/operatorgates/session.go",
-    "Function": "NewSession",
-    "Old": "if init.Scenario.ClockReceiptSHA256 != \"\" && init.ClockBinding == nil {",
-    "New": "if false {",
     "Test": "TestSessionRefusesUnvalidatedReceipt",
     "Marker": "MUTATION: receipt-claim-not-active",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "BindClock",
+    "Old": "if s.scenario.ClockReceiptSHA256 == \"\" || len(s.clockArtifacts.ReceiptGZIP) == 0 || len(s.clockArtifacts.EvidenceGZIP) == 0 {",
+    "New": "if false {"
   },
   {
     "ID": "clock-bound-fixed-source",
@@ -4683,13 +4683,13 @@
   },
   {
     "ID": "lease-rollback-bypass",
-    "File": "internal/operatorgates/lease_guard.go",
-    "Function": "leaseRestoration",
-    "Old": "return rollback || recovery",
-    "New": "return false",
     "Test": "TestLeaseGuardArmAndRestore/rollback",
     "Marker": "MUTATION: lease-rollback-bypass",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "leaseRestoration",
+    "Old": "case \"replace\":\n\t\treturn rollback || recovery",
+    "New": "case \"replace\":\n\t\treturn false"
   },
   {
     "ID": "admission-lease-refresh-skipped",
@@ -5241,13 +5241,23 @@
   },
   {
     "ID": "fault-bypass",
-    "File": "internal/operatorgates/runtime.go",
-    "Function": "Step",
-    "Old": "return r.StepWithLeases(ctx, op, slot, end, extra, LeaseStep{Guard: r.Leases})",
-    "New": "return r.step(ctx, op, slot, end, extra, nil)",
     "Test": "TestActivatedFaultGuard",
     "Marker": "MUTATION: fault-bypass",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/runtime.go",
+        "Function": "step",
+        "Old": "if err = lease.Guard.Check(); err != nil {",
+        "New": "if err = nil; err != nil {"
+      },
+      {
+        "File": "internal/operatorgates/runtime.go",
+        "Function": "step",
+        "Old": "hooks = []ExchangeHooks{{BeforeSend: lease.Guard.Check}}",
+        "New": "hooks = nil"
+      }
+    ]
   },
   {
     "ID": "unbound-pass",
@@ -5349,5 +5359,135 @@
     "Marker": "MUTATION: python-guard helper-run-deadline",
     "Package": "./internal/operatorgates/host",
     "PythonTest": "clock_probe_test.HelperTests.test_absolute_run_deadline"
+  },
+  {
+    "ID": "store-unleased",
+    "File": "internal/operatorgates/store.go",
+    "Function": "Failover",
+    "Old": "return s.FailoverWithLeases(ctx, end, s.Guard)",
+    "New": "return s.failover(ctx, end, nil)",
+    "Test": "TestBoundStoreRequiresGuard",
+    "Marker": "MUTATION: store-unleased",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "bracket-malformed-wide",
+    "File": "internal/operatorgates/clocks/clocks.go",
+    "Function": "SignalMidpoint",
+    "Old": "!okB || !okA",
+    "New": "(!okB && false) || !okA",
+    "Test": "TestSignalBracketRangeAndEnvelope",
+    "Marker": "MUTATION: bracket-malformed-wide",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "verify-bound-ignore",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "VerifyClocks",
+    "Old": "return r.preflightFailure(err, \"clocks\")\n}",
+    "New": "return nil\n}",
+    "Test": "TestVerifyBoundSnapshotError",
+    "Marker": "MUTATION: verify-bound-ignore",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "bind-admission",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "r.runtime.Leases = guard",
+    "New": "r.runtime.Leases = nil; _ = guard",
+    "Test": "TestBindAdmission/valid",
+    "Marker": "MUTATION: bind-admission",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-latch-cleared",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "r.session != nil && !r.session.Latched() && len(r.session.Uncertainties()) == 0",
+    "New": "r.session != nil",
+    "Test": "TestBindAdmission/latched",
+    "Marker": "MUTATION: admission-replacement",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-uncertainty-cleared",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "len(r.session.Uncertainties()) == 0",
+    "New": "true",
+    "Test": "TestBindAdmission/uncertain",
+    "Marker": "MUTATION: admission-replacement",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-late-uncertainty-cleared",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "if !clean() {\n\t\t_ = peer.Close()\n\t\treturn errors.New(\"command-result-unknown\")\n\t}",
+    "New": "",
+    "Test": "TestBindAdmission/late-uncertain",
+    "Marker": "MUTATION: admission-replacement",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-probe-files",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "LeaseProbeFiles: r.leaseProbeFiles()",
+    "New": "LeaseProbeFiles: nil",
+    "Test": "TestBindAdmission/valid",
+    "Marker": "MUTATION: admission-probe-files",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-attempt-context",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if remaining < leaseReadMinimum {",
+    "New": "if false {",
+    "Test": "TestLeaseAttemptContext/queued",
+    "Marker": "MUTATION: lease-attempt-context",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-attempt-deadline",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "end = min(end, s.clock.Elapsed()+remaining)",
+    "New": "_ = remaining",
+    "Test": "TestLeaseAttemptContext/deadline",
+    "Marker": "MUTATION: lease-attempt-deadline",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "bracket-envelope-dropped",
+    "File": "internal/operatorgates/clocks/clocks.go",
+    "Function": "SignalMidpoint",
+    "Old": "if len(envelope) > 0 && (len(envelope) != 2 || envelope[0].IsZero() || envelope[1].Before(envelope[0]) || time.Unix(0, lo).Before(envelope[0]) || time.Unix(0, hi).After(envelope[1])) {",
+    "New": "if false {",
+    "Test": "TestActivatedBracketCertainty/outside-start",
+    "Marker": "MUTATION: bracket-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-short-budget-waits",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "Refresh",
+    "Old": "if until-g.clock.Elapsed() < leaseReadAttempt {\n\t\t\treturn fault(\"clock-lease-expired\")",
+    "New": "if until-g.clock.Elapsed() < leaseReadAttempt {\n _ = g.pause(ctx, until-g.clock.Elapsed())\n\t\t\treturn fault(\"clock-lease-expired\")",
+    "Test": "TestLeaseGuardReturnsKnownExpiry",
+    "Marker": "MUTATION: lease-short-budget-waits",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "repair-operation-mutates",
+    "File": "internal/operatorrehearsal/precondition.go",
+    "Function": "restoreControl",
+    "Old": "ports := r.ports()",
+    "New": "original := r.process.Operation; r.process.Operation = \"rollback\"; defer func(){r.process.Operation=original}(); ports := r.ports()",
+    "Test": "TestCalibrationCleanupChecksNativeDeploymentState/missing-unit-sequence",
+    "Marker": "MUTATION: repair-operation",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

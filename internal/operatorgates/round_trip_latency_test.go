@@ -46,6 +46,13 @@ func TestReleaseBatchLeavesFloorReserveAndMargin(t *testing.T) {
 				end -= callerCollectionReserve + callerStopReserve
 			}
 			out := RunReleaseGate(context.Background(), w.runtime.Config, p, end)
+
+			if !batch {
+				if out.Completed || out.ProcedureReason != "clock-lease-expired" || w.runtime.Session.Latched() {
+					t.Fatalf("MUTATION: release-latency-budget slow serial must refuse leases: %+v", out)
+				}
+				return
+			}
 			if !out.Completed {
 				t.Fatalf("MUTATION: release-latency-budget incomplete %+v counts=%v", out, w.counts)
 			}

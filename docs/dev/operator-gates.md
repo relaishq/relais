@@ -1120,7 +1120,8 @@ unfreeze, replenish, required rollback and explicit recovery replacement bypass
 clock/arm hooks while retaining inventory and unknown-result latches. Refusals
 are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
 `clock-config-differ`. Unleased rollback drain moves remain restoration, but their
-evidence does not qualify.
+evidence does not qualify. The recorder conservatively merges each slot’s
+unleased rollback spans; distant spans also exclude the interval between them.
 `host.lease-read` and `host.lease-read-batch` carry typed cursor inputs;
 the adapter generates the fixed lease reader and rejects scripts or unknown
 arguments. A nonempty probe path must match trusted local per-slot configuration
@@ -1130,7 +1131,9 @@ arbitrary host execution and batch scripts retain their 30 s floor.
 Each whole observation (serial or batch) has a one-second attempt timeout,
 including queue and transport. A retry that cannot fit that timeout within the
 original 4P deadline ends with `clock-lease-expired`; the send lock rechecks the
-remaining budget. An unsent queued timeout is definite. Submitted read uncertainty
+remaining budget and the attempt context. A read needs 250 ms after queueing
+(the 200 ms measurement plus 50 ms framing/dispatch margin); its wire deadline
+is capped to the attempt deadline. An unsent queued timeout is definite. Submitted read uncertainty
 still latches. No deadline grows.
 
 `operator.ClockBindingArtifacts` carries receipt and evidence in Init, compressed
@@ -1146,6 +1149,8 @@ prepared when an actual drain attempt ran.
 A well-formed wide signal bracket counts the kill as executed. It excludes only
 that kill's timing evidence with `clock-coverage-kill-bracket`; recovery is still
 judged. Missing, malformed and reversed brackets retain the unknown-result latch.
+Well-formed timestamps must satisfy the coverage range and lie inside the host
+operation envelope before width can exclude timing alone.
 Selected bounds can decide the former fixed-bound first-content near-tie. A wide
 bracket, expired lease or invalid binding can remove qualification or refuse a run.
 

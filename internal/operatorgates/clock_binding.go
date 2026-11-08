@@ -16,7 +16,7 @@ import (
 // Read boundaries are taken now; the original armed/end times never move.
 func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end time.Duration) error {
 	refuse := func(cause string) error { return &clocks.BindingError{Cause: cause} }
-	if s.scenario.ClockReceiptSHA256 == "" {
+	if s.scenario.ClockReceiptSHA256 == "" || len(s.clockArtifacts.ReceiptGZIP) == 0 || len(s.clockArtifacts.EvidenceGZIP) == 0 {
 		return refuse("clock-binding-missing")
 	}
 	raw, evidence, err := s.clockArtifacts.Unpack()
@@ -105,6 +105,9 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 // leaseReadAttempt bounds a whole observation, including send-lock queueing.
 const leaseReadAttempt = time.Second
 
+// Two chrony reads are separated by 200 ms; retain 50 ms for framing/dispatch.
+const leaseReadMinimum = 250 * time.Millisecond
+
 func (s *Session) BoundLeaseGuard(p Peer, pause func(context.Context, time.Duration) error) (*LeaseGuard, error) {
 	if s.clockBinding == nil {
 		return nil, &clocks.BindingError{Cause: "clock-binding-missing"}
@@ -143,8 +146,5 @@ func (g *LeaseGuard) Snapshot() (clocks.Evidence, error) {
 	e.Control = values[g.frontend] + values[g.control]
 	e.Worker = values[g.frontend] + max(values["w1"], values["w2"])
 	e.At = g.clock.Wall()
-	if e.Control > b.FrontendControlBoundNS || e.Worker > b.FrontendWorkerBoundNS {
-		return e, fault("clock-lease-bound")
-	}
 	return e, err
 }

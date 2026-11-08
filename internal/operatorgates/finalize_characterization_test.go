@@ -1,8 +1,8 @@
 package operatorgates
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -18,7 +18,7 @@ import (
 func TestFinalizeBudgetAndStatusCharacterization(t *testing.T) {
 	for _, mode := range []string{"normal", "exhausted", "cancelled", "late-pass", "late-failure", "failure", "refusal"} {
 		t.Run(mode, func(t *testing.T) {
-			s, c := fixtureSession(t)
+			s, c := coverageFixtureSession(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if mode == "exhausted" {
@@ -78,9 +78,9 @@ func TestFinalizeBudgetAndStatusCharacterization(t *testing.T) {
 }
 
 func TestDrainLatestCompletenessAndAttemptCap(t *testing.T) {
-	s, _ := fixtureSession(t)
+	s, _ := coverageFixtureSession(t)
 	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
-	s.retainClockAttempt(clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: 1793930020, LeapStatus: "N"}}}}}})
+	retainTestClockAttempt(s, clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: 1793930020, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}}}}}})
 	reads := 0
 	read := func(context.Context, string, string) (string, error) {
 		reads++
@@ -94,7 +94,7 @@ func TestDrainLatestCompletenessAndAttemptCap(t *testing.T) {
 
 func packedCoverageSample(t *testing.T, last int64, complete bool) string {
 	t.Helper()
-	sample := clocks.Sample{MeasuredUnixNS: "1793930030000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: complete, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: last, LeapStatus: "N"}}}}
+	sample := clocks.Sample{MeasuredUnixNS: "1793930030000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: complete, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: last, LeapStatus: "N"}}}}
 	reply := hostReply(t, oracleJSON(sample))
 	var output operator.HostOutput
 	require.NoError(t, observe.Decode(reply.Payload, &output, observe.Contract{"stdout"}))
@@ -102,9 +102,9 @@ func packedCoverageSample(t *testing.T, last int64, complete bool) string {
 }
 
 func TestClosedCoverageFinalizationBytes(t *testing.T) {
-	s, _ := fixtureSession(t)
+	s, _ := coverageFixtureSession(t)
 	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
-	s.retainClockAttempt(clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: 1793930030, LeapStatus: "N"}}}}}})
+	retainTestClockAttempt(s, clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: 1793930030, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}}}}}})
 	windows := []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930020000000000"}}
 	var wire []byte
 	j := mediaJudgeFunc(func(_ context.Context, p operatorevidence.Pool) (operatorevidence.Summary, error) {
@@ -112,12 +112,23 @@ func TestClosedCoverageFinalizationBytes(t *testing.T) {
 		wire, err = operatorevidence.MarshalJudgeInput(p)
 		return operatorevidence.Summary{Status: operator.Passed}, err
 	})
-	pool := &EvidenceRuntime{RunID: "run", Judge: j, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
+	pool := &EvidenceRuntime{ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, RunID: "run", Judge: j, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
 		e := s.coverageSnapshot(clocks.FixedCoverageBounds())
 		e.Windows = windows
 		e.Evaluate()
 		return e
 	}}
+	expectedMedia, err := pool.Media(context.Background())
+	require.NoError(t, err)
+	expectedCoverage := s.coverageSnapshot(clocks.FixedCoverageBounds())
+	expectedCoverage.Windows = windows
+	expectedCoverage.Evaluate()
+	expected, err := json.Marshal(struct {
+		Coverage *clocks.CoverageEvidence
+		Input    json.RawMessage
+		Report   ResourceResult
+	}{expectedCoverage, wire, ResourceResult{SequenceResult: SequenceResult{Pool: expectedMedia}, ClockCoverage: expectedCoverage}})
+	require.NoError(t, err)
 	media, coverage, err := s.finalizePool(context.Background(), s.Budget.PoolEnd(), pool, clocks.FixedCoverageBounds(), func(context.Context, string, string) (string, error) { t.Fatal("closed tail read"); return "", nil }, func(context.Context, time.Duration) error { return nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(struct {
@@ -126,8 +137,8 @@ func TestClosedCoverageFinalizationBytes(t *testing.T) {
 		Report   ResourceResult
 	}{coverage, wire, ResourceResult{SequenceResult: SequenceResult{Pool: media}, ClockCoverage: coverage}})
 	require.NoError(t, err)
-	if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != "2a646c819908dade4960a36cdf2240953db72dc686f9ccac844cc7719937d2eb" {
-		t.Fatal("MUTATION: closed-finalization-bytes", got)
+	if !bytes.Equal(raw, expected) {
+		t.Fatal("MUTATION: closed-finalization-bytes", string(raw), string(expected))
 	}
 }
 

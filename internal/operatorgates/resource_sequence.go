@@ -70,9 +70,6 @@ func (c resourceCallerClock) Sleep(ctx context.Context, d time.Duration) error {
 
 func (r ResourceRunner) validate(s *Session) error {
 	c := r.Config
-	if s.scenario.ClockReceiptSHA256 == "" {
-		return &clocks.BindingError{Cause: "clock-binding-missing"}
-	}
 	if ValidateProcessParameters(c.Parameters) != nil || inventory.ValidatePins(c.Pins, s.scenario) != nil {
 		return errors.New("invalid-resource-config")
 	}
@@ -167,7 +164,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		judge = timingJudge{MediaJudge: judge, recorder: r.Timing}
 	}
 	process := &ProcessConfig{Parameters: c.Parameters, ArmedAt: time.UnixMilli(s.Budget.armed), Trials: true, Pool: true}
-	runtime := &ProcessRuntime{Session: s, Peer: peer, Config: process, Architecture: c.Architecture, Pins: c.Pins, Bounds: &c.Bounds, Leases: guard}
+	runtime := &ProcessRuntime{Session: s, Peer: peer, Config: process, Architecture: c.Architecture, Pins: c.Pins, Leases: guard}
 	if r.Timing != nil {
 		runtime.ClockObserved = r.Timing.RecordClocks
 	}

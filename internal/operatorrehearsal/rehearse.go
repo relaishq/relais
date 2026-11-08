@@ -229,7 +229,7 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	r.peer = NewLocalPeer(adapter, r.run, init)
 	defer func() { _ = r.peer.Close() }()
 	r.process = &operatorgates.ProcessConfig{Parameters: r.parameters(), ArmedAt: armed, Trials: true, Pool: true}
-	r.runtime = &operatorgates.ProcessRuntime{Session: r.session, Peer: r.peer, Config: r.process, Architecture: "x86_64", Pins: r.pins, Bounds: &report.Bounds}
+	r.runtime = &operatorgates.ProcessRuntime{Session: r.session, Peer: r.peer, Config: r.process, Architecture: "x86_64", Pins: r.pins}
 	if e = r.deployment.NegativeControls(ctx, r.restoreControl); e != nil {
 		r.recordError("negative-controls-failed", e)
 		return report, errors.New("negative-controls-failed")

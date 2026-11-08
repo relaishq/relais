@@ -82,7 +82,7 @@ func TestAtomicBindingBeforeMedia(t *testing.T) {
 	}
 }
 func TestActivatedBracketCertainty(t *testing.T) {
-	for _, mode := range []string{"wide", "malformed", "reversed", "missing"} {
+	for _, mode := range []string{"narrow", "wide", "malformed", "before", "zero", "range", "outside-start", "outside-end", "reversed", "missing"} {
 		t.Run(mode, func(t *testing.T) {
 			r, p, _ := runtimeFixture(t)
 			clock := &leaseTestClock{tick: time.Second}
@@ -94,6 +94,18 @@ func TestActivatedBracketCertainty(t *testing.T) {
 					return base(q)
 				}
 				before, after := "1793930000000000000", "1793930000000584000"
+				if mode == "narrow" {
+					after = "1793930000000000100"
+				}
+				if mode == "before" {
+					before = "bad"
+				}
+				if mode == "zero" {
+					before = "0000000000000000000"
+				}
+				if mode == "range" {
+					after = "9999999999999999999"
+				}
 				if mode == "malformed" {
 					after = "bad"
 				}
@@ -104,10 +116,18 @@ func TestActivatedBracketCertainty(t *testing.T) {
 				if mode == "missing" {
 					delete(data, "signalAfterUnixNs")
 				}
-				return hostReply(t, oracleJSON(map[string]any{"kind": "ok", "started": clock.Wall(), "ended": clock.Wall(), "data": data}))
+				start := time.Unix(0, 1793930000000000000)
+				end := start.Add(time.Millisecond)
+				if mode == "outside-start" {
+					start = start.Add(10 * time.Microsecond)
+				}
+				if mode == "outside-end" {
+					end = start.Add(10 * time.Microsecond)
+				}
+				return hostReply(t, oracleJSON(map[string]any{"kind": "ok", "started": start, "ended": end, "data": data}))
 			}
 			got, err := r.StepWithLeases(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"}, LeaseStep{Guard: g})
-			wide := mode == "wide"
+			wide := mode == "wide" || mode == "narrow"
 			if (err == nil) != wide || r.Session.Latched() == wide || wide && got.Certainty != operator.Succeeded {
 				t.Fatal("MUTATION: bracket-certainty", mode, err, r.Session.Latched())
 			}

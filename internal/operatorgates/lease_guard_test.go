@@ -202,7 +202,8 @@ func TestLeaseGuardBoundedRefresh(t *testing.T) {
 			require.NoError(t, err)
 		} else {
 			require.EqualError(t, err, "clock-lease-expired")
-			require.Equal(t, 4*time.Second, c.Elapsed()-start)
+			require.GreaterOrEqual(t, c.Elapsed()-start, 3*time.Second)
+			require.Less(t, c.Elapsed()-start, 4*time.Second)
 		}
 	}
 }
@@ -273,7 +274,7 @@ func TestLeaseReplyAging(t *testing.T) {
 				return respond(req)
 			}
 			c.advance(delay)
-			return hostReply(t, []byte(`{"kind":"ok","started":"1970-01-01T00:16:40Z","ended":"1970-01-01T00:16:40Z","data":{"completed":true,"signalBeforeUnixNs":"1793930000000000000","signalAfterUnixNs":"1793930000000107600"}}`))
+			return hostReply(t, []byte(`{"kind":"ok","started":"2026-11-06T01:53:20Z","ended":"2026-11-06T01:53:20.001Z","data":{"completed":true,"signalBeforeUnixNs":"1793930000000000000","signalAfterUnixNs":"1793930000000107600"}}`))
 		}
 		_, err := r.StepWithLeases(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"}, LeaseStep{Guard: g})
 		if err != nil || r.Session.Latched() || len(r.Session.clockBrackets) != 1 || r.Session.clockBrackets[0].LeaseExcluded != (delay != 0) {
