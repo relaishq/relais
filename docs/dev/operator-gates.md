@@ -1128,13 +1128,21 @@ arguments. A nonempty probe path must match trusted local per-slot configuration
 (the session's frontend inventory and probe file; the adapter's `LeaseProbeFiles`).
 These observations use the original short refresh deadline, including transport;
 arbitrary host execution and batch scripts retain their 30 s floor.
-Each whole observation (serial or batch) has a one-second attempt timeout,
+Each whole observation (serial or batch) has a 1.8 s attempt timeout,
 including queue and transport. A retry that cannot fit that timeout within the
 original 4P deadline ends with `clock-lease-expired`; the send lock rechecks the
-remaining budget and the attempt context. A read needs 250 ms after queueing
-(the 200 ms measurement plus 50 ms framing/dispatch margin); its wire deadline
-is capped to the attempt deadline. An unsent queued timeout is definite. Submitted read uncertainty
-still latches. No deadline grows.
+remaining budget and the attempt context. A single read needs 250 ms after
+queueing (the 200 ms measurement plus 50 ms framing/dispatch margin); a four-host
+batch needs 1.6 s. The wire deadline is capped to the attempt deadline. Serial
+children consume the same attempt rather than each reserving another whole
+attempt. An unsent queued timeout is definite. Submitted read uncertainty still
+latches. Two 1.8 s attempts and two 100 ms polls fit inside 4P for a 1 s poll;
+no run, collection or refresh deadline grows. A container-free adapter/session
+benchmark measured warm four-host reads at 1.20–1.32 s and first reads at
+1.48–1.57 s; these are local measurements, not runner timing guarantees.
+The rehearsal records `clock-lease-read` duration/budget and `clock-lease-exec`
+duration per slot, including failures, to measure actual exec and cold costs.
+These diagnostics do not enter verdict inputs. No warm-up read is added.
 
 `operator.ClockBindingArtifacts` carries receipt and evidence in Init, compressed
 separately with an 8 MiB decoded limit each and a half-frame combined wire limit.

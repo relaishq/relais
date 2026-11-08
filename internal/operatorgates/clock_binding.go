@@ -103,10 +103,15 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 }
 
 // leaseReadAttempt bounds a whole observation, including send-lock queueing.
-const leaseReadAttempt = time.Second
+// Four sequential lease helpers measured 1.2–1.57 s including process startup.
+// Two attempts and two 100 ms polls fit inside 4P when P is one second.
+const leaseReadAttempt = 1800 * time.Millisecond
 
 // Two chrony reads are separated by 200 ms; retain 50 ms for framing/dispatch.
 const leaseReadMinimum = 250 * time.Millisecond
+
+// A queued batch needs the measured four-host service time before submission.
+const leaseReadBatchMinimum = 1600 * time.Millisecond
 
 func (s *Session) BoundLeaseGuard(p Peer, pause func(context.Context, time.Duration) error) (*LeaseGuard, error) {
 	if s.clockBinding == nil {

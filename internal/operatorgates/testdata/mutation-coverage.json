@@ -507,7 +507,11 @@
     "lease-attempt-deadline",
     "bracket-envelope-dropped",
     "lease-short-budget-waits",
-    "repair-operation-mutates"
+    "repair-operation-mutates",
+    "lease-attempt-too-short",
+    "lease-attempt-no-retry-room",
+    "lease-batch-service-budget",
+    "lease-per-child-attempt-floor"
   ],
   "killed": [
     {
@@ -4347,6 +4351,34 @@
     {
       "id": "repair-operation-mutates",
       "test": "TestCalibrationCleanupChecksNativeDeploymentState/missing-unit-sequence",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-attempt-too-short",
+      "test": "TestLeaseSlowAdapter/batch=true/fresh",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-attempt-no-retry-room",
+      "test": "TestLeaseSlowAdapter/batch=true/retry",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-batch-service-budget",
+      "test": "TestLeaseSlowAdapter/batch=true/queued-expired",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-per-child-attempt-floor",
+      "test": "TestLeaseSlowAdapter/batch=false/retry",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""

@@ -85,13 +85,14 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 			return operator.Failed, err
 		}
 	}
-	if (op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch) && end-s.clock.Elapsed() < leaseReadAttempt {
-		return operator.Failed, fault("clock-lease-expired")
-	}
 	if op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch {
 		deadline, _ := wait.Deadline()
-		remaining := time.Until(deadline)
-		if remaining < leaseReadMinimum {
+		remaining := min(time.Until(deadline), end-s.clock.Elapsed())
+		minimum := leaseReadMinimum
+		if op == operator.HostLeaseReadBatch {
+			minimum = leaseReadBatchMinimum
+		}
+		if remaining < minimum {
 			return operator.Failed, fault("clock-lease-expired")
 		}
 		end = min(end, s.clock.Elapsed()+remaining)

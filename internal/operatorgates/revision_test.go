@@ -46,7 +46,7 @@ func TestLeaseAttemptContext(t *testing.T) {
 				}()
 				synctest.Wait()
 				if queued {
-					time.Sleep(950 * time.Millisecond)
+					time.Sleep(leaseReadAttempt - 50*time.Millisecond)
 					<-s.exchange
 				}
 				err = <-done

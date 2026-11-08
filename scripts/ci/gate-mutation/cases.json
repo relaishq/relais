@@ -5323,8 +5323,8 @@
     "ID": "lease-queue-budget",
     "File": "internal/operatorgates/session_transport.go",
     "Function": "Exchange",
-    "Old": "if (op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch) && end-s.clock.Elapsed() < leaseReadAttempt {",
-    "New": "if false {",
+    "Old": "if remaining < minimum {",
+    "New": "if false && remaining < minimum {",
     "Test": "TestLeaseQueueAttemptBudget",
     "Marker": "MUTATION: lease-queue-budget",
     "Package": "./internal/operatorgates"
@@ -5444,8 +5444,8 @@
     "ID": "lease-attempt-context",
     "File": "internal/operatorgates/session_transport.go",
     "Function": "Exchange",
-    "Old": "if remaining < leaseReadMinimum {",
-    "New": "if false {",
+    "Old": "if remaining < minimum {",
+    "New": "if false && remaining < minimum {",
     "Test": "TestLeaseAttemptContext/queued",
     "Marker": "MUTATION: lease-attempt-context",
     "Package": "./internal/operatorgates"
@@ -5488,6 +5488,46 @@
     "New": "original := r.process.Operation; r.process.Operation = \"rollback\"; defer func(){r.process.Operation=original}(); ports := r.ports()",
     "Test": "TestCalibrationCleanupChecksNativeDeploymentState/missing-unit-sequence",
     "Marker": "MUTATION: repair-operation",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-attempt-too-short",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "",
+    "Old": "const leaseReadAttempt = 1800 * time.Millisecond",
+    "New": "const leaseReadAttempt = time.Second",
+    "Test": "TestLeaseSlowAdapter/batch=true/fresh",
+    "Marker": "MUTATION: lease-slow-adapter",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-attempt-no-retry-room",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "",
+    "Old": "const leaseReadAttempt = 1800 * time.Millisecond",
+    "New": "const leaseReadAttempt = 3 * time.Second",
+    "Test": "TestLeaseSlowAdapter/batch=true/retry",
+    "Marker": "MUTATION: lease-slow-adapter",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-batch-service-budget",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "minimum = leaseReadBatchMinimum",
+    "New": "minimum = leaseReadMinimum",
+    "Test": "TestLeaseSlowAdapter/batch=true/queued-expired",
+    "Marker": "MUTATION: lease-batch-service-budget",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-per-child-attempt-floor",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "minimum := leaseReadMinimum",
+    "New": "minimum := leaseReadAttempt",
+    "Test": "TestLeaseSlowAdapter/batch=false/retry",
+    "Marker": "MUTATION: lease-slow-adapter",
     "Package": "./internal/operatorrehearsal"
   }
 ]

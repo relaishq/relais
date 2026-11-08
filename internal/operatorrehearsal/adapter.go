@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strconv"
@@ -231,7 +232,13 @@ func (t *Topology) Redact(text string) string {
 	return text
 }
 
-func (a *Adapter) executeHost(bounded context.Context, req operator.Request) operator.Reply {
+func (a *Adapter) executeHost(bounded context.Context, req operator.Request) (reply operator.Reply) {
+	started := time.Now()
+	defer func() {
+		if (req.Operation == operator.HostLeaseRead || req.Operation == operator.HostLeaseReadBatch) && a.Diagnostics != nil {
+			_, _ = fmt.Fprintf(a.Diagnostics, "clock-lease-exec slot=%s durationMs=%d certainty=%s\n", req.Target, time.Since(started).Milliseconds(), reply.Transport)
+		}
+	}()
 	if a.Topology == nil {
 		return refusal(req.ID, "invalid-target")
 	}
@@ -260,7 +267,7 @@ func (a *Adapter) executeHost(bounded context.Context, req operator.Request) ope
 	wrapper := `f=$(mktemp) || exit 125; trap 'rm -f "$f"' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(seconds) + `s nice -n 10 sh "$f"`
 	command := Command{Label: "host-step", Args: []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}, Input: req.Script}
 	result := a.Runner.Run(bounded, command)
-	reply := a.classify(req.ID, result)
+	reply = a.classify(req.ID, result)
 	if reply.Transport != operator.Succeeded || hostObservationFailed(req.Action, result.Stdout) {
 		a.printFailure(result)
 	}

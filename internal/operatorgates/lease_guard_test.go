@@ -202,7 +202,7 @@ func TestLeaseGuardBoundedRefresh(t *testing.T) {
 			require.NoError(t, err)
 		} else {
 			require.EqualError(t, err, "clock-lease-expired")
-			require.GreaterOrEqual(t, c.Elapsed()-start, 3*time.Second)
+			require.GreaterOrEqual(t, c.Elapsed()-start, 4*time.Second-leaseReadAttempt)
 			require.Less(t, c.Elapsed()-start, 4*time.Second)
 		}
 	}

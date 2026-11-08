@@ -95,7 +95,7 @@ func TestLeaseTransportRefresh(t *testing.T) {
 			start := clock.Elapsed()
 			require.EqualError(t, guard.Refresh(context.Background(), time.Minute), "clock-lease-expired")
 			require.LessOrEqual(t, clock.Elapsed()-start, 4*time.Second)
-			require.GreaterOrEqual(t, clock.Elapsed()-start, 3*time.Second)
+			require.GreaterOrEqual(t, clock.Elapsed()-start, 2*time.Second)
 			mode = "refuse"
 			require.Error(t, guard.Refresh(context.Background(), time.Minute))
 			require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")

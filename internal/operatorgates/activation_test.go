@@ -221,7 +221,7 @@ func TestLeaseQueueAttemptBudget(t *testing.T) {
 			done <- err
 		}()
 		synctest.Wait()
-		c.Advance(1500 * time.Millisecond)
+		c.Advance(2*time.Second - leaseReadMinimum + time.Nanosecond)
 		<-s.exchange
 		err := <-done
 		if err == nil || err.Error() != "clock-lease-expired" || p.sent != 0 || s.Latched() {
