@@ -89,7 +89,7 @@ func TestLeaseTransportRefresh(t *testing.T) {
 			}
 			require.Equal(t, 8, calls)
 			require.NoError(t, guard.Check())
-			require.False(t, session.Latched())
+			require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
 			clock.Advance(2 * time.Second)
 			// The same reference cannot renew the expiry, even when the host reports a young age.
 			start := clock.Elapsed()
@@ -97,7 +97,7 @@ func TestLeaseTransportRefresh(t *testing.T) {
 			require.Equal(t, 4*time.Second, clock.Elapsed()-start)
 			mode = "refuse"
 			require.Error(t, guard.Refresh(context.Background(), time.Minute))
-			require.False(t, session.Latched())
+			require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			cancelRead = cancel
@@ -113,7 +113,7 @@ func TestLeaseTransportRefresh(t *testing.T) {
 
 func TestLeaseTransportRejectsScripts(t *testing.T) {
 	for _, batch := range []bool{false, true} {
-		for _, mode := range []string{"script", "unknown", "action", "target", "count"} {
+		for _, mode := range []string{"script", "unknown", "action", "target", "count", "probe-path", "probe-slot"} {
 			t.Run(fmt.Sprintf("%v/%s", batch, mode), func(t *testing.T) {
 				req := request()
 				req.Action = "clock"
@@ -130,6 +130,15 @@ func TestLeaseTransportRejectsScripts(t *testing.T) {
 					}
 				}
 				switch mode {
+				case "probe-path":
+					i := len(args.Reads) - 1
+					if !batch {
+						req.Target = "shared"
+						args.Reads[i].Target = "shared"
+					}
+					args.Reads[i].ProbeFile = "/other"
+				case "probe-slot":
+					args.Reads[0].ProbeFile = "/configured"
 				case "script":
 					req.Script = []byte("printf non-lease")
 				case "action":
@@ -144,7 +153,7 @@ func TestLeaseTransportRejectsScripts(t *testing.T) {
 					req.Args = append(req.Args[:len(req.Args)-1], []byte(`,"script":"printf non-lease"}`)...)
 				}
 				runner := &fakeRunner{result: CommandResult{Code: code(0)}}
-				adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner}
+				adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner, LeaseProbeFiles: map[string]string{"shared": "/configured"}}
 				reply := throughPipe(t, adapter, req)
 				if !reply.NotSubmitted || len(runner.commands) != 0 {
 					t.Fatal("MUTATION: lease-only-input", mode, reply)
@@ -155,8 +164,24 @@ func TestLeaseTransportRejectsScripts(t *testing.T) {
 				require.NoError(t, err)
 				_, err = session.Issue(req.Operation, req.Target, req.Action, req.Args, req.Script, time.Second)
 				require.Error(t, err, "MUTATION: lease-only-input")
-				require.False(t, session.Latched())
+				require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
 			})
 		}
 	}
+}
+
+func TestLeaseConfiguredProbeFile(t *testing.T) {
+	req := request()
+	req.Operation = operator.HostLeaseRead
+	req.Target = "shared"
+	req.Action = "clock"
+	req.Script = nil
+	req.RemainingMS = 3900
+	req.Args, _ = json.Marshal(operator.HostLeaseReadArgs{Reads: []operator.HostLeaseReadInput{{Target: "shared", ProbeFile: "/configured"}}})
+	runner := &fakeRunner{result: CommandResult{Code: code(0)}}
+	adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner, LeaseProbeFiles: map[string]string{"shared": "/configured"}}
+	reply := throughPipe(t, adapter, req)
+	require.Equal(t, operator.Succeeded, reply.Transport)
+	require.Len(t, runner.commands, 1)
+	require.Equal(t, host.ClockWithLease(nil, 0, "/configured", nil), string(runner.commands[0].Input))
 }

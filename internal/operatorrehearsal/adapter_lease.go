@@ -9,7 +9,7 @@ import (
 )
 
 func (a *Adapter) executeLeaseRead(ctx context.Context, req operator.Request) operator.Reply {
-	reads, err := host.LeaseReadScripts(req)
+	reads, err := host.LeaseReadScripts(req, a.LeaseProbeFiles)
 	if err != nil {
 		return refusal(req.ID, "invalid-request")
 	}

@@ -477,7 +477,11 @@
     "lease-read-wrong-target",
     "lease-read-floor-not-carved",
     "lease-read-batch-floor-not-carved",
-    "lease-hostexecute-floor-removed"
+    "lease-hostexecute-floor-removed",
+    "lease-batch-uncertainty-dropped",
+    "lease-reads-effectful",
+    "lease-probe-file-unrestricted",
+    "lease-probe-wrong-slot"
   ],
   "killed": [
     {
@@ -4108,6 +4112,34 @@
       "id": "lease-hostexecute-floor-removed",
       "test": "TestLeaseTransportKeepsScriptFloor",
       "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-batch-uncertainty-dropped",
+      "test": "TestLeaseBatchOuterUncertainty/failed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-reads-effectful",
+      "test": "TestLeaseTransportRefresh/false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-probe-file-unrestricted",
+      "test": "TestLeaseTransportRejectsScripts/false/probe-path",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-probe-wrong-slot",
+      "test": "TestLeaseTransportRejectsScripts/false/probe-slot",
+      "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
     }

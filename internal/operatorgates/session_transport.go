@@ -128,7 +128,7 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 		}
 		f.Result = &resolved
 		evidence := operator.Unknown
-		if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.Transport == operator.Failed && (f.Result.NotSubmitted || op == operator.HostReadBatch)) {
+		if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.Transport == operator.Failed && (f.Result.NotSubmitted || hostReadBatch(op))) {
 			evidence = classify(*f.Result)
 		}
 		if evidence == operator.Unknown && f.Result.Transport == operator.Succeeded && f.Result.ExitCode != nil && *f.Result.ExitCode == 0 && f.Result.UncertaintyRule == "" && !json.Valid(f.Result.Payload) {

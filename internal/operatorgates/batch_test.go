@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -119,6 +120,43 @@ func TestBatchedProofFailureAndUncertainty(t *testing.T) {
 				}
 			} else if sent != 3 {
 				t.Fatalf("MUTATION: batch-count got %d want 3", sent)
+			}
+		})
+	}
+}
+
+func TestLeaseBatchOuterUncertainty(t *testing.T) {
+	for _, kind := range []string{"failed", "nonzero", "no-exit", "definite"} {
+		t.Run(kind, func(t *testing.T) {
+			r, p, _ := runtimeFixture(t)
+			r.Session.capabilities[operator.HostLeaseReadBatch] = true
+			p.respond = func(req operator.Request) operator.Reply {
+				out := operator.HostReadBatchOutput{}
+				for _, slot := range inventory.Slots {
+					child := hostReply(t, []byte(`{"errorBoundNs":0,"rateErrorPpm":0,"measuredUnixNs":"1793930000000000000"}`))
+					child.ID = slot
+					if slot == "shared" && kind != "definite" {
+						child.Transport = operator.Unknown
+					}
+					out.Replies = append(out.Replies, child)
+				}
+				reply := operator.Reply{Transport: operator.Failed, ExitCode: new(1), Payload: oracleJSON(out)}
+				if kind == "nonzero" {
+					reply.Transport = operator.Succeeded
+				}
+				if kind == "no-exit" {
+					reply.ExitCode = nil
+				}
+				return reply
+			}
+			_, err := r.Session.ReadLeases(context.Background(), p, time.Minute)
+			shared := false
+			for _, u := range r.Session.Uncertainties() {
+				shared = shared || u.Target == "shared"
+			}
+			unknown := kind != "definite"
+			if err == nil || r.Session.Latched() != unknown || shared != unknown {
+				t.Fatal("MUTATION: lease-batch-uncertainty", kind, err, r.Session.Latched(), r.Session.Uncertainties())
 			}
 		})
 	}

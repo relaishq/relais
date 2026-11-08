@@ -33,7 +33,9 @@ type Mailbox interface {
 }
 
 type Adapter struct {
-	Topology *Topology
+	// LeaseProbeFiles is trusted launcher configuration, keyed by host slot.
+	LeaseProbeFiles map[string]string
+	Topology        *Topology
 	// Containers is a snapshot from Deployment.ContainerIDs after successful boot.
 	Containers  map[string]string
 	Runner      Runner
