@@ -112,7 +112,7 @@ func (s *Session) coverageSnapshot(bounds clocks.Bounds) *clocks.CoverageEvidenc
 	}
 	return &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: bounds, Attempts: coverageAttempts(s.clockAttempts), DrainAttempts: coverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...)}
 }
-func (s *Session) retainClockBracket(worker, before, after string) {
+func (s *Session) retainClockBracket(worker, before, after string, diagnostics *observe.SignalDiagnostics) {
 	b, okB := observe.CoverageNS(before)
 	a, okA := observe.CoverageNS(after)
 	midpoint := "unavailable"
@@ -125,7 +125,7 @@ func (s *Session) retainClockBracket(worker, before, after string) {
 		s.clockBracketsOmitted++
 		return
 	}
-	s.clockBrackets = append(s.clockBrackets, observe.CoverageBracket{Worker: worker, BeforeUnixNS: before, AfterUnixNS: after, MidpointUnixNS: midpoint})
+	s.clockBrackets = append(s.clockBrackets, observe.CoverageBracket{Diagnostics: diagnostics, Worker: worker, BeforeUnixNS: before, AfterUnixNS: after, MidpointUnixNS: midpoint})
 }
 
 // collectCoverage bypasses the policy cache and retains every diagnostic read.

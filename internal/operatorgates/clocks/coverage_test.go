@@ -1,6 +1,7 @@
 package clocks
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"slices"
@@ -39,5 +40,39 @@ func TestCoverageDiagnosticsAndQualificationUseFixedBounds(t *testing.T) {
 		if !reflect.DeepEqual(e.Results, q.Results) || !slices.Contains(q.Results[0].Causes, "clock-coverage-bound") {
 			t.Fatal("diagnostic/verdict bounds diverged", e.Results, q.Results)
 		}
+	}
+}
+
+func TestSignalDiagnosticsPublicBytes(t *testing.T) {
+	e := CoverageEvidence{Bounds: FixedCoverageBounds(), KillBrackets: []observe.CoverageBracket{{Worker: "w1", BeforeUnixNS: "1793930010000000000", AfterUnixNS: "1793930010000000100", MidpointUnixNS: "1793930010000000050"}}}
+	before, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.KillBrackets[0].Diagnostics = &observe.SignalDiagnostics{Priority: "private-source"}
+	public := e.Public()
+	if public.KillBrackets[0].Diagnostics.Priority != "unavailable" || e.KillBrackets[0].Diagnostics.Priority != "private-source" {
+		t.Fatal("diagnostic projection changed source or leaked text")
+	}
+	after, err := json.Marshal(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obj map[string]any
+	if err = json.Unmarshal(after, &obj); err != nil {
+		t.Fatal(err)
+	}
+	delete(obj["killBrackets"].([]any)[0].(map[string]any), "signalDiagnostics")
+	var old map[string]any
+	if err = json.Unmarshal(before, &old); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(old, obj) {
+		t.Fatal("existing report fields changed")
+	}
+	public.KillBrackets[0].Diagnostics = nil
+	stripped, err := json.Marshal(public)
+	if err != nil || !bytes.Equal(before, stripped) {
+		t.Fatal("existing report bytes changed")
 	}
 }

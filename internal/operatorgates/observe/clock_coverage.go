@@ -36,11 +36,24 @@ type CoverageWindow struct {
 	StartUnixNS string `json:"startUnixNs"`
 	EndUnixNS   string `json:"endUnixNs"`
 }
+
+// SignalDiagnostics is optional host scheduling evidence, never qualification.
+// Usage deltas include the adjacent getrusage calls; CPU IDs are sampled outside.
+type SignalDiagnostics struct {
+	ThreadCPUTimeNS     *int64 `json:"threadCPUTimeNs,omitempty"`
+	Priority            string `json:"priority"`
+	InvoluntarySwitches *int64 `json:"involuntarySwitches,omitempty"`
+	VoluntarySwitches   *int64 `json:"voluntarySwitches,omitempty"`
+	CPUBefore           *int64 `json:"cpuBefore,omitempty"`
+	CPUAfter            *int64 `json:"cpuAfter,omitempty"`
+}
+
 type CoverageBracket struct {
-	Worker         string `json:"worker"`
-	MidpointUnixNS string `json:"midpointUnixNs"`
-	BeforeUnixNS   string `json:"beforeUnixNs"`
-	AfterUnixNS    string `json:"afterUnixNs"`
+	Diagnostics    *SignalDiagnostics `json:"signalDiagnostics,omitempty"`
+	Worker         string             `json:"worker"`
+	MidpointUnixNS string             `json:"midpointUnixNs"`
+	BeforeUnixNS   string             `json:"beforeUnixNs"`
+	AfterUnixNS    string             `json:"afterUnixNs"`
 }
 
 // CoverageQualification is the bounded, evaluated input to pinned judges.

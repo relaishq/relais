@@ -118,6 +118,15 @@ func (e CoverageEvidence) Public() CoverageEvidence {
 	e.KillBrackets = append([]observe.CoverageBracket{}, e.KillBrackets...)
 	for i := range e.KillBrackets {
 		r := &e.KillBrackets[i]
+		if r.Diagnostics != nil {
+			d := *r.Diagnostics
+			switch d.Priority {
+			case "unchanged", "nice--20", "nice--20-restore-failed":
+			default:
+				d.Priority = "unavailable"
+			}
+			r.Diagnostics = &d
+		}
 		r.Worker = publicCoverageSlot(r.Worker)
 		for _, s := range []*string{&r.BeforeUnixNS, &r.AfterUnixNS, &r.MidpointUnixNS} {
 			if !nsPattern.MatchString(*s) {

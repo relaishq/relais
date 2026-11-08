@@ -1,4 +1,6 @@
-"""Offline operator transcripts. Nothing reaches a socket, systemd or AWS."""
+"""Offline operator transcripts. Nothing reaches a socket, systemd."""
+from contextlib import contextmanager
+from types import SimpleNamespace
 import copy
 import hashlib
 import json
@@ -43,11 +45,21 @@ class Transcript:
             return self.pids.get(args[-1], self.default)
         return ""
 
+    @contextmanager
+    def signal_environment(self):
+        self.priorities, self.closed = [], []
+        def priority(_, __, value):
+            self.priorities.append(value)
+            if value == getattr(self, "refuse_priority", None):
+                raise PermissionError()
+        with patch.object(host.os, "close", self.closed.append), patch.object(host.os, "getpriority", return_value=10, create=True), patch.object(host.os, "setpriority", priority, create=True):
+            yield
+
     def signals(self):
         # Route the pidfd signal through command() so tests observe and fault it like systemctl.
         return (patch.object(host.os, "pidfd_open", lambda pid: pid, create=True),
                 patch.object(host.signal, "pidfd_send_signal", lambda fd, sig: self.command(["signal", fd, sig]), create=True),
-                patch.object(host.os, "close", lambda fd: None))
+                self.signal_environment())
 
     def http(self, url, method="GET"):
         if "/workers/" in url:
@@ -188,6 +200,37 @@ class ProcessTests(unittest.TestCase):
         with patch.object(host, "command", changed.command), patch.object(host.os, "pidfd_open", lambda pid: (changed.pids.__setitem__("relais-worker.service", "555"), pid)[1], create=True), sent, closed, self.assertRaises(ValueError):
             host.execute("worker-down", P)
         self.assertNotIn("signal", [x[0] for x in changed.calls])
+
+    def test_signal_diagnostics_and_priority_fallback(self):
+        for refused, mode, changes in ((None, "nice--20", [-20, 10]), (-20, "unchanged", [-20]), (10, "nice--20-restore-failed", [-20, 10])):
+            t = Transcript()
+            t.refuse_priority = refused
+            usage = [SimpleNamespace(ru_nivcsw=7, ru_nvcsw=2, ru_utime=0.01, ru_stime=0.01), SimpleNamespace(ru_nivcsw=8, ru_nvcsw=2, ru_utime=0.01, ru_stime=0.0101)]
+            with self.subTest(mode=mode), patch.object(host, "signal_cpu", side_effect=[2, 3]), patch.object(host, "signal_usage", side_effect=usage):
+                result, _ = self.run_step("worker-down", t)
+            self.assertEqual(result["signalDiagnostics"], dict(priority=mode, cpuBefore=2, cpuAfter=3, involuntarySwitches=1, voluntarySwitches=0, threadCPUTimeNs=100000))
+            self.assertEqual(t.priorities, changes)
+            self.assertEqual(t.closed, [333])
+
+    def test_signal_diagnostics_unavailable(self):
+        with patch.object(host, "signal_cpu", return_value=None), patch.object(host, "signal_usage", return_value=None), patch.object(host.os, "PRIO_PROCESS", None):
+            result, _ = self.run_step("worker-down")
+        self.assertEqual(result["signalDiagnostics"], dict(priority="unchanged"))
+        with patch.object(host.pathlib.Path, "read_text", side_effect=OSError()), patch.object(host.resource, "getrusage", side_effect=OSError()):
+            self.assertIsNone(host.signal_cpu())
+            self.assertIsNone(host.signal_usage())
+        fields = ["R"] + ["0"] * 36
+        fields[36] = "3"
+        with patch.object(host.pathlib.Path, "read_text", return_value="123 (a ) name) " + " ".join(fields)):
+            self.assertEqual(host.signal_cpu(), 3)
+
+    def test_signal_exception_restores_priority(self):
+        t = Transcript()
+        opened, sent, closed = t.signals()
+        with patch.object(host, "command", t.command), opened, sent, closed, patch.object(host.signal, "pidfd_send_signal", side_effect=OSError()), self.assertRaises(OSError):
+            host.kill_main("relais-worker.service", 333)
+        self.assertEqual(t.priorities, [-20, 10])
+        self.assertEqual(t.closed, [333])
 
     def test_unsettled_death_and_missing_standby_refuse(self):
         with patch.dict(CONTROL["workers"][0], recovering=True):
