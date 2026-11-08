@@ -25,6 +25,12 @@ func TestCoverageWindowsPreservesEveryReceipt(t *testing.T) {
 		t.Fatal("missing receipt silently omitted", windows)
 	}
 }
+func TestUnboundJudgeInputBytes(t *testing.T) {
+	raw, err := MarshalJudgeInput(Pool{RunID: "fixture", PreCoverageEvidence: true})
+	if err != nil || string(raw) != `{"runId":"fixture","phases":null,"missing":false,"preCoverageEvidence":true}` {
+		t.Fatal("MUTATION: unbound-judge-input", string(raw), err)
+	}
+}
 
 func TestPublicDiagnosticsKeepsClockCoverageCauses(t *testing.T) {
 	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified"} {

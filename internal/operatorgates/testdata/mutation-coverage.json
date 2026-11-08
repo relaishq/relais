@@ -401,7 +401,31 @@
     "scenario-unbound-wire-change",
     "clock-binding-ignore-worker2",
     "clock-binding-self-selected-policy",
-    "clock-binding-accept-unvalidated-claim"
+    "clock-binding-accept-unvalidated-claim",
+    "clock-bound-fixed-source",
+    "clock-bound-stripped-binding",
+    "clock-bound-missing-pad",
+    "clock-bound-omit-K",
+    "clock-bound-double-K",
+    "clock-bound-rule4-adds-K",
+    "clock-bound-precoverage",
+    "clock-bound-precoverage-wrapper",
+    "clock-bound-precoverage-decoder",
+    "clock-binding-equal-second-predecessor",
+    "clock-binding-equal-second-successor",
+    "clock-bound-ignore-receipt-digest",
+    "clock-bound-token-private",
+    "clock-bound-offline-bypass",
+    "clock-bound-check-fixed",
+    "clock-bound-signal-fixed",
+    "clock-bound-drain-fixed",
+    "clock-bound-offline-pool-stripped",
+    "clock-bound-sanitizer-unbound-pool",
+    "clock-bound-sanitizer-run",
+    "clock-bound-check-omit-K",
+    "clock-bound-wrapper-wrong-run",
+    "clock-bound-decoder-wrong-run",
+    "clock-bound-rebind"
   ],
   "killed": [
     {
@@ -3500,6 +3524,174 @@
       "id": "clock-binding-accept-unvalidated-claim",
       "test": "TestSessionRefusesUnvalidatedReceipt",
       "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-fixed-source",
+      "test": "TestBoundCoverage/fixed-source",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-stripped-binding",
+      "test": "TestBoundJudge",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-missing-pad",
+      "test": "TestBoundCoverage/pad",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-omit-K",
+      "test": "TestBoundCoverage/omit-K",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-double-K",
+      "test": "TestBoundCoverage/K-once",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-rule4-adds-K",
+      "test": "TestBoundCoverage/rule4-no-K",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-precoverage",
+      "test": "TestBoundCoverageConsumers",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-precoverage-wrapper",
+      "test": "TestBoundJudge",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-precoverage-decoder",
+      "test": "TestBoundJudge",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-equal-second-predecessor",
+      "test": "TestReceiptBindingEqualSecondBoundaries/predecessor",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-binding-equal-second-successor",
+      "test": "TestReceiptBindingEqualSecondBoundaries/successor",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-ignore-receipt-digest",
+      "test": "TestBoundCoverage/altered",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-token-private",
+      "test": "TestBoundCoverage/token-private",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-offline-bypass",
+      "test": "TestBoundOffline",
+      "package": "./scripts/dev/clock-coverage",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-check-fixed",
+      "test": "TestBoundCoverageConsumers",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-signal-fixed",
+      "test": "TestBoundCoverageConsumers",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-drain-fixed",
+      "test": "TestBoundCoverageConsumers",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-offline-pool-stripped",
+      "test": "TestBoundOffline",
+      "package": "./scripts/dev/clock-coverage",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-sanitizer-unbound-pool",
+      "test": "TestSanitizedBoundReceipt",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-sanitizer-run",
+      "test": "TestSanitizedBoundReceipt",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-check-omit-K",
+      "test": "TestBoundCheckReserve",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-wrapper-wrong-run",
+      "test": "TestBoundJudgeRunID",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-decoder-wrong-run",
+      "test": "TestBoundJudgeRunID",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-bound-rebind",
+      "test": "TestBoundCoverageRebind",
+      "package": "./internal/operatorgates/clocks",
       "evidence": "killed",
       "guardFingerprint": ""
     }

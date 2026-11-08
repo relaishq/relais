@@ -28,6 +28,8 @@ type CoverageEvidence struct {
 	FrontendSlot         string                           `json:"frontendSlot"`
 	ControlSlot          string                           `json:"controlSlot"`
 	Bounds               Bounds                           `json:"bounds"`
+	ClockReceiptSHA256   string                           `json:"clockReceiptSha256,omitempty"`
+	Binding              *observe.ClockBinding            `json:"binding,omitempty"`
 	DrainAttempts        []CoverageAttempt                `json:"drainAttempts"`
 	OmittedDrainAttempts int                              `json:"omittedDrainAttempts"`
 	OmittedBrackets      int                              `json:"omittedBrackets"`
@@ -50,6 +52,10 @@ type CoverageAttempt struct {
 }
 
 func NewCoverageAttempt(e Evidence) CoverageAttempt {
+	return newCoverageAttempt(e, false)
+}
+func NewBoundCoverageAttempt(e Evidence) CoverageAttempt { return newCoverageAttempt(e, true) }
+func newCoverageAttempt(e Evidence, bound bool) CoverageAttempt {
 	out := CoverageAttempt{Version: e.Version, At: e.At, Clocks: map[string]observe.CoverageTimeline{}}
 	for _, slot := range []string{"relay", "shared", "w1", "w2"} {
 		s, ok := e.Clocks[slot]
@@ -62,6 +68,9 @@ func NewCoverageAttempt(e Evidence) CoverageAttempt {
 			t.ReadComplete = l.ReadComplete
 			for _, r := range l.Rows {
 				t.Rows = append(t.Rows, observe.CoverageRow{UnixSeconds: r.UnixSeconds, MaxErrorSeconds: r.MaxErrorSeconds, LeapStatus: r.LeapStatus})
+				if bound {
+					t.Rows[len(t.Rows)-1].MaxErrorDecimal = r.MaxErrorDecimal
+				}
 			}
 			for _, b := range l.Breaks {
 				t.Breaks = append(t.Breaks, observe.CoverageBreak{FromUnixSeconds: b.FromUnixSeconds, UnixSeconds: b.UnixSeconds, Kind: b.Kind})
@@ -131,6 +140,12 @@ func (e CoverageEvidence) Public() CoverageEvidence {
 	}
 	// Recompute numeric diagnostics instead of publishing arbitrary cause labels.
 	e.Evaluate()
+	if e.Binding != nil && !e.Binding.Valid(e.ClockReceiptSHA256) {
+		e.Binding = nil
+	}
+	if e.ClockReceiptSHA256 != "" && !observe.ClockDigestValid(e.ClockReceiptSHA256) {
+		e.ClockReceiptSHA256 = "unavailable"
+	}
 	return e
 }
 func (e CoverageEvidence) MarshalJSON() ([]byte, error) {
@@ -165,17 +180,28 @@ func (e CoverageEvidence) Timelines() map[string]observe.CoverageTimeline {
 func (e *CoverageEvidence) Evaluate() {
 	e.Version = EvidenceVersion
 	t := e.Timelines()
-	fixed := FixedCoverageBounds()
-	e.Results = observe.EvaluateClockCoverage(t, e.FrontendSlot, e.ControlSlot, fixed.FrontendControlBoundNS, fixed.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
-	if e.Bounds != fixed {
+	bounds, k, err := e.coverageParameters()
+	if e.Binding != nil && err == nil {
+		e.Results = observe.EvaluateBoundClockCoverage(t, e.FrontendSlot, e.ControlSlot, bounds.FrontendControlBoundNS, bounds.FrontendWorkerBoundNS, k, e.Windows, e.KillBrackets)
+	} else {
+		e.Results = observe.EvaluateClockCoverage(t, e.FrontendSlot, e.ControlSlot, bounds.FrontendControlBoundNS, bounds.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
+	}
+	if err != nil {
+		cause := "clock-coverage-bound"
+		if observe.IsBound(e.ClockReceiptSHA256, e.Binding) {
+			cause = "clock-coverage-binding"
+		}
 		for i := range e.Results {
-			if !slices.Contains(e.Results[i].Causes, "clock-coverage-bound") {
-				e.Results[i].Causes = append(e.Results[i].Causes, "clock-coverage-bound")
+			if !slices.Contains(e.Results[i].Causes, cause) {
+				e.Results[i].Causes = append(e.Results[i].Causes, cause)
 			}
 			sort.Strings(e.Results[i].Causes)
 		}
 	}
-	e.DrainComplete = observe.CoverageTailReady(t, e.FrontendSlot, e.ControlSlot, fixed.FrontendControlBoundNS, fixed.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
+	e.DrainComplete = observe.CoverageTailReady(t, e.FrontendSlot, e.ControlSlot, bounds.FrontendControlBoundNS, bounds.FrontendWorkerBoundNS, e.Windows, e.KillBrackets)
+	if err != nil && observe.IsBound(e.ClockReceiptSHA256, e.Binding) {
+		e.DrainComplete = false
+	}
 }
 func TimestampNS(n int64) string { return fmt.Sprintf("%019d", n) }
 
@@ -190,6 +216,11 @@ func publicAttempts(attempts []CoverageAttempt) []CoverageAttempt {
 				t.Rows = append([]observe.CoverageRow{}, t.Rows...)
 				t.Breaks = append([]observe.CoverageBreak{}, t.Breaks...)
 				for j := range t.Rows {
+					if raw := t.Rows[j].MaxErrorDecimal; raw != "" {
+						if _, err := observe.ClockMaximumNS(raw); err != nil {
+							t.Rows[j].MaxErrorDecimal = "unavailable"
+						}
+					}
 					switch t.Rows[j].LeapStatus {
 					case "N", "+", "-", "?":
 					default:
@@ -230,5 +261,5 @@ func HasFalsification(e Evidence) bool {
 }
 func (e CoverageEvidence) Qualification() observe.CoverageQualification {
 	e.Evaluate()
-	return observe.CoverageQualification{Results: e.Results, Falsified: e.Falsified}
+	return observe.CoverageQualification{Results: e.Results, Falsified: e.Falsified, ClockReceiptSHA256: e.ClockReceiptSHA256, Binding: e.Binding}
 }

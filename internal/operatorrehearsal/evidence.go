@@ -30,6 +30,12 @@ func SanitizeMediaEvidence(pool operatorevidence.Pool) ([]byte, error) {
 		return nil, err
 	}
 	s := evidenceSanitizer{fields: map[reflect.Type]map[string]reflect.Type{}}
+	if pool.ClockReceiptSHA256 != "" || coverage != nil && observe.IsBound(coverage.ClockReceiptSHA256, coverage.Binding) {
+		if coverage == nil || coverage.ValidateBinding(pool.ClockReceiptSHA256) != nil || coverage.Binding.Receipt.RunID != pool.RunID {
+			return nil, fmt.Errorf("clock-coverage-binding")
+		}
+		s.publicRun, s.receiptSHA = pool.RunID, pool.ClockReceiptSHA256
+	}
 
 	clean, err := s.document(raw, reflect.TypeFor[operatorevidence.Pool]())
 	if err != nil || coverage == nil {
@@ -53,8 +59,9 @@ func SanitizeMediaEvidence(pool operatorevidence.Pool) ([]byte, error) {
 }
 
 type evidenceSanitizer struct {
-	fields map[reflect.Type]map[string]reflect.Type
-	anchor time.Time
+	publicRun, receiptSHA string
+	fields                map[reflect.Type]map[string]reflect.Type
+	anchor                time.Time
 }
 
 func evidenceAlias(s string) string {
@@ -120,6 +127,10 @@ func evidenceTimingReason(t reflect.Type, key string) bool {
 	return false
 }
 func (s *evidenceSanitizer) text(v string, timingReason bool) string {
+	// These commitments are already public in the immutable receipt.
+	if v != "" && (v == s.publicRun || v == s.receiptSHA) {
+		return v
+	}
 	if timingReason {
 		if canonical, ok := observe.CanonicalTimingReason(v); ok {
 			return canonical

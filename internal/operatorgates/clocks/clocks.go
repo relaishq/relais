@@ -112,11 +112,7 @@ func PublicSample(s Sample) Sample {
 	return s
 }
 
-type Bounds struct {
-	FrontendControlBoundNS int64   `json:"frontendControlBoundNs"`
-	FrontendWorkerBoundNS  int64   `json:"frontendWorkerBoundNs"`
-	DriftPPM               float64 `json:"driftPpm"`
-}
+type Bounds = observe.ClockBounds
 type Evidence struct {
 	Version         int `json:"version"`
 	At              time.Time

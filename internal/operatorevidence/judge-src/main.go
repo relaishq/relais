@@ -413,6 +413,7 @@ func joinedPreviewMedia(input *previewMediaInput) previewMediaSummary {
 }
 
 type previewPoolInput struct {
+	ClockReceiptSHA256  string                         `json:"clockReceiptSha256,omitempty"`
 	PreCoverageEvidence bool                           `json:"preCoverageEvidence,omitempty"`
 	ClockCoverage       *observe.CoverageQualification `json:"clockCoverage,omitempty"`
 	RunID               string                         `json:"runId"`
@@ -552,6 +553,7 @@ func decodePool(data []byte) (input previewPoolInput, err error) {
 
 	input.RunID, input.Missing = wire.RunID, wire.Missing
 	input.ClockCoverage, input.PreCoverageEvidence = wire.ClockCoverage, wire.PreCoverageEvidence
+	input.ClockReceiptSHA256 = wire.ClockReceiptSHA256
 	input.Phases = make([]previewMediaInput, len(wire.Phases))
 	for i, raw := range wire.Phases {
 		phase := &input.Phases[i]

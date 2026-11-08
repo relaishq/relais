@@ -10,7 +10,10 @@ import (
 func coverageForPhase(input *previewPoolInput, phase int) map[int][]string {
 	out := map[int][]string{}
 	for event := range input.Phases[phase].Events {
-		causes := input.ClockCoverage.WindowCauses(phase, event, input.PreCoverageEvidence)
+		causes := input.ClockCoverage.WindowCausesForReceipt(phase, event, input.PreCoverageEvidence, input.ClockReceiptSHA256)
+		if input.ClockReceiptSHA256 != "" && input.ClockCoverage != nil && input.ClockCoverage.Binding != nil && input.ClockCoverage.Binding.Receipt.RunID != input.RunID {
+			causes = []string{"clock-coverage-binding"}
+		}
 		out[event] = causes
 	}
 	return out

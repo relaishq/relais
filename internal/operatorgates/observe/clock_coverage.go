@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"encoding/json"
 	"math"
 	"math/big"
 	"sort"
@@ -15,6 +16,7 @@ type CoverageRow struct {
 	UnixSeconds     int64   `json:"unixSeconds"`
 	MaxErrorSeconds float64 `json:"maxErrorSeconds"`
 	LeapStatus      string  `json:"leapStatus"`
+	MaxErrorDecimal string  `json:"maxErrorDecimal,omitempty"`
 }
 type CoverageBreak struct {
 	FromUnixSeconds int64  `json:"fromUnixSeconds"`
@@ -44,8 +46,10 @@ type CoverageBracket struct {
 // CoverageQualification is the bounded, evaluated input to pinned judges.
 // The historical replay opt-in belongs to the pool, not these measured results.
 type CoverageQualification struct {
-	Results   []CoverageResult `json:"results"`
-	Falsified bool             `json:"falsified"`
+	Results            []CoverageResult `json:"results"`
+	Falsified          bool             `json:"falsified"`
+	ClockReceiptSHA256 string           `json:"clockReceiptSha256,omitempty"`
+	Binding            *ClockBinding    `json:"binding,omitempty"`
 }
 
 type CoverageResult struct {
@@ -53,6 +57,16 @@ type CoverageResult struct {
 	Event  int      `json:"event"`
 	Causes []string `json:"causes"`
 }
+
+func (q CoverageQualification) MarshalJSON() ([]byte, error) {
+	if IsBound(q.ClockReceiptSHA256, q.Binding) && (q.Binding == nil || !q.Binding.Valid(q.ClockReceiptSHA256)) {
+		q.Binding = nil
+		q.ClockReceiptSHA256 = "unavailable"
+	}
+	type wire CoverageQualification
+	return json.Marshal(wire(q))
+}
+
 type coverageSpan struct {
 	slot              string
 	a, b, bound, half int64
@@ -114,7 +128,7 @@ func coverageSpans(w CoverageWindow, control string, cb, wb int64, brackets []Co
 
 // coverageError takes the maximum retrospective envelope over every intersecting
 // interval, including touching boundaries and updates in the same log second.
-func coverageError(t CoverageTimeline, a, b int64) (int64, string) {
+func coverageError(t CoverageTimeline, a, b int64, padded bool) (int64, string) {
 	rows := append([]CoverageRow(nil), t.Rows...)
 	for _, r := range rows {
 		if r.UnixSeconds < 0 || r.UnixSeconds > math.MaxInt64/coverageSecond-2 || math.IsNaN(r.MaxErrorSeconds) || math.IsInf(r.MaxErrorSeconds, 0) || r.MaxErrorSeconds < 0 {
@@ -143,6 +157,24 @@ func coverageError(t CoverageTimeline, a, b int64) (int64, string) {
 		}
 	}
 	maximum := float64(0)
+	paddedMaximum := new(big.Rat)
+	if padded {
+		for i := range rows {
+			r := &rows[i]
+			// Only intervals that touch the padded span contribute.
+			if (i == 0 && r.UnixSeconds*coverageSecond != a) || (i > 0 && (rows[i-1].UnixSeconds*coverageSecond > b || r.UnixSeconds*coverageSecond < a)) {
+				continue
+			}
+			value, err := ClockMaximumNS(r.MaxErrorDecimal)
+			parsed, parseErr := strconv.ParseFloat(r.MaxErrorDecimal, 64)
+			if err != nil || parseErr != nil || parsed != r.MaxErrorSeconds {
+				return 0, "clock-coverage-missing"
+			}
+			if value.Cmp(paddedMaximum) > 0 {
+				paddedMaximum.Set(value)
+			}
+		}
+	}
 	if rows[0].UnixSeconds*coverageSecond == a {
 		maximum = rows[0].MaxErrorSeconds
 	}
@@ -167,6 +199,9 @@ func coverageError(t CoverageTimeline, a, b int64) (int64, string) {
 		return 0, "clock-coverage-missing"
 	}
 	decimal.Mul(decimal, big.NewRat(coverageSecond, 1))
+	if padded {
+		decimal = paddedMaximum
+	}
 	ns, remainder := new(big.Int), new(big.Int)
 	ns.QuoRem(decimal.Num(), decimal.Denom(), remainder)
 	if remainder.Sign() > 0 {
@@ -181,7 +216,7 @@ func coverageError(t CoverageTimeline, a, b int64) (int64, string) {
 // EvaluateClockCoverage reports would-be causes. It never changes verdicts or
 // latches. Multiple receipts for one event contribute to the same sorted row.
 func EvaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, control string, cb, wb int64, windows []CoverageWindow, brackets []CoverageBracket) []CoverageResult {
-	return evaluateClockCoverage(timelines, frontend, control, cb, wb, windows, brackets, false, 0)
+	return evaluateClockCoverage(timelines, frontend, control, cb, wb, windows, brackets, false, 0, 0, false)
 }
 
 // EvaluateClockCoverageWithoutKillBrackets checks the available retrospective
@@ -189,10 +224,13 @@ func EvaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, cont
 // kill-bracket rule. timestampUncertaintyNS widens each endpoint to account for
 // the bounded time-origin shift recovered from millisecond report timestamps.
 func EvaluateClockCoverageWithoutKillBrackets(timelines map[string]CoverageTimeline, frontend, control string, cb, wb int64, windows []CoverageWindow, timestampUncertaintyNS int64) []CoverageResult {
-	return evaluateClockCoverage(timelines, frontend, control, cb, wb, windows, nil, true, timestampUncertaintyNS)
+	return evaluateClockCoverage(timelines, frontend, control, cb, wb, windows, nil, true, timestampUncertaintyNS, 0, false)
 }
 
-func evaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, control string, cb, wb int64, windows []CoverageWindow, brackets []CoverageBracket, allowMissingBracket bool, timestampUncertaintyNS int64) []CoverageResult {
+func EvaluateBoundClockCoverage(t map[string]CoverageTimeline, f, c string, cb, wb, k int64, w []CoverageWindow, b []CoverageBracket) []CoverageResult {
+	return evaluateClockCoverage(t, f, c, cb, wb, w, b, false, 0, k, true)
+}
+func evaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, control string, cb, wb int64, windows []CoverageWindow, brackets []CoverageBracket, allowMissingBracket bool, timestampUncertaintyNS, reserveNS int64, padded bool) []CoverageResult {
 	type key struct{ p, e int }
 	groups := map[key]map[string]bool{}
 	for _, w := range windows {
@@ -221,14 +259,18 @@ func evaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, cont
 				continue
 			}
 			s.b += timestampUncertaintyNS
-			h, whyH := coverageError(timelines[s.slot], s.a, s.b)
-			f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound)
+			h, whyH := coverageError(timelines[s.slot], s.a, s.b, padded)
+			f, whyF := coverageError(timelines[frontend], s.a-s.bound, s.b+s.bound, padded)
 			add(whyH)
 			add(whyF)
 			if whyH != "" || whyF != "" {
 				continue
 			}
-			if h > math.MaxInt64-f || h+f > s.bound {
+			reserve := int64(0)
+			if s.signal {
+				reserve = reserveNS
+			}
+			if h > math.MaxInt64-f || reserve < 0 || reserve > s.bound || h+f > s.bound-reserve {
 				add("clock-coverage-bound")
 			}
 			if s.signal && (h > math.MaxInt64-f || s.half > s.bound || h+f > s.bound-s.half) {
@@ -297,7 +339,7 @@ func CoverageTailReady(timelines map[string]CoverageTimeline, frontend, control 
 // IsCoverageCause accepts only the clock qualification's fixed public codes.
 func IsCoverageCause(s string) bool {
 	switch s {
-	case "clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified":
+	case "clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified", "clock-coverage-binding":
 		return true
 	}
 	return false
@@ -306,6 +348,18 @@ func IsCoverageCause(s string) bool {
 // WindowCauses returns the clock qualification for one event. Nonempty causes
 // make its windows undecided, while independent media failures remain failures.
 func (q *CoverageQualification) WindowCauses(phase, event int, preCoverage bool) []string {
+	expected := ""
+	if q != nil {
+		expected = q.ClockReceiptSHA256
+	}
+	return q.WindowCausesForReceipt(phase, event, preCoverage, expected)
+}
+func (q *CoverageQualification) WindowCausesForReceipt(phase, event int, preCoverage bool, expected string) []string {
+	if expected != "" || q != nil && IsBound(q.ClockReceiptSHA256, q.Binding) {
+		if preCoverage || q == nil || q.Binding == nil || q.ClockReceiptSHA256 != expected || !q.Binding.Valid(expected) {
+			return []string{"clock-coverage-binding"}
+		}
+	}
 	causes := []string{"clock-coverage-missing"}
 	if q == nil {
 		if preCoverage {

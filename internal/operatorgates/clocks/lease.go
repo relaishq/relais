@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 )
 
 // LeaseObservation is optional recorded evidence, never clock admission in 5a.
@@ -27,12 +29,7 @@ type LeaseObservation struct {
 	HostElapsedNS          int64  `json:"hostElapsedNs"`
 }
 
-type RecordedLease struct {
-	GrowthPPM   string `json:"growthPpm"`
-	BoundNS     int64  `json:"boundNs"`
-	RemainingNS int64  `json:"remainingNs"`
-	Expired     bool   `json:"expired"`
-}
+type RecordedLease = observe.RecordedLease
 
 var rationalPattern = regexp.MustCompile(`^[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$|^[0-9]+/[1-9][0-9]*$`)
 

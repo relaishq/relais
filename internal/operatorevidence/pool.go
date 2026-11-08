@@ -116,6 +116,7 @@ type MediaInput struct {
 	Missing bool `json:"missing,omitempty"`
 }
 type Pool struct {
+	ClockReceiptSHA256 string `json:"clockReceiptSha256,omitempty"`
 	// PreCoverageEvidence opts historical archives into their frozen policy.
 	// Live ReadPool never sets it. Coverage, when present, always wins.
 	PreCoverageEvidence bool                     `json:"preCoverageEvidence,omitempty"`

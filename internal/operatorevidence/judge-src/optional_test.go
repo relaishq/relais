@@ -101,6 +101,8 @@ func optionalDocuments(t *testing.T, input previewPoolInput) []optionalDocument 
 	var alias any
 	_ = json.Unmarshal(data, &alias)
 	alias.(map[string]any)["clockCoverage"] = nil
+	alias.(map[string]any)["clockReceiptSha256"] = ""
+	alias.(map[string]any)["preCoverageEvidence"] = true
 	docs = append(docs, optionalDocument{alias, reflect.TypeFor[operatorevidence.Pool](), -1, -1})
 	for i, phase := range input.Phases {
 		for j, line := range strings.Split(strings.TrimSpace(phase.CallerJSONL), "\n") {
