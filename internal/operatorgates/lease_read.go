@@ -11,7 +11,7 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-// ReadLeases is unwired until 5b6. Batch sends share one request-send timestamp;
+// ReadLeases uses the bounded, read-only lease transport. Batch sends share one timestamp;
 // serial sends get independent timestamps. Tracking/probe cursors remain owned
 // by the session, and transport uncertainty retains the normal fatal latch.
 func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (LeaseRead, error) {

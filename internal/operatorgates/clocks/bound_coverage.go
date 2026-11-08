@@ -2,7 +2,7 @@ package clocks
 
 import "github.com/relaishq/relais/internal/operatorgates/observe"
 
-// WithBinding is an unwired constructor for runs whose caller used this receipt.
+// WithBinding constructs evidence for a run whose caller uses this receipt.
 // Offline evaluation must retain the original binding, never attach a new one.
 func (e CoverageEvidence) WithBinding(b ReceiptBinding, r SelectionReceipt) (CoverageEvidence, error) {
 	if observe.IsBound(e.ClockReceiptSHA256, e.Binding) {

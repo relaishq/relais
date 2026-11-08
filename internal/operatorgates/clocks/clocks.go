@@ -183,6 +183,8 @@ func Check(rows map[string]Sample, bounds Bounds, frontendSlot, controlSlot stri
 	return e, nil
 }
 
+var ErrSignalBracketWide = fmt.Errorf("signal bracket exceeds approved mapping")
+
 // SignalMidpoint preserves decimal nanoseconds without a float conversion.
 func SignalMidpoint(before, after string, workerBound, assumedBound int64) (string, error) {
 	if !nsPattern.MatchString(before) || !nsPattern.MatchString(after) || workerBound < 0 || assumedBound < 0 {
@@ -191,7 +193,10 @@ func SignalMidpoint(before, after string, workerBound, assumedBound int64) (stri
 	b, _ := strconv.ParseUint(before, 10, 64)
 	a, _ := strconv.ParseUint(after, 10, 64)
 	if a < b || (a-b+1)/2 > uint64(assumedBound) || workerBound > assumedBound-int64((a-b+1)/2) {
-		return "", fmt.Errorf("signal bracket exceeds approved mapping")
+		if a < b {
+			return "", fmt.Errorf("reversed signal bracket")
+		}
+		return strconv.FormatUint(b+(a-b)/2, 10), ErrSignalBracketWide
 	}
 	return strconv.FormatUint(b+(a-b)/2, 10), nil
 }

@@ -2,13 +2,11 @@ package operatorrehearsal
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorevidence"
@@ -70,12 +68,11 @@ func (r *rehearsal) runHeadCaller(ctx context.Context, scenario operator.Scenari
 	}
 	scenario.Gates = []operator.Gate{operator.Rollout}
 	scenario.Caller.SHA256 = load.sha256
-	scenario.Digest = ""
-	raw, _ := json.Marshal(scenario)
-	scenario.Digest = hash(raw)
-	head.ScenarioSHA256 = scenario.Digest
-	armed := r.clock.Wall()
-	init := operator.Init{Scenario: scenario, ArmedAtUnixMS: strconv.FormatInt(armed.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(armed.Add(operatorgates.SessionMaximum).UnixMilli(), 10)}
+	init, err := r.headInit(scenario)
+	if err != nil {
+		return fail("clock-binding-invalid")
+	}
+	head.ScenarioSHA256 = init.Scenario.Digest
 	judge := r.headJudge(head)
 	if err = r.runResourceSequence(ctx, init, headSequence(head, judge, load)); err != nil {
 		fail("sequence-failed")
@@ -154,4 +151,11 @@ func (h HeadCallerReport) sanitized() HeadCallerReport {
 		h.Errors[i] = publicCode(s)
 	}
 	return h
+}
+
+func (r *rehearsal) headInit(scenario operator.Scenario) (operator.Init, error) {
+	init := r.boundInit
+	var err error
+	init.Scenario, err = operator.BuildScenarioIdentity(scenario, r.boundInit.Scenario.ClockReceiptSHA256)
+	return init, err
 }

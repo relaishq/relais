@@ -16,14 +16,15 @@ type LeaseRead struct {
 	Sent     map[string]time.Duration
 }
 
-// LeaseGuard is prepared for atomic activation in 5b6. No verdict path creates
-// one yet. Its reader must timestamp request-send after the exchange lock.
+// LeaseGuard protects bound fault operations. Its reader timestamps request-send
+// after the exchange lock.
 type LeaseGuard struct {
 	mu, refresh               sync.Mutex
 	clock                     Clock
 	read                      func(context.Context, time.Duration) (LeaseRead, error)
 	pause                     func(context.Context, time.Duration) error
 	leases                    map[string]clocks.Lease
+	samples                   map[string]clocks.Sample
 	observations              map[string]clocks.LeaseObservation
 	bounds                    clocks.Bounds
 	frontend, control, growth string
@@ -37,7 +38,7 @@ func NewLeaseGuard(e clocks.CoverageEvidence, session *Session, read func(contex
 		return nil, fault("clock-config-differ")
 	}
 	r := e.Binding.Receipt
-	return &LeaseGuard{clock: session.clock, read: read, pause: pause, leases: map[string]clocks.Lease{}, observations: map[string]clocks.LeaseObservation{}, bounds: r.Bounds, frontend: r.FrontendSlot, control: r.ControlSlot, growth: r.Policy.MaxDispersionGrowthPPM, workerBound: r.Bounds.FrontendWorkerBoundNS - r.Policy.SignalReserveNS, frozenEnd: r.EndUnixSeconds}, nil
+	return &LeaseGuard{clock: session.clock, read: read, pause: pause, leases: map[string]clocks.Lease{}, samples: map[string]clocks.Sample{}, observations: map[string]clocks.LeaseObservation{}, bounds: r.Bounds, frontend: r.FrontendSlot, control: r.ControlSlot, growth: r.Policy.MaxDispersionGrowthPPM, workerBound: r.Bounds.FrontendWorkerBoundNS - r.Policy.SignalReserveNS, frozenEnd: r.EndUnixSeconds}, nil
 }
 
 func (g *LeaseGuard) accept(r LeaseRead) error {
@@ -70,6 +71,7 @@ func (g *LeaseGuard) accept(r LeaseRead) error {
 			return err
 		}
 		g.leases[slot], g.observations[slot] = l, *s.Lease
+		g.samples[slot] = s
 	}
 	return nil
 }
@@ -132,7 +134,7 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 	}
 	// A partial initial accept deliberately stays missing on later calls.
 	if len(g.observations) == 0 {
-		r, err := g.read(ctx, end)
+		r, err := g.readAttempt(ctx, end)
 		accepted := g.accept(r)
 		if err != nil {
 			return err
@@ -162,8 +164,14 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 		if g.clock.Elapsed() >= until {
 			break
 		}
+		if until-g.clock.Elapsed() < leaseReadAttempt {
+			if err := g.pause(ctx, until-g.clock.Elapsed()); err != nil {
+				return err
+			}
+			break
+		}
 		wait, done := context.WithTimeout(ctx, until-g.clock.Elapsed())
-		r, err := g.read(wait, until)
+		r, err := g.readAttempt(wait, until)
 		done()
 		accepted := g.accept(r)
 		if err != nil {
@@ -209,4 +217,13 @@ func isLeaseRefusal(err error) bool {
 		return true
 	}
 	return false
+}
+
+func (g *LeaseGuard) readAttempt(ctx context.Context, end time.Duration) (LeaseRead, error) {
+	if end-g.clock.Elapsed() < leaseReadAttempt {
+		return LeaseRead{}, fault("clock-lease-expired")
+	}
+	bounded, cancel := context.WithTimeout(ctx, leaseReadAttempt)
+	defer cancel()
+	return g.read(bounded, end)
 }

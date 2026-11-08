@@ -63,3 +63,15 @@ class HelperTests(unittest.TestCase):
         with patch('sys.argv',['clock_probe.py','--listen','127.0.0.1:24891']), patch.object(helper.http.server,'HTTPServer',return_value=server), patch.object(helper.threading,'Timer',Timer):
             helper.main()
         server.shutdown.assert_called_once()
+
+    def test_absolute_run_deadline(self):
+        from unittest.mock import Mock
+        seen = []
+        class Timer:
+            def __init__(self, seconds, done): seen.append(seconds); self.done=done
+            def start(self): self.done()
+            def cancel(self): pass
+        server = Mock()
+        with patch('sys.argv',['clock_probe.py','--listen','127.0.0.1:24891','--seconds','6300','--until-unix-ns','3000000000']), patch.object(helper.time,'time_ns',return_value=2000000000), patch.object(helper.http.server,'HTTPServer',return_value=server), patch.object(helper.threading,'Timer',Timer):
+            helper.main()
+        self.assertEqual(seen,[1.0], 'MUTATION: helper-run-deadline')

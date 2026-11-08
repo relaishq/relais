@@ -70,7 +70,11 @@ func (r *rehearsal) recordClockSelection(ctx context.Context) {
 			if !f || !c {
 				return errors.New("clock-selection-helper")
 			}
-			return r.startClockHelpers(ctx, front, control, end)
+			until, _ := strconv.ParseInt(r.boundInit.EndUnixMS, 10, 64)
+			if until == 0 {
+				return errors.New("clock-selection-helper")
+			}
+			return r.startClockHelpers(ctx, front, control, time.UnixMilli(until))
 		},
 	}))
 }
@@ -118,7 +122,7 @@ func (r *rehearsal) startClockHelpers(ctx context.Context, front, control string
 		if seconds < 1 {
 			return errors.New("clock-selection-helper")
 		}
-		args := []string{"python3", "/run/relais-clock-helper.py", "--listen", r.topology.Hosts[slot].IP + ":24891", "--seconds", strconv.Itoa(seconds)}
+		args := []string{"python3", "/run/relais-clock-helper.py", "--listen", r.topology.Hosts[slot].IP + ":24891", "--seconds", strconv.Itoa(seconds), "--until-unix-ns", strconv.FormatInt(end.UnixNano(), 10)}
 		if slot == front {
 			args = append(args, "--output", clockProbePath)
 			for _, target := range []string{"control", "w1", "w2"} {

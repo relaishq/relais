@@ -63,8 +63,8 @@ func ceilNS(r *big.Rat) (int64, error) {
 }
 
 // RecordLease uses host-only monotonic elapsed time in 5a. It does not measure
-// gate-to-host transport. In 5b the gate must supply its complete monotonic age
-// from request-send, including transport. Existing fault paths ignore this data.
+// gate-to-host transport. Live gates supply their complete monotonic age
+// from request-send, including transport.
 func RecordLease(o LeaseObservation, ageNS int64) (RecordedLease, error) {
 	var out RecordedLease
 	if !o.Available || o.Reason != "" || o.ErrorBoundNS < 0 || o.ReferenceAgeNS < 0 || o.IntervalNS <= 0 || o.HostElapsedNS < o.IntervalNS || ageNS < o.HostElapsedNS || !nsPattern.MatchString(o.MeasuredUnixNS) || !nsPattern.MatchString(o.ReferenceUnixNS) {

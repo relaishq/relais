@@ -68,6 +68,9 @@ func (a *admissionServer) reply(t *testing.T, q operator.Request) operator.Reply
 		t.Fatal("MUTATION: optional-session request bounds", q.ID)
 	}
 	reply := operator.Reply{ID: q.ID, Transport: operator.Succeeded, ExitCode: new(int)}
+	if clockReply, ok := a.fixture.clockReply(q); ok {
+		return clockReply
+	}
 	payload := any(nil)
 	switch q.Operation {
 	case operator.HostExecute:
@@ -278,6 +281,7 @@ func TestSessionBinaryOwnsAdmission(t *testing.T) {
 			if mode == "invalid-plan" {
 				fixture.Config.Admission.BoundarySeconds = 1200
 			}
+			fixture.bind(t)
 			config := filepath.Join(t.TempDir(), "config.json")
 			raw, _ := json.Marshal(fixture.Config)
 			if err := os.WriteFile(config, raw, 0600); err != nil {
@@ -292,7 +296,7 @@ func TestSessionBinaryOwnsAdmission(t *testing.T) {
 				t.Fatal(f, err)
 			}
 			now := time.Now()
-			init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostExecute, operator.CallerReady, operator.CallerStart, operator.CallerStop, operator.MailboxRead, operator.MailboxCreate}}
+			init := operator.Init{ClockBinding: &fixture.Clock.Artifacts, Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostLeaseRead, operator.HostExecute, operator.CallerReady, operator.CallerStart, operator.CallerStop, operator.MailboxRead, operator.MailboxCreate}}
 			if mode != "absent" && mode != "store-absent" {
 				init.Capabilities = append(init.Capabilities, fixture.OptionalCapabilities[operator.Load]...)
 			}
@@ -324,7 +328,7 @@ func TestSessionBinaryOwnsAdmission(t *testing.T) {
 				t.Fatal("MUTATION: optional-session fabricated media pass", final)
 			}
 			if mode == "absent" || mode == "store-absent" || mode == "invalid-plan" {
-				if server.requests != 0 || final.Latched || final.Gates[0].Reason != "precondition-failed" {
+				if server.requests != 12 || final.Latched || final.Gates[0].Reason != "precondition-failed" {
 					t.Fatal("MUTATION: optional-session missing capability", final, server.requests)
 				}
 				return

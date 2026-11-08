@@ -29,6 +29,7 @@ type RehearseConfig struct {
 }
 
 type rehearsal struct {
+	boundInit               operator.Init
 	clockCoverageFalsified  bool
 	c                       RehearseConfig
 	report                  *Report
@@ -160,7 +161,7 @@ func Rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer) (Rep
 }
 
 func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setup func(*rehearsal, context.Context) error) (report Report, err error) {
-	report = Report{SchemaVersion: 1, Commit: c.Commit, HeadCommit: c.HeadCommit, Event: c.Event, Errors: []string{}, Gates: []GateReport{}, Bounds: clocks.Bounds{FrontendControlBoundNS: 2_000_000, FrontendWorkerBoundNS: 3_000_000, DriftPPM: 100}}
+	report = Report{SchemaVersion: 1, Commit: c.Commit, HeadCommit: c.HeadCommit, Event: c.Event, Errors: []string{}, Gates: []GateReport{}, Bounds: clocks.Bounds{}}
 	if e := os.MkdirAll(c.Output, 0700); e != nil {
 		return report, e
 	}
@@ -226,14 +227,21 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	r.session.SetObservationFailureSink(r.preconditionDiagnostic)
 	r.judge.note = r.session.RecordUncertainty
 	r.peer = NewLocalPeer(adapter, r.run, init)
-	defer r.peer.Close()
+	defer func() { _ = r.peer.Close() }()
 	r.process = &operatorgates.ProcessConfig{Parameters: r.parameters(), ArmedAt: armed, Trials: true, Pool: true}
 	r.runtime = &operatorgates.ProcessRuntime{Session: r.session, Peer: r.peer, Config: r.process, Architecture: "x86_64", Pins: r.pins, Bounds: &report.Bounds}
 	if e = r.deployment.NegativeControls(ctx, r.restoreControl); e != nil {
 		r.recordError("negative-controls-failed", e)
 		return report, errors.New("negative-controls-failed")
 	}
+	r.boundInit = init
 	r.recordClockSelection(ctx)
+	if e = r.bindAdmission(ctx, scenario); e != nil {
+		r.recordError("clock-binding-failed", e)
+		return report, e
+	}
+	init = r.boundInit
+	scenario = init.Scenario
 	if e = r.calibrate(ctx); e != nil || !report.CPU.Calibration.Passed {
 		r.recordError("calibration-failed", e)
 		return report, errors.New("calibration-failed")
@@ -430,7 +438,7 @@ func callerWindow(g operator.Gate, now, gateEnd time.Duration) (time.Duration, b
 	return operatorgates.CallerWindow(g, now, gateEnd)
 }
 func (r *rehearsal) parameters() operatorgates.ProcessParameters {
-	p := operatorgates.ProcessParameters{Control: "http://" + r.topology.Hosts["shared"].IP + ":24710", Relay: "http://" + r.topology.Hosts["relay"].IP + ":24700", Store: StoreEndpoint, StorePort: 16379, Workers: map[string]operatorgates.WorkerEndpoint{}}
+	p := operatorgates.ProcessParameters{ClockProbeFile: clockProbePath, Control: "http://" + r.topology.Hosts["shared"].IP + ":24710", Relay: "http://" + r.topology.Hosts["relay"].IP + ":24700", Store: StoreEndpoint, StorePort: 16379, Workers: map[string]operatorgates.WorkerEndpoint{}}
 	for _, w := range []string{"w1", "w2"} {
 		ip := r.topology.Hosts[w].IP
 		p.Workers[w] = operatorgates.WorkerEndpoint{HTTP: "http://" + ip + ":24701", Media: netip.MustParseAddrPort(ip + ":24711")}

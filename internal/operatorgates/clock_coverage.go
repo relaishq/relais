@@ -110,7 +110,15 @@ func (s *Session) coverageSnapshot(bounds clocks.Bounds) *clocks.CoverageEvidenc
 	for slot, b := range s.clockMissingIntervals {
 		missing[slot] = b
 	}
-	return &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: bounds, Attempts: coverageAttempts(s.clockAttempts), DrainAttempts: coverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...)}
+	e := &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: bounds, Attempts: coverageAttempts(s.clockAttempts), DrainAttempts: coverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...)}
+	if s.clockBinding != nil {
+		e.ClockReceiptSHA256 = s.clockBinding.Binding.ReceiptSHA256
+		e.Binding = s.clockBinding
+		e.Bounds = s.clockBinding.Binding.Bounds
+		e.Attempts = boundCoverageAttempts(s.clockAttempts)
+		e.DrainAttempts = boundCoverageAttempts(s.clockDrainAttempts)
+	}
+	return e
 }
 func (s *Session) retainClockBracket(worker, before, after string, diagnostics *observe.SignalDiagnostics) {
 	b, okB := observe.CoverageNS(before)
@@ -158,7 +166,11 @@ func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, win
 			if bounded.Err() != nil || s.clock.Elapsed() >= end {
 				break
 			}
-			stdout, err := read(bounded, slot, host.Clock(cursors[slot], s.Budget.armed))
+			script := host.Clock(cursors[slot], s.Budget.armed)
+			if s.clockBinding != nil {
+				script = host.ClockWithLease(cursors[slot], s.Budget.armed, "", nil)
+			}
+			stdout, err := read(bounded, slot, script)
 			if err != nil {
 				continue
 			}
@@ -218,4 +230,12 @@ func (s *Session) ClockCoverageFalsified() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.clockCoverageFalsified
+}
+
+func boundCoverageAttempts(attempts []clocks.Evidence) []clocks.CoverageAttempt {
+	out := []clocks.CoverageAttempt{}
+	for _, a := range attempts {
+		out = append(out, clocks.NewBoundCoverageAttempt(a))
+	}
+	return out
 }

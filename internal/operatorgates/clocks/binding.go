@@ -38,8 +38,7 @@ type ReceiptBindingInput struct {
 	BeforeRun                     []BindingHost
 }
 
-// ReceiptBinding is a value-only identity for later Init/coverage integration.
-// This module has no execution call sites until atomic activation.
+// ReceiptBinding is the validated value identity used by Init and coverage.
 type ReceiptBinding = observe.ReceiptBinding
 
 // BindReceipt validates the original trailing-at-freeze selection, then checks
@@ -162,4 +161,10 @@ func bindingRowBytes(rows []TrackingRow) ([]byte, error) {
 		rows[i].Reference = ""
 	}
 	return json.Marshal(rows)
+}
+
+// FrozenTrackingRange is used only after successful selection validation.
+func FrozenTrackingRange(rows []TrackingRow, start, end int64) (int64, int64) {
+	frozen := bindingFrozenRows(rows, start, end)
+	return frozen[0].UnixSeconds, frozen[len(frozen)-1].UnixSeconds
 }

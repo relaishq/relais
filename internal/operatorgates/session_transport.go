@@ -70,6 +70,9 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 	case <-wait.Done():
 	}
 	if wait.Err() != nil {
+		if (op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch) && errors.Is(wait.Err(), context.DeadlineExceeded) {
+			return operator.Failed, fault("clock-lease-expired")
+		}
 		s.RecordUncertainty(operator.Uncertainty{Kind: string(op), RequestID: "0", Target: target, Action: action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (end - s.clock.Elapsed()).Milliseconds(), Rule: transportRule(wait.Err(), "cancelled")})
 		s.Halt("interrupted")
 		return operator.Unknown, wait.Err()
@@ -81,6 +84,9 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 		if err := hooks[0].BeforeSend(); err != nil {
 			return operator.Failed, err
 		}
+	}
+	if (op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch) && end-s.clock.Elapsed() < leaseReadAttempt {
+		return operator.Failed, fault("clock-lease-expired")
 	}
 	req, err := s.Issue(op, target, action, args, script, end)
 	if err != nil {

@@ -123,7 +123,10 @@ func (r *rehearsal) restoreControl(ctx context.Context, control string) error {
 		// followed by P3's empty/stop/replace/start repair, not a flag reset.
 		ports := r.ports()
 		ports.Step = func(ctx context.Context, op, slot string, end time.Duration, extra operatorgates.ProcessExtra) (operatorgates.StepResult, error) {
-			result, err := r.runtime.Step(ctx, op, slot, end, extra)
+			originalOp, originalTarget := r.process.Operation, r.process.Target
+			r.process.Operation, r.process.Target = "rollback", "from"
+			result, err := r.runtime.StepWithLeases(ctx, op, slot, end, extra, operatorgates.LeaseStep{Recovery: true})
+			r.process.Operation, r.process.Target = originalOp, originalTarget
 			if err == nil {
 				switch op {
 				case "worker-empty", "worker-stop", "replace", "worker-start":

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 	"github.com/stretchr/testify/require"
 )
@@ -274,9 +276,14 @@ func TestLeaseReplyAging(t *testing.T) {
 			return hostReply(t, []byte(`{"kind":"ok","started":"1970-01-01T00:16:40Z","ended":"1970-01-01T00:16:40Z","data":{"completed":true,"signalBeforeUnixNs":"1793930000000000000","signalAfterUnixNs":"1793930000000107600"}}`))
 		}
 		_, err := r.StepWithLeases(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"}, LeaseStep{Guard: g})
-		if (delay == 0) != (err == nil) {
+		if err != nil || r.Session.Latched() || len(r.Session.clockBrackets) != 1 || r.Session.clockBrackets[0].LeaseExcluded != (delay != 0) {
 			t.Fatal("MUTATION: lease-reply-age", delay, err)
 		}
+
+		b := r.Session.clockBrackets[0]
+		evidence := clocks.CoverageEvidence{Version: 2, FrontendSlot: "shared", ControlSlot: "shared", Bounds: clocks.FixedCoverageBounds(), KillBrackets: []observe.CoverageBracket{b}, Windows: []observe.CoverageWindow{{Kind: "kill", Worker: "w1", StartUnixNS: b.MidpointUnixNS, EndUnixNS: b.MidpointUnixNS}}}
+		evidence.Evaluate()
+		require.Equal(t, delay != 0, slices.Contains(evidence.Results[0].Causes, "clock-coverage-kill-bracket"), "MUTATION: lease-reply-age")
 	}
 }
 

@@ -87,10 +87,11 @@ type Blob struct {
 }
 
 type Init struct {
-	Scenario      Scenario    `json:"scenario"`
-	ArmedAtUnixMS string      `json:"armedAtUnixMs"`
-	EndUnixMS     string      `json:"endUnixMs"`
-	Capabilities  []Operation `json:"capabilities"`
+	ClockBinding  *ClockBindingArtifacts `json:"clockBinding,omitempty"`
+	Scenario      Scenario               `json:"scenario"`
+	ArmedAtUnixMS string                 `json:"armedAtUnixMs"`
+	EndUnixMS     string                 `json:"endUnixMs"`
+	Capabilities  []Operation            `json:"capabilities"`
 }
 
 type Hello struct {

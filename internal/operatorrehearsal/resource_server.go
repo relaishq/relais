@@ -202,9 +202,10 @@ func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init,
 		return err
 	}
 	defer root.Close()
-	adapter := &Adapter{Topology: r.topology, Containers: r.deployment.ContainerIDs(), Runner: r.runner, Diagnostics: r.diagnostics, Caller: &callerResources{r: r, binary: seq.binary, affinities: seq.affinities}, Mailbox: mailboxResources{store: r.store, spool: root}}
+	adapter := &Adapter{LeaseProbeFiles: r.leaseProbeFiles(), Topology: r.topology, Containers: r.deployment.ContainerIDs(), Runner: r.runner, Diagnostics: r.diagnostics, Caller: &callerResources{r: r, binary: seq.binary, affinities: seq.affinities}, Mailbox: mailboxResources{store: r.store, spool: root}}
 	init.Capabilities = adapter.Capabilities()
-	config := operatorgates.ResourceConfig{Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: seq.judge.pinned.Binary, CallerIDBase: uint64(len(r.units) + 1), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
+	config := r.clockConfig(seq.judge.pinned.Binary)
+	config.CallerIDBase = uint64(len(r.units) + 1)
 	var session *operatorgates.Session
 	defer func() {
 		if session != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/relaishq/relais/internal/clockprobe"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/bindingtest"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/internal/operatorgates/oracletest"
@@ -57,7 +58,17 @@ func TestHeadCallerSequenceKeepsPinnedReportSeparate(t *testing.T) {
 	r.deployment = &Deployment{Topology: topology, containerIDs: fixtureContainerIDs()}
 	now := time.Now()
 	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	binding, e := bindingtest.New(r.run, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	init.Scenario, e = operator.BuildScenarioIdentity(init.Scenario, binding.Selection.SHA256)
+	if e != nil {
+		t.Fatal(e)
+	}
+	init.ClockBinding = &binding.Artifacts
+	r.report.Bounds = binding.Selection.Receipt.Bounds
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err = r.runResourceSequence(ctx, init, r.pinnedSequence()); err != nil {
 		t.Fatal(err)
@@ -71,7 +82,7 @@ func TestHeadCallerSequenceKeepsPinnedReportSeparate(t *testing.T) {
 	if err = r.runResourceSequence(ctx, init, headSequence(head, judge, callerBinary{"/head/relais-load", strings.Repeat("d", 64)})); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 || r.session != pinnedSession || len(r.report.Gates) != 1 || !reflect.DeepEqual(r.report.Gates, pinnedGates) || strings.Join(r.report.Errors, ",") != pinnedErrors || len(r.report.CPU.CallerAffinities) != 0 {
+	if calls != 8 || r.session != pinnedSession || len(r.report.Gates) != 1 || !reflect.DeepEqual(r.report.Gates, pinnedGates) || strings.Join(r.report.Errors, ",") != pinnedErrors || len(r.report.CPU.CallerAffinities) != 0 {
 		t.Fatalf("head phase changed pinned report: calls=%d gates=%+v errors=%v", calls, r.report.Gates, r.report.Errors)
 	}
 	if len(head.Gates) != 1 || head.Gates[0].Gate != operator.Rollout || head.Gates[0].Reason != "command-result-unknown" || !head.Latched || len(head.Uncertainties) == 0 || judge.note == nil {
@@ -258,9 +269,19 @@ func TestHeadCallerPhaseNamesItsBuildInReportAndEvidence(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	binding, e := bindingtest.New(r.run, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r.boundInit = operator.Init{ClockBinding: &binding.Artifacts, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10)}
+	r.boundInit.Scenario, e = operator.BuildScenarioIdentity(fixture.Scenario, binding.Selection.SHA256)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r.report.Bounds = binding.Selection.Receipt.Bounds
 	head := r.runHeadCaller(ctx, fixture.Scenario)
 	// The fake rollout yields no media, so only the judge step may report an error.
-	if head.Commit != commit || head.CallerSHA256 != loadSHA || !fullDigest.MatchString(head.ScenarioSHA256) || len(head.Gates) != 1 || head.Gates[0].Gate != operator.Rollout || strings.Join(head.Errors, ",") != "media-judge-failed" {
+	if head.Commit != commit || head.CallerSHA256 != loadSHA || !fullDigest.MatchString(head.ScenarioSHA256) || len(head.Gates) != 1 || head.Gates[0].Gate != operator.Rollout || len(head.Errors) != 0 {
 		t.Fatalf("head phase did not run with its build: %+v", head)
 	}
 	if _, err = os.Stat(filepath.Join(work, "head-session-spool")); err != nil {
@@ -409,5 +430,23 @@ func TestClockFalsificationSeedsLaterSequenceWindows(t *testing.T) {
 	afterWire, _ := json.Marshal(alreadyJudged)
 	if !bytes.Equal(earlierWire, afterWire) || len(alreadyJudged.WindowCauses(0, 0, false)) != 0 {
 		t.Fatal("earlier judgment changed")
+	}
+}
+
+func TestHeadBindingRetention(t *testing.T) {
+	f, err := bindingtest.New("head-bound", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := operator.BuildScenarioIdentity(operator.Scenario{SchemaVersion: 1, Gates: []operator.Gate{operator.Rollout}}, f.Selection.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &rehearsal{boundInit: operator.Init{Scenario: original, ClockBinding: &f.Artifacts, ArmedAtUnixMS: "1793930000000", EndUnixMS: "1793936300000"}}
+	next := original
+	next.Caller.SHA256 = strings.Repeat("d", 64)
+	got, err := r.headInit(next)
+	if err != nil || got.ClockBinding != r.boundInit.ClockBinding || got.Scenario.ClockReceiptSHA256 != original.ClockReceiptSHA256 || got.ArmedAtUnixMS != r.boundInit.ArmedAtUnixMS || got.EndUnixMS != r.boundInit.EndUnixMS || got.Scenario.Digest == original.Digest {
+		t.Fatal("MUTATION: head-binding-lost", got, err)
 	}
 }

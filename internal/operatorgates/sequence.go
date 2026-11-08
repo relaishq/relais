@@ -66,7 +66,7 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 				}
 				if prep != nil {
 					switch reason := code(prep); {
-					case reason == "caller-not-near", reason == "precondition-unhealthy", reason == "precondition-failed", strings.HasPrefix(reason, "precondition-failed:"):
+					case reason == "caller-not-near", reason == "precondition-unhealthy", reason == "precondition-failed", strings.HasPrefix(reason, "precondition-failed:"), isLeaseRefusal(prep):
 						result.Status = operator.Inconclusive
 						result.Reason = reason
 						if classified, category := readFailure(prep); classified != "" {

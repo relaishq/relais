@@ -481,7 +481,20 @@
     "lease-batch-uncertainty-dropped",
     "lease-reads-effectful",
     "lease-probe-file-unrestricted",
-    "lease-probe-wrong-slot"
+    "lease-probe-wrong-slot",
+    "mismatch-accepted",
+    "head-binding-lost",
+    "fault-bypass",
+    "unbound-pass",
+    "rollback-unleased-counted",
+    "coverage-prepared-without-drain",
+    "wide-bracket-latches",
+    "malformed-bracket-unlatched",
+    "lease-attempt-budget",
+    "lease-queue-budget",
+    "lease-refusal-latched",
+    "lease-queue-timeout",
+    "helper-run-deadline"
   ],
   "killed": [
     {
@@ -4140,6 +4153,97 @@
       "id": "lease-probe-wrong-slot",
       "test": "TestLeaseTransportRejectsScripts/false/probe-slot",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "mismatch-accepted",
+      "test": "TestAtomicBindingBeforeMedia/mismatch",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "head-binding-lost",
+      "test": "TestHeadBindingRetention",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "fault-bypass",
+      "test": "TestActivatedFaultGuard",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "unbound-pass",
+      "test": "TestUnboundProductionRefuses",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-unleased-counted",
+      "test": "TestRollbackUnleasedCounted",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "coverage-prepared-without-drain",
+      "test": "TestResourceRunnerCallerStartBudget/coverage-skipped",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "wide-bracket-latches",
+      "test": "TestActivatedBracketCertainty/wide",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "malformed-bracket-unlatched",
+      "test": "TestActivatedBracketCertainty/malformed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-attempt-budget",
+      "test": "TestLeaseAttemptBudget",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-queue-budget",
+      "test": "TestLeaseQueueAttemptBudget",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-refusal-latched",
+      "test": "TestLeasePrepareRefusalDoesNotLatch",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-queue-timeout",
+      "test": "TestLeaseQueuedTimeoutIsDefinite",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "helper-run-deadline",
+      "test": "TestPythonGuards/helper-run-deadline",
+      "package": "./internal/operatorgates/host",
       "evidence": "killed",
       "guardFingerprint": ""
     }

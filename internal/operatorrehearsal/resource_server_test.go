@@ -15,6 +15,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/bindingtest"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/operator"
@@ -53,12 +54,22 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	r.report.Bounds = clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}
 	now := time.Now()
 	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	binding, e := bindingtest.New(r.run, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	init.Scenario, e = operator.BuildScenarioIdentity(init.Scenario, binding.Selection.SHA256)
+	if e != nil {
+		t.Fatal(e)
+	}
+	init.ClockBinding = &binding.Artifacts
+	r.report.Bounds = binding.Selection.Receipt.Bounds
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err = r.runResourceSequence(ctx, init, r.pinnedSequence()); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || r.session == nil || !r.session.Latched() || len(r.report.Gates) != 1 || r.report.Gates[0].Reason != "command-result-unknown" || r.report.Gates[0].ProcedureCompleted {
+	if calls != 4 || r.session == nil || !r.session.Latched() || len(r.report.Gates) != 1 || r.report.Gates[0].Reason != "command-result-unknown" || r.report.Gates[0].ProcedureCompleted {
 		t.Fatalf("MUTATION: rehearsal-session-seam calls=%d gates=%+v", calls, r.report.Gates)
 	}
 }

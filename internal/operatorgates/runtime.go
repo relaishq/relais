@@ -34,6 +34,7 @@ type ProcessRuntime struct {
 	Architecture   string
 	Pins           []inventory.Pin
 	Bounds         *clocks.Bounds
+	Leases         *LeaseGuard
 	ClockObserved  func(clocks.Evidence)
 	ClockSamples   []clocks.Evidence
 	BeforeMutation func(context.Context) error
@@ -63,6 +64,22 @@ func ValidateProcessParameters(p ProcessParameters) error {
 	return nil
 }
 func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) error {
+	if r.Session != nil && r.Session.clockBinding != nil {
+		if r.Leases == nil {
+			return fault("clock-lease-missing")
+		}
+		if err := r.Leases.Refresh(ctx, end); err != nil {
+			return r.preflightFailure(err, "clocks")
+		}
+		e, err := r.Leases.Snapshot()
+		if err == nil {
+			r.ClockSamples = append(r.ClockSamples, e)
+			if r.ClockObserved != nil {
+				r.ClockObserved(e)
+			}
+		}
+		return r.preflightFailure(err, "clocks")
+	}
 	if r.Bounds == nil {
 		return fault("missing-clock-assumptions")
 	}
@@ -95,7 +112,7 @@ func (r *ProcessRuntime) Inventory(ctx context.Context, target string, end time.
 	return r.preflightFailure(err, "inventory")
 }
 
-// LeaseStep is an explicit, currently unwired opt-in. Recovery permits the
+// LeaseStep supplies the bound fault guard. Recovery permits the
 // replace needed to restore a settled worker; rollback uses the fixed release
 // restoration list. Neither bypasses inventory or the unknown-result latch.
 type LeaseStep struct {
@@ -104,6 +121,9 @@ type LeaseStep struct {
 }
 
 func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
+	if r.Session.clockBinding != nil {
+		return r.StepWithLeases(ctx, op, slot, end, extra, LeaseStep{Guard: r.Leases})
+	}
 	return r.step(ctx, op, slot, end, extra, nil)
 }
 
@@ -136,7 +156,8 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		return StepResult{}, fault("invalid-process-scope")
 	}
 	var stage *host.Stage
-	restore := lease != nil && leaseRestoration(op, r.Config.Operation == "rollback" && r.Config.Target == "from", lease.Recovery)
+	rollbackMove := lease != nil && (op == "move" || op == "drain") && r.Config.Operation == "rollback" && r.Config.Target == "from"
+	restore := rollbackMove || lease != nil && leaseRestoration(op, r.Config.Operation == "rollback" && r.Config.Target == "from", lease.Recovery)
 	if !host.IsRead(op) {
 		deployed := ""
 		if !r.Config.Mixed {
@@ -291,7 +312,14 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 				workerError, bound = r.ClockSamples[len(r.ClockSamples)-1].Worker, r.Bounds.FrontendWorkerBoundNS
 			}
 			midpoint, e := clocks.SignalMidpoint(bracket.Before, bracket.After, workerError, bound)
-			if e != nil {
+			if errors.Is(e, clocks.ErrSignalBracketWide) {
+				r.Session.mu.Lock()
+				if n := len(r.Session.clockBrackets); n > 0 && r.Session.clockBrackets[n-1].Worker == slot && r.Session.clockBrackets[n-1].BeforeUnixNS == bracket.Before && r.Session.clockBrackets[n-1].AfterUnixNS == bracket.After {
+					r.Session.clockBrackets[n-1].LeaseExcluded = true
+				}
+				r.Session.mu.Unlock()
+			}
+			if e != nil && !errors.Is(e, clocks.ErrSignalBracketWide) {
 				return operator.Unknown
 			}
 			ns, _ := strconv.ParseUint(midpoint, 10, 64)
@@ -300,6 +328,20 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		return operator.Succeeded
 	}, hooks...)
 	observed.Certainty = certainty
+	if rollbackMove && certainty == operator.Succeeded && (lease.Guard == nil || lease.Guard.Check() != nil) {
+		r.Session.mu.Lock()
+		if r.Session.clockMissingIntervals == nil {
+			r.Session.clockMissingIntervals = map[string]observe.CoverageBreak{}
+		}
+		front, _ := inventory.ComponentSlot(r.Session.inventoryComponents, "signal")
+		b := observe.CoverageBreak{FromUnixSeconds: observed.Started.Unix(), UnixSeconds: observed.Ended.Unix(), Kind: "clock-lease-expired"}
+		if old, ok := r.Session.clockMissingIntervals[front]; ok {
+			b.FromUnixSeconds = min(b.FromUnixSeconds, old.FromUnixSeconds)
+			b.UnixSeconds = max(b.UnixSeconds, old.UnixSeconds)
+		}
+		r.Session.clockMissingIntervals[front] = b
+		r.Session.mu.Unlock()
+	}
 	if err != nil {
 		if lease != nil && certainty == operator.Failed && isLeaseRefusal(err) && !r.Session.Latched() {
 			return observed, err

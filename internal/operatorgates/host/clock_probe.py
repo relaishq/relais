@@ -113,18 +113,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--listen', required=True)
     parser.add_argument('--seconds', type=int, default=150)
+    parser.add_argument('--until-unix-ns', type=int, default=0)
     parser.add_argument('--peer', action='append', default=[])
     parser.add_argument('--output', default='')
     args = parser.parse_args()
     address, port = args.listen.rsplit(':', 1)
     targets = peers(args.peer)
-    if not 1 <= args.seconds <= 300 or bool(targets) != bool(args.output):
+    if not 1 <= args.seconds <= 6300 or bool(targets) != bool(args.output):
         raise ValueError('invalid clock helper configuration')
     server = http.server.HTTPServer((private_ip(address), int(port)), ClockHandler)
     stop = threading.Event()
     serving = threading.Thread(target=server.serve_forever)
     serving.start()
-    timer = threading.Timer(args.seconds, stop.set)
+    duration = args.seconds
+    if args.until_unix_ns:
+        duration = min(duration, max(0, (args.until_unix_ns-time.time_ns()) / 1e9))
+    timer = threading.Timer(duration, stop.set)
     timer.start()
     try:
         if targets:

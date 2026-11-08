@@ -270,7 +270,7 @@ func TestSessionRefusesUnvalidatedReceipt(t *testing.T) {
 	}
 	s, err := NewSession(frame.Session, *frame.Init, &FakeClock{Now: time.UnixMilli(1000000)})
 	var refusal *clocks.BindingError
-	if s != nil || !errors.As(err, &refusal) || refusal.Cause != "clock-binding-not-active" {
+	if s != nil || !errors.As(err, &refusal) || refusal.Cause != "clock-binding-missing" {
 		t.Fatal("MUTATION: receipt-claim-not-active", err)
 	}
 }

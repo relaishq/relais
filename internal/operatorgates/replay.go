@@ -172,6 +172,8 @@ func ErrorCategory(name, message string) string {
 		case "Preview deadline expired", "Preview admission expired", "Caller preparation failed", "Caller preparation deadline", "Caller job unconfirmed", "Invalid dispatch scope", "DNS preparation missing", "Caller role missing", "Caller campaign missing",
 			"Caller preparation deadline:identity-path", "Caller preparation deadline:runner-preparing",
 			"command-result-unknown", "gate-deadline", "interrupted", "caller-not-near", "precondition-unhealthy", "precondition-failed", "not-implemented", "prior-gate-stopped",
+			"gate-caller-bounds-differ", "clock-binding-missing", "clock-binding-invalid", "clock-binding-run-differ", "clock-binding-roles-differ", "clock-binding-leap-differ", "clock-binding-digest-differ", "clock-binding-policy-differ", "clock-binding-selection-differ", "clock-binding-readback-differ",
+			"clock-history-invalid", "clock-history-incomplete", "clock-history-limit", "clock-history-gap", "clock-history-precision", "clock-history-changed", "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ",
 			"unsupported-capability", "protocol-error", "duplicate-result", "invalid-refusal", "invalid-blob", "gate-failed", "restore-failed", "unclassified":
 			return message
 		}
