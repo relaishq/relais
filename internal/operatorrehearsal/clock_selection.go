@@ -171,13 +171,39 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 				if slot == front && admitting {
 					path = clockProbePath
 				}
-				out, err := p.read(ctx, slot, host.ClockWithLease(cursors[slot], 0, path, probeCursor))
-				if err == nil {
-					var raw []byte
-					raw, err = host.Unpack(out, 256000)
-					if err == nil {
-						samples[i], err = clocks.Parse(raw)
+				cursor := cursors[slot]
+				var retained clocks.TrackingLog
+				read := func(ctx context.Context) (clocks.LeaseObservation, error) {
+					out, err := p.read(ctx, slot, host.ClockWithLease(cursor, 0, path, probeCursor))
+					if err != nil {
+						return clocks.LeaseObservation{}, err
 					}
+					raw, err := host.Unpack(out, 256000)
+					if err != nil {
+						return clocks.LeaseObservation{}, err
+					}
+					sample, err := clocks.Parse(raw)
+					if err != nil {
+						return clocks.LeaseObservation{}, err
+					}
+					if log := sample.TrackingLog; log != nil {
+						retained.Rows = append(retained.Rows, log.Rows...)
+						retained.Breaks = append(retained.Breaks, log.Breaks...)
+						retained.ReadComplete, retained.Cursor = log.ReadComplete, log.Cursor
+						cursor, sample.TrackingLog = log.Cursor, &retained
+					}
+					samples[i] = sample
+					if sample.Lease == nil && admitting {
+						return clocks.LeaseObservation{}, errors.New("clock-lease-missing")
+					}
+					if sample.Lease == nil {
+						return clocks.LeaseObservation{}, nil
+					}
+					return *sample.Lease, nil
+				}
+				first, err := read(ctx)
+				if err == nil && admitting {
+					_, err = clocks.RefreshLease(ctx, first, p.now, p.pause, read)
 				}
 				failed[i] = err
 			})
@@ -188,6 +214,11 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			sample := samples[i]
 			if failed[i] != nil || sample.TrackingLog == nil {
 				result.Cause, complete = "clock-selection-read", false
+				if failed[i] != nil && strings.HasPrefix(failed[i].Error(), "clock-lease-") {
+					result.Cause = clockSelectionCause(failed[i].Error())
+				}
+			}
+			if sample.TrackingLog == nil {
 				continue
 			}
 			complete = complete && sample.TrackingLog.ReadComplete

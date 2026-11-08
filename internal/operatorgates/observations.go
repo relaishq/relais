@@ -28,7 +28,7 @@ func (s *Session) observationFailure(slot, action string, err error) {
 	}
 }
 
-func (s *Session) observeHost(ctx context.Context, p Peer, slot, action, script string, end time.Duration, decode func(string) error) (err error) {
+func (s *Session) observeHost(ctx context.Context, p Peer, slot, action, script string, end time.Duration, decode func(string) error, hooks ...ExchangeHooks) (err error) {
 	defer func() { s.observationFailure(slot, action, err) }()
 	var observationErr error
 	outcome, err := s.Exchange(ctx, p, operator.HostExecute, slot, action, nil, []byte(script), end, func(reply operator.Reply) operator.Certainty {
@@ -44,7 +44,7 @@ func (s *Session) observeHost(ctx context.Context, p Peer, slot, action, script 
 			return operator.Failed
 		}
 		return operator.Succeeded
-	})
+	}, hooks...)
 	if err != nil {
 		return err
 	}
@@ -167,14 +167,14 @@ func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds,
 
 // The optional batch changes transport only. Every host still supplies fresh
 // independent evidence, and no mutation can start before the whole batch joins.
-func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end time.Duration, script func(string) (string, error), decode func(string, string) error) (err error) {
+func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end time.Duration, script func(string) (string, error), decode func(string, string) error, sent ...func(string, time.Duration)) (err error) {
 	if !s.capabilities[operator.HostReadBatch] {
 		for _, slot := range inventory.Slots {
 			source, err := script(slot)
 			if err != nil {
 				return err
 			}
-			if err = s.observeHost(ctx, p, slot, action, source, end, func(stdout string) error { return decode(slot, stdout) }); err != nil {
+			if err = s.observeHost(ctx, p, slot, action, source, end, func(stdout string) error { return decode(slot, stdout) }, observationSendHooks([]string{slot}, sent)...); err != nil {
 				return err
 			}
 		}
@@ -263,7 +263,7 @@ func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end t
 			return operator.Failed
 		}
 		return operator.Succeeded
-	})
+	}, observationSendHooks(inventory.Slots, sent)...)
 	if childFailure != nil {
 		// Exchange has latched the unknown result before diagnostic callbacks.
 		s.noteUnknownHost(childFailure.RequestID, childFailure.Target, action, childFailure.Rule)
@@ -283,4 +283,15 @@ func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end t
 		return errors.New("precondition-failed")
 	}
 	return nil
+}
+
+func observationSendHooks(slots []string, sent []func(string, time.Duration)) []ExchangeHooks {
+	if len(sent) == 0 {
+		return nil
+	}
+	return []ExchangeHooks{{Sent: func(at time.Duration) {
+		for _, slot := range slots {
+			sent[0](slot, at)
+		}
+	}}}
 }

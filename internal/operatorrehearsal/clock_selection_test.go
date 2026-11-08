@@ -2,8 +2,10 @@ package operatorrehearsal
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,11 +14,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,9 +28,11 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 	t.Helper()
 	start := time.Unix(1792886400, 0)
 	now := start
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	dir := t.TempDir()
 	read := func(_ context.Context, slot, script string) (string, error) {
-		cmd := exec.Command("python3", "-B", "../operatorgates/host/clock_admission_test.py", dir, slot, fmt.Sprint(now.Unix()), fmt.Sprint(old))
+		cmd := exec.Command("python3", "-B", "../operatorgates/host/clock_admission_test.py", dir, slot, fmt.Sprint(clock().Unix()), fmt.Sprint(old))
 		cmd.Stdin = strings.NewReader(script)
 		out, err := cmd.CombinedOutput()
 		return string(out), err
@@ -35,9 +41,85 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		mu.Lock()
 		now = now.Add(d)
+		mu.Unlock()
 		return nil
-	}, now: func() time.Time { return now }}
+	}, now: clock}
+}
+
+func TestClockSelectionRefreshLease(t *testing.T) {
+	for _, mode := range []string{"fresh", "late", "nil-seed"} {
+		t.Run(mode, func(t *testing.T) {
+			reads, selections, admittingReads := 0, 0, 0
+			var cursor json.RawMessage
+			p := admissionFixture(t, false, func(_ context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+				selections++
+				s, err := clocks.Select(e, policy)
+				if err != nil {
+					return s, err.Error()
+				}
+				return s, ""
+			})
+			read := p.read
+			p.read = func(ctx context.Context, slot, script string) (string, error) {
+				if slot != "w2" {
+					return read(ctx, slot, script)
+				}
+				reads++
+				if mode == "nil-seed" && reads == 2 && script != host.ClockWithLease(cursor, 0, "", nil) {
+					t.Error("MUTATION: admission-seed-cursor")
+					return "", errors.New("cursor")
+				}
+				out, err := read(ctx, slot, script)
+				if err != nil {
+					return out, err
+				}
+				seed := mode == "nil-seed" && reads == 1
+				if !seed {
+					if mode == "nil-seed" || p.now().Unix() < 1792886525 {
+						return out, nil
+					}
+					admittingReads++
+					if mode == "fresh" && admittingReads > 1 || mode == "late" && p.now().Unix() >= 1792886530 {
+						return out, nil
+					}
+				}
+				raw, err := host.Unpack(out, 256000)
+				require.NoError(t, err)
+				var doc map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal(raw, &doc))
+				if seed {
+					var log clocks.TrackingLog
+					require.NoError(t, json.Unmarshal(doc["trackingLog"], &log))
+					cursor = log.Cursor
+					delete(doc, "lease")
+				} else {
+					var o clocks.LeaseObservation
+					require.NoError(t, json.Unmarshal(doc["lease"], &o))
+					o.ReferenceAgeNS = 3140000000
+					var measured int64
+					_, err = fmt.Sscan(o.MeasuredUnixNS, &measured)
+					require.NoError(t, err)
+					o.ReferenceUnixNS = fmt.Sprint(measured - o.ReferenceAgeNS)
+					doc["lease"], err = json.Marshal(o)
+					require.NoError(t, err)
+				}
+				raw, err = json.Marshal(doc)
+				require.NoError(t, err)
+				var packed bytes.Buffer
+				z := gzip.NewWriter(&packed)
+				_, err = z.Write(raw)
+				require.NoError(t, err)
+				require.NoError(t, z.Close())
+				return base64.StdEncoding.EncodeToString(packed.Bytes()), nil
+			}
+			r := collectClockSelection(context.Background(), "refresh-test", "shared", "shared", p)
+			if r.Cause != "" || r.Bounds == nil || reads < 2 || selections != 1 || r.Bounds.FrontendControlBoundNS != 120000 || r.Bounds.FrontendWorkerBoundNS != 170000 {
+				t.Fatal("MUTATION: admission-retry-dropped", mode, r, reads)
+			}
+		})
+	}
 }
 func TestClockSelectionAdmissionArtifacts(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "relais-gates")

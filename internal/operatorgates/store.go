@@ -32,6 +32,23 @@ func (s SessionStoreCapability) Observe(ctx context.Context, end time.Duration) 
 	return observation, nil
 }
 func (s SessionStoreCapability) Failover(ctx context.Context, end time.Duration) error {
+	return s.failover(ctx, end, nil)
+}
+
+func (s SessionStoreCapability) FailoverWithLeases(ctx context.Context, end time.Duration, guard *LeaseGuard) error {
+	if guard == nil {
+		return fault("clock-lease-missing")
+	}
+	if err := guard.Refresh(ctx, end); err != nil {
+		return s.Session.preflightFailure(err, "clocks")
+	}
+	if err := guard.Check(); err != nil {
+		return err
+	}
+	return s.failover(ctx, end, []ExchangeHooks{{BeforeSend: guard.Check}})
+}
+
+func (s SessionStoreCapability) failover(ctx context.Context, end time.Duration, hooks []ExchangeHooks) error {
 	certainty, err := s.Session.Exchange(ctx, s.Peer, operator.StoreFailover, "store", "failover", nil, nil, end, func(reply operator.Reply) operator.Certainty {
 		if reply.NotSubmitted {
 			return operator.Failed
@@ -43,7 +60,10 @@ func (s SessionStoreCapability) Failover(ctx context.Context, end time.Duration)
 			return operator.Unknown
 		}
 		return operator.Succeeded
-	})
+	}, hooks...)
+	if len(hooks) > 0 && certainty == operator.Failed && isLeaseRefusal(err) && !s.Session.Latched() {
+		return err
+	}
 	if err != nil || certainty == operator.Unknown {
 		return fault("command-result-unknown")
 	}
