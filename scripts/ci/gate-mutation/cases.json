@@ -3768,7 +3768,7 @@
       },
       {
         "File": "internal/operatorgates/caller.go",
-        "Function": "Media",
+        "Function": "media",
         "Old": "pool.ClockCoverage = r.Coverage(operatorevidence.CoverageWindows(pool))",
         "New": "if r.coverageFrozen == nil { r.coverageFrozen = r.Coverage(operatorevidence.CoverageWindows(pool)) }; pool.ClockCoverage = r.coverageFrozen",
         "Receiver": "EvidenceRuntime"
@@ -4729,6 +4729,66 @@
     "New": "l.observation.HostElapsedNS",
     "Test": "TestLeaseReplyAging",
     "Marker": "MUTATION: lease-reply-age",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "postjudge-drain",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "media",
+    "Old": "if prepare != nil {\n\t\tpool.ClockCoverage = prepare(pool.ClockCoverage)\n\t}\n\tsummary, err := r.Judge.Judge(ctx, pool)",
+    "New": "summary, err := r.Judge.Judge(ctx, pool)\n\tif prepare != nil { pool.ClockCoverage = prepare(pool.ClockCoverage) }",
+    "Test": "TestClockCoverageDrainsBeforeFinalJudgment",
+    "Marker": "MUTATION: postjudge-drain",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "drain-deadline-extension",
+    "File": "internal/operatorgates/clock_coverage.go",
+    "Function": "collectCoverage",
+    "Old": "end := min(s.Budget.end, s.clock.Elapsed()+limit, cutoff)",
+    "New": "end := min(s.Budget.end, s.clock.Elapsed()+limit)",
+    "Test": "TestPrejudgeDrainDeadline",
+    "Marker": "MUTATION: drain-deadline-extension",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "drain-failure-hidden",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "finalizePool",
+    "Old": "return media, coverage, err",
+    "New": "if media != nil && coverage != nil && coverage.DrainComplete { media.Status = \"passed\" }; return media, coverage, err",
+    "Test": "TestFinalDrainQualificationAndSafety/known-failure",
+    "Marker": "MUTATION: drain-failure-hidden",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "drain-judge-reserve-dropped",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "finalizePool",
+    "Old": "read, pause, end-judgeReserve)",
+    "New": "read, pause, end)",
+    "Test": "TestPrejudgeDrainReservesJudge/passed",
+    "Marker": "MUTATION: drain-judge-reserve-dropped",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-drain-prepared-dropped",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Old": "result.ClockCoverage, coveragePrepared = coverage, true",
+    "New": "result.ClockCoverage = coverage",
+    "Test": "TestResourceRunnerCallerStartBudget/coverage-drain",
+    "Marker": "MUTATION: resource-final-drain",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-drain-report-dropped",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Old": "result.ClockCoverage, coveragePrepared = coverage, true",
+    "New": "coveragePrepared = true",
+    "Test": "TestResourceRunnerCallerStartBudget/coverage-drain",
+    "Marker": "MUTATION: resource-final-drain",
     "Package": "./internal/operatorgates"
   }
 ]

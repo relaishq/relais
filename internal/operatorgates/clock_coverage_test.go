@@ -82,7 +82,7 @@ func TestClockCoverageDrainConditionAndTimeout(t *testing.T) {
 			if mode == "unavailable" {
 				read = nil
 			}
-			e := s.collectCoverage(context.Background(), clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, w, read, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })
+			e := s.collectCoverage(context.Background(), clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, w, read, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil }, s.Budget.end)
 			require.Equal(t, mode == "ready" || mode == "cut-short", e.DrainComplete)
 			switch mode {
 			case "ready":
@@ -146,7 +146,7 @@ func TestClockCoverageTransportsQualification(t *testing.T) {
 	require.Equal(t, operator.Failure, changed.Status, "negative control: the spy must discriminate actual media changes")
 }
 
-func TestClockCoverageReadsOnlyAfterFinalJudgment(t *testing.T) {
+func TestClockCoverageDrainsBeforeFinalJudgment(t *testing.T) {
 	s, c := fixtureSession(t)
 	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
 	windows := []observe.CoverageWindow{{Kind: "move", Worker: "w1", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}
@@ -180,11 +180,17 @@ func TestClockCoverageReadsOnlyAfterFinalJudgment(t *testing.T) {
 		require.NoError(t, json.Unmarshal(reply.Payload, &output))
 		return output.Stdout, nil
 	}
-	m, err := pool.Media(context.Background())
-	result.ClockCoverage = s.collectCoverage(context.Background(), bounds, result.ClockCoverage.Windows, read, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })
+	closed := s.coverageSnapshot(bounds)
+	closed.Windows = windows
+	closed.Attempts = []clocks.CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {ReadComplete: true, Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: 1793930023, LeapStatus: "N"}}}}}}
+	j.expected, err = operatorevidence.MarshalJudgeInput(operatorevidence.Pool{RunID: "run", Phases: []operatorevidence.MediaInput{}, ClockCoverage: closed})
 	require.NoError(t, err)
-	require.Equal(t, operator.Passed, m.Status)
-	require.Equal(t, []string{"judge", "judge", "judge", "read", "read", "read", "read"}, order)
+	m, coverage, err := s.finalizePool(context.Background(), s.Budget.PoolEnd(), pool, bounds, read, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })
+	result.ClockCoverage = coverage
+	require.NoError(t, err)
+	if m.Status != operator.Passed || !slices.Equal([]string{"judge", "judge", "read", "read", "read", "read", "judge"}, order) {
+		t.Fatal("MUTATION: postjudge-drain", m.Status, order)
+	}
 	require.True(t, result.ClockCoverage.DrainComplete)
 	require.Len(t, result.ClockCoverage.DrainAttempts, 1)
 	require.Empty(t, result.ClockCoverage.Attempts)

@@ -433,7 +433,13 @@
     "admission-lease-refresh-skipped",
     "admission-retry-dropped",
     "malformed-lease-refreshed",
-    "lease-reply-age-omitted"
+    "lease-reply-age-omitted",
+    "postjudge-drain",
+    "drain-deadline-extension",
+    "drain-failure-hidden",
+    "drain-judge-reserve-dropped",
+    "resource-drain-prepared-dropped",
+    "resource-drain-report-dropped"
   ],
   "killed": [
     {
@@ -3755,6 +3761,48 @@
     {
       "id": "lease-reply-age-omitted",
       "test": "TestLeaseReplyAging",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "postjudge-drain",
+      "test": "TestClockCoverageDrainsBeforeFinalJudgment",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "drain-deadline-extension",
+      "test": "TestPrejudgeDrainDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "drain-failure-hidden",
+      "test": "TestFinalDrainQualificationAndSafety/known-failure",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "drain-judge-reserve-dropped",
+      "test": "TestPrejudgeDrainReservesJudge/passed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-drain-prepared-dropped",
+      "test": "TestResourceRunnerCallerStartBudget/coverage-drain",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-drain-report-dropped",
+      "test": "TestResourceRunnerCallerStartBudget/coverage-drain",
       "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""

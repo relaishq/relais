@@ -43,6 +43,10 @@ func (r *EvidenceRuntime) Add(phase operatorevidence.Phase, missing bool) {
 	r.missing = r.missing || missing
 }
 func (r *EvidenceRuntime) Media(ctx context.Context) (*MediaSummary, error) {
+	return r.media(ctx, nil)
+}
+
+func (r *EvidenceRuntime) media(ctx context.Context, prepare func(*clocks.CoverageEvidence) *clocks.CoverageEvidence) (*MediaSummary, error) {
 	r.mu.Lock()
 	phases, missing := append([]operatorevidence.Phase{}, r.phases...), r.missing
 	r.mu.Unlock()
@@ -53,8 +57,27 @@ func (r *EvidenceRuntime) Media(ctx context.Context) (*MediaSummary, error) {
 	if r.Coverage != nil {
 		pool.ClockCoverage = r.Coverage(operatorevidence.CoverageWindows(pool))
 	}
+	if prepare != nil {
+		pool.ClockCoverage = prepare(pool.ClockCoverage)
+	}
 	summary, err := r.Judge.Judge(ctx, pool)
 	return procedureMedia(summary), err
+}
+
+// Keep the existing two-minute pool budget, less its maximum ten-second drain, for judging.
+const judgeReserve = PoolReserve - 10*time.Second
+
+// finalizePool drains within the original final collection cutoff before the
+// judge receives its input. Phase judgments continue to use snapshots only.
+func (s *Session) finalizePool(ctx context.Context, end time.Duration, pool *EvidenceRuntime, bounds clocks.Bounds, read ClockCoverageReader, pause func(context.Context, time.Duration) error) (*MediaSummary, *clocks.CoverageEvidence, error) {
+	var coverage *clocks.CoverageEvidence
+	media, err := pool.media(ctx, func(e *clocks.CoverageEvidence) *clocks.CoverageEvidence {
+		if e != nil {
+			coverage = s.collectCoverage(ctx, bounds, e.Windows, read, pause, end-judgeReserve)
+		}
+		return coverage
+	})
+	return media, coverage, err
 }
 func procedureMedia(s operatorevidence.Summary) *MediaSummary {
 	return &MediaSummary{IncludedPhases: s.IncludedPhases, DroppedPhases: s.DroppedPhases,
