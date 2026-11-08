@@ -1115,6 +1115,13 @@ clock/arm hooks while retaining inventory and unknown-result latches. Refusals
 are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
 `clock-config-differ`. Existing gate/verdict paths do not call these interfaces.
 
+The unwired `operator.ClockBindingArtifacts` codec prepares receipt transport.
+It gzip-compresses receipt and evidence separately, preserving the original bytes
+for `BindReceipt` to recompute both digests. Each decoded artifact is limited to
+8 MiB; the combined compressed bytes are limited to half the existing frame
+budget, leaving room for base64 expansion and Init metadata. Init does not accept
+this envelope yet; the codec changes no caller, gate or judge input.
+
 Signal brackets optionally retain `signalDiagnostics`: helper CPU IDs before/after,
 thread involuntary/voluntary context-switch deltas, thread CPU time, and priority.
 `threadCPUTimeNs` comes from `ru_utime`/`ru_stime` at microsecond resolution.

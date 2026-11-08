@@ -441,7 +441,11 @@
     "resource-drain-prepared-dropped",
     "resource-drain-report-dropped",
     "boost-before-mainpid-recheck",
-    "restore-after-exit-poll"
+    "restore-after-exit-poll",
+    "clock-artifacts-raw-limit-dropped",
+    "clock-artifacts-wire-limit-dropped",
+    "clock-artifacts-decoded-limit-dropped",
+    "clock-artifacts-crc-ignored"
   ],
   "killed": [
     {
@@ -3820,6 +3824,34 @@
       "id": "restore-after-exit-poll",
       "test": "TestPythonGuards/restore-after-exit-poll",
       "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-raw-limit-dropped",
+      "test": "TestClockBindingArtifactsLimits/raw",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-wire-limit-dropped",
+      "test": "TestClockBindingArtifactsLimits/wire",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-decoded-limit-dropped",
+      "test": "TestClockBindingArtifactsLimits/decoded",
+      "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-artifacts-crc-ignored",
+      "test": "TestClockBindingArtifactsLimits/corrupt",
+      "package": "./pkg/operator",
       "evidence": "killed",
       "guardFingerprint": ""
     }
