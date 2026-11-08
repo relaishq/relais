@@ -450,7 +450,28 @@
     "clock-artifacts-combined-budget-dropped",
     "clock-artifacts-wire-boundary-exclusive",
     "clock-artifacts-receipt-boundary-exclusive",
-    "clock-artifacts-evidence-boundary-exclusive"
+    "clock-artifacts-evidence-boundary-exclusive",
+    "history-snapshot-change-ignored",
+    "history-gap-ignored",
+    "history-precision-lost",
+    "history-open-interval",
+    "history-wire-limit-ignored",
+    "history-decode-ignored",
+    "history-incomplete-accepted",
+    "history-row-range-ignored",
+    "history-before-run-ignored",
+    "history-boundary-echo-ignored",
+    "history-monotonic-ignored",
+    "history-gap-61-accepted",
+    "history-first-edge-ignored",
+    "history-float-token-mismatch-accepted",
+    "history-outside-break-refused",
+    "history-last-second-truncated",
+    "history-page-recheck-ignored",
+    "history-progress-ignored",
+    "history-window-read-ahead",
+    "history-log-loss-outside-ignored",
+    "history-unparseable-next-complete"
   ],
   "killed": [
     {
@@ -3892,6 +3913,153 @@
       "id": "clock-artifacts-evidence-boundary-exclusive",
       "test": "TestClockBindingArtifactsExactRawLimit",
       "package": "./pkg/operator",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-snapshot-change-ignored",
+      "test": "TestPythonGuards/history-snapshot-change-ignored",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-gap-ignored",
+      "test": "TestHistoricalTracking/break",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-precision-lost",
+      "test": "TestHistoricalTracking/precision",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-open-interval",
+      "test": "TestPythonGuards/history-open-interval",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-wire-limit-ignored",
+      "test": "TestHistoricalTracking/wire-limit",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-decode-ignored",
+      "test": "TestHistoricalTracking/json",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-incomplete-accepted",
+      "test": "TestHistoricalTracking/partial",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-row-range-ignored",
+      "test": "TestHistoricalTracking/range-low",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-before-run-ignored",
+      "test": "TestHistoricalTracking/before-run",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-boundary-echo-ignored",
+      "test": "TestHistoricalTracking/boundary",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-monotonic-ignored",
+      "test": "TestHistoricalTracking/monotonic",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-gap-61-accepted",
+      "test": "TestHistoricalTracking/gap-61",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-first-edge-ignored",
+      "test": "TestHistoricalTracking/first-edge",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-float-token-mismatch-accepted",
+      "test": "TestHistoricalTracking/float-token",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-outside-break-refused",
+      "test": "TestHistoricalBreakScope",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-last-second-truncated",
+      "test": "TestPythonGuards/history-last-second-truncated",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-page-recheck-ignored",
+      "test": "TestPythonGuards/history-page-recheck-ignored",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-progress-ignored",
+      "test": "TestPythonGuards/history-progress-ignored",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-window-read-ahead",
+      "test": "TestPythonGuards/history-window-read-ahead",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-log-loss-outside-ignored",
+      "test": "TestHistoricalMalformedFirstCopy",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "history-unparseable-next-complete",
+      "test": "TestPythonGuards/history-unparseable-next-complete",
+      "package": "./internal/operatorgates/host",
       "evidence": "killed",
       "guardFingerprint": ""
     }

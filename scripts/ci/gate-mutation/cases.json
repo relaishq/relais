@@ -4908,5 +4908,215 @@
     "Marker": "MUTATION: clock-artifacts-exact-raw-limit",
     "File": "pkg/operator/clock_artifacts.go",
     "Package": "./pkg/operator"
+  },
+  {
+    "ID": "history-snapshot-change-ignored",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "check(cursor['key'] == key and cursor['file'] == identity and info.st_size >= size\n                  and cursor['sha256'] == digest, 'changed')",
+    "New": "check(True, 'changed')",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-snapshot-change-ignored",
+    "Marker": "MUTATION: python-guard history-snapshot-change-ignored",
+    "PythonTest": "clock_history_test.HistoryTests.test_changed_snapshot"
+  },
+  {
+    "ID": "history-gap-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "historicalBreakTouches(b, first, last)",
+    "New": "historicalBreakTouches(b, first, last) && false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/break",
+    "Marker": "MUTATION: history-break"
+  },
+  {
+    "ID": "history-precision-lost",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "err != nil || e != nil || v != r.MaxErrorSeconds",
+    "New": "err != nil && false || e != nil || v != r.MaxErrorSeconds",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/precision",
+    "Marker": "MUTATION: history-precision"
+  },
+  {
+    "ID": "history-open-interval",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "first <= r['unixSeconds'] <= last",
+    "New": "first < r['unixSeconds'] < last",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-open-interval",
+    "Marker": "MUTATION: python-guard history-open-interval",
+    "PythonTest": "clock_history_test.HistoryTests.test_large_history_precision_and_inclusive_boundaries"
+  },
+  {
+    "ID": "history-wire-limit-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "len(stdout) > operator.MaxHostOutputBytes",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/wire-limit",
+    "Marker": "MUTATION: history-wire-limit"
+  },
+  {
+    "ID": "history-decode-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "observe.DecodeClosedLimit(raw, &page, nil, 256000) != nil",
+    "New": "observe.Decode(raw, &page, nil) != nil",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/json",
+    "Marker": "MUTATION: history-json"
+  },
+  {
+    "ID": "history-incomplete-accepted",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "len(out.Rows) == 0 || out.Rows[0].UnixSeconds != first || out.Rows[len(out.Rows)-1].UnixSeconds != last",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/partial",
+    "Marker": "MUTATION: history-partial"
+  },
+  {
+    "ID": "history-row-range-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "r.UnixSeconds < first || r.UnixSeconds > last",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/range-low",
+    "Marker": "MUTATION: history-range-low"
+  },
+  {
+    "ID": "history-before-run-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "!r.BeforeRun",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/before-run",
+    "Marker": "MUTATION: history-before-run"
+  },
+  {
+    "ID": "history-boundary-echo-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "page.RunStartUnixMS != boundary",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/boundary",
+    "Marker": "MUTATION: history-boundary"
+  },
+  {
+    "ID": "history-monotonic-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "r.UnixSeconds < out.Rows[n-1].UnixSeconds",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/monotonic",
+    "Marker": "MUTATION: history-monotonic"
+  },
+  {
+    "ID": "history-gap-61-accepted",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "r.UnixSeconds-out.Rows[n-1].UnixSeconds > 60",
+    "New": "r.UnixSeconds-out.Rows[n-1].UnixSeconds > 61",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/gap-61",
+    "Marker": "MUTATION: history-gap-61"
+  },
+  {
+    "ID": "history-first-edge-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "out.Rows[0].UnixSeconds != first",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/first-edge",
+    "Marker": "MUTATION: history-first-edge"
+  },
+  {
+    "ID": "history-float-token-mismatch-accepted",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "v != r.MaxErrorSeconds",
+    "New": "v != v",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalTracking/float-token",
+    "Marker": "MUTATION: history-float-token"
+  },
+  {
+    "ID": "history-outside-break-refused",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "ReadHistoricalTracking",
+    "Old": "historicalBreakTouches(b, first, last)",
+    "New": "true || historicalBreakTouches(b, first, last)",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalBreakScope",
+    "Marker": "MUTATION: history-break-scope"
+  },
+  {
+    "ID": "history-last-second-truncated",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "next_at > last",
+    "New": "next_at >= last",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-last-second-truncated",
+    "Marker": "MUTATION: python-guard history-last-second-truncated",
+    "PythonTest": "clock_history_test.HistoryTests.test_last_second_spans_page_edge"
+  },
+  {
+    "ID": "history-page-recheck-ignored",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "check(identity == [after.st_dev, after.st_ino] and hashlib.sha256(log.read(size)).hexdigest() == digest, 'changed')",
+    "New": "check(True, 'changed')",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-page-recheck-ignored",
+    "Marker": "MUTATION: python-guard history-page-recheck-ignored",
+    "PythonTest": "clock_history_test.HistoryTests.test_change_during_page"
+  },
+  {
+    "ID": "history-progress-ignored",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "check(page['cursor'] is not None and (page['readComplete'] or page['cursor']['position'] > tracking['position']), 'incomplete')",
+    "New": "check(True, 'incomplete')",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-progress-ignored",
+    "Marker": "MUTATION: python-guard history-progress-ignored",
+    "PythonTest": "clock_history_test.HistoryTests.test_byte_position_stall"
+  },
+  {
+    "ID": "history-window-read-ahead",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "os = HistoricalOS(original_os, end)",
+    "New": "os = original_os",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-window-read-ahead",
+    "Marker": "MUTATION: python-guard history-window-read-ahead",
+    "PythonTest": "clock_history_test.HistoryTests.test_post_interval_events_and_old_malformed_rows"
+  },
+  {
+    "ID": "history-log-loss-outside-ignored",
+    "File": "internal/operatorgates/clocks/history.go",
+    "Function": "historicalBreakTouches",
+    "Old": "b.Kind == \"log-loss\"",
+    "New": "false",
+    "Package": "./internal/operatorgates/clocks",
+    "Test": "TestHistoricalMalformedFirstCopy",
+    "Marker": "MUTATION: history-malformed-first-copy"
+  },
+  {
+    "ID": "history-unparseable-next-complete",
+    "File": "internal/operatorgates/host/clock_history.py",
+    "Old": "next_at = first",
+    "New": "next_at = last + 1",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/history-unparseable-next-complete",
+    "Marker": "MUTATION: python-guard history-unparseable-next-complete",
+    "PythonTest": "clock_history_test.HistoryTests.test_unparseable_next_line_is_incomplete"
   }
 ]

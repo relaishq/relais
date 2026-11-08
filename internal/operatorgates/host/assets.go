@@ -11,8 +11,17 @@ import (
 	"slices"
 )
 
-//go:embed preview_process.py preview_inventory.py preview_telemetry.py clock.py clock_probe.py
+//go:embed preview_process.py preview_inventory.py preview_telemetry.py clock.py clock_probe.py clock_history.py
 var Assets embed.FS
+
+// HistoricalClock is unwired. boundary is the gate-owned read boundary, not arm.
+func HistoricalClock(cursor json.RawMessage, boundary, first, last int64) string {
+	data, _ := encoded(cursor)
+	return "python3 - <<'PY'\n" + source("clock.py") + "\n" + source("clock_history.py") + fmt.Sprintf(`
+print(base64.b64encode(gzip.compress(json.dumps(historical_tracking(json.loads(base64.b64decode('%s')), %d, %d, %d)).encode())).decode())
+PY
+`, data, boundary, first, last)
+}
 
 func source(name string) string {
 	data, err := Assets.ReadFile(name)
