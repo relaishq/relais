@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -103,7 +104,7 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 }
 func effectful(op operator.Operation, action string) bool {
 	switch op {
-	case operator.MailboxRead, operator.CallerReady, operator.StoreObserve, operator.HostReadBatch:
+	case operator.MailboxRead, operator.CallerReady, operator.StoreObserve, operator.HostReadBatch, operator.HostLeaseRead, operator.HostLeaseReadBatch:
 		return false
 	case operator.HostExecute:
 		switch action {
@@ -168,6 +169,11 @@ func (s *Session) Issue(op operator.Operation, target, action string, args json.
 	}
 	if !s.capabilities[op] {
 		return operator.Request{}, errors.New("unsupported-capability")
+	}
+	if op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch {
+		if _, err := host.LeaseReadScripts(operator.Request{Operation: op, Target: target, Action: action, Args: args, Script: script}); err != nil {
+			return operator.Request{}, err
+		}
 	}
 	if len(script) > operator.MaxScriptBytes || len(args) > operator.MaxFrameBytes/2 || (len(args) > 0 && !json.Valid(args)) {
 		return operator.Request{}, errors.New("invalid-request")

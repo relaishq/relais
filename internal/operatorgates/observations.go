@@ -29,9 +29,12 @@ func (s *Session) observationFailure(slot, action string, err error) {
 }
 
 func (s *Session) observeHost(ctx context.Context, p Peer, slot, action, script string, end time.Duration, decode func(string) error, hooks ...ExchangeHooks) (err error) {
+	return s.observeHostRequest(ctx, p, operator.HostExecute, slot, action, nil, []byte(script), end, decode, hooks...)
+}
+func (s *Session) observeHostRequest(ctx context.Context, p Peer, op operator.Operation, slot, action string, args json.RawMessage, script []byte, end time.Duration, decode func(string) error, hooks ...ExchangeHooks) (err error) {
 	defer func() { s.observationFailure(slot, action, err) }()
 	var observationErr error
-	outcome, err := s.Exchange(ctx, p, operator.HostExecute, slot, action, nil, []byte(script), end, func(reply operator.Reply) operator.Certainty {
+	outcome, err := s.Exchange(ctx, p, op, slot, action, args, script, end, func(reply operator.Reply) operator.Certainty {
 		if reply.NotSubmitted {
 			return operator.Failed
 		}
@@ -192,6 +195,9 @@ func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end t
 	if err != nil {
 		return err
 	}
+	return s.observeHostBatch(ctx, p, operator.HostReadBatch, action, raw, end, decode, sent...)
+}
+func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Operation, action string, raw json.RawMessage, end time.Duration, decode func(string, string) error, sent ...func(string, time.Duration)) (err error) {
 	diagnosed := false
 	defer func() {
 		if !diagnosed {
@@ -200,7 +206,7 @@ func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end t
 	}()
 	var observed error
 	var childFailure *operator.Uncertainty
-	outcome, err := s.Exchange(ctx, p, operator.HostReadBatch, "hosts", action, raw, nil, end, func(reply operator.Reply) operator.Certainty {
+	outcome, err := s.Exchange(ctx, p, op, "hosts", action, raw, nil, end, func(reply operator.Reply) operator.Certainty {
 		if reply.NotSubmitted {
 			return operator.Failed
 		}

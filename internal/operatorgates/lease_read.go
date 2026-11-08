@@ -8,6 +8,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 // ReadLeases is unwired until 5b6. Batch sends share one request-send timestamp;
@@ -24,7 +25,7 @@ func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (Le
 	if readProbes {
 		defer s.clockProbeRefresh.Unlock()
 	}
-	err := s.observeHosts(ctx, p, "clock", end, func(slot string) (string, error) {
+	err := s.observeLeases(ctx, p, end, func(slot string) operator.HostLeaseReadInput {
 		s.mu.Lock()
 		cursor := s.clockCursors[slot]
 		s.mu.Unlock()
@@ -32,7 +33,7 @@ func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (Le
 		if readProbes && slot == front {
 			probe = path
 		}
-		return host.ClockWithLease(cursor, s.Budget.armed, probe, probeCursor), nil
+		return operator.HostLeaseReadInput{Target: slot, Cursor: cursor, RunStartUnixMS: s.Budget.armed, ProbeFile: probe, ProbeCursor: probeCursor}
 	}, func(slot, stdout string) error {
 		raw, err := host.Unpack(stdout, 256000)
 		if err != nil {
@@ -63,4 +64,28 @@ func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (Le
 	}
 	s.mu.Unlock()
 	return LeaseRead{Evidence: e, Sent: sent}, err
+}
+
+func (s *Session) observeLeases(ctx context.Context, p Peer, end time.Duration, input func(string) operator.HostLeaseReadInput, decode func(string, string) error, sent func(string, time.Duration)) error {
+	if s.capabilities[operator.HostLeaseReadBatch] {
+		args := operator.HostLeaseReadArgs{}
+		for _, slot := range inventory.Slots {
+			args.Reads = append(args.Reads, input(slot))
+		}
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return err
+		}
+		return s.observeHostBatch(ctx, p, operator.HostLeaseReadBatch, "clock", raw, end, decode, sent)
+	}
+	for _, slot := range inventory.Slots {
+		raw, err := json.Marshal(operator.HostLeaseReadArgs{Reads: []operator.HostLeaseReadInput{input(slot)}})
+		if err != nil {
+			return err
+		}
+		if err := s.observeHostRequest(ctx, p, operator.HostLeaseRead, slot, "clock", raw, nil, end, func(stdout string) error { return decode(slot, stdout) }, observationSendHooks([]string{slot}, []func(string, time.Duration){sent})...); err != nil {
+			return err
+		}
+	}
+	return nil
 }

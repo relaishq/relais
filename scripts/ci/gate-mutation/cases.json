@@ -3591,7 +3591,7 @@
   {
     "ID": "batch-unknown-hidden",
     "File": "internal/operatorgates/observations.go",
-    "Function": "observeHosts",
+    "Function": "observeHostBatch",
     "Old": "child.Transport == operator.Unknown",
     "New": "false",
     "Test": "TestBatchedProofFailureAndUncertainty/failed-and-unknown",
@@ -3652,8 +3652,8 @@
     "ID": "batch-shared-host-parallel-probes",
     "File": "internal/operatorrehearsal/adapter_batch.go",
     "Function": "executeReadBatch",
-    "Old": "for i, read := range args.Reads {\n\t\tchild := operator.Request{ID: read.Target, Operation: operator.HostReadBatch, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t}",
-    "New": "done := make(chan struct{}, len(args.Reads))\n\tfor i, read := range args.Reads {\n\t\tgo func() {\n\t\t\tchild := operator.Request{ID: read.Target, Operation: operator.HostReadBatch, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t\t\tdone <- struct{}{}\n\t\t}()\n\t}\n\tfor range args.Reads { <-done }",
+    "Old": "for i, read := range args.Reads {\n\t\tchild := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t}",
+    "New": "done := make(chan struct{}, len(args.Reads))\n\tfor i, read := range args.Reads {\n\t\tgo func() {\n\t\t\tchild := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t\t\tdone <- struct{}{}\n\t\t}()\n\t}\n\tfor range args.Reads { <-done }",
     "Test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
     "Marker": "MUTATION: batch-shared-host-serialized",
     "Package": "./internal/operatorrehearsal"
@@ -5118,5 +5118,65 @@
     "Test": "TestPythonGuards/history-unparseable-next-complete",
     "Marker": "MUTATION: python-guard history-unparseable-next-complete",
     "PythonTest": "clock_history_test.HistoryTests.test_unparseable_next_line_is_incomplete"
+  },
+  {
+    "ID": "lease-read-any-script",
+    "File": "internal/operatorgates/host/lease.go",
+    "Function": "LeaseReadScripts",
+    "Old": "len(req.Script) != 0",
+    "New": "false",
+    "Package": "./internal/operatorrehearsal",
+    "Test": "TestLeaseTransportRejectsScripts/false/script",
+    "Marker": "MUTATION: lease-only-input"
+  },
+  {
+    "ID": "lease-read-open-args",
+    "File": "internal/operatorgates/host/lease.go",
+    "Function": "LeaseReadScripts",
+    "Old": "observe.DecodeClosedLimit(req.Args, &args, observe.Contract{\"reads\"}, operator.MaxFrameBytes/2)",
+    "New": "observe.DecodeLimit(req.Args, &args, observe.Contract{\"reads\"}, operator.MaxFrameBytes/2)",
+    "Package": "./internal/operatorrehearsal",
+    "Test": "TestLeaseTransportRejectsScripts/false/unknown",
+    "Marker": "MUTATION: lease-only-input"
+  },
+  {
+    "ID": "lease-read-wrong-target",
+    "File": "internal/operatorgates/host/lease.go",
+    "Function": "LeaseReadScripts",
+    "Old": "input.Target != slots[i]",
+    "New": "(input.Target != slots[i] && false)",
+    "Package": "./internal/operatorrehearsal",
+    "Test": "TestLeaseTransportRejectsScripts/false/target",
+    "Marker": "MUTATION: lease-only-input"
+  },
+  {
+    "ID": "lease-read-floor-not-carved",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "(op == operator.HostExecute || op == operator.HostReadBatch)",
+    "New": "(op == operator.HostExecute || op == operator.HostReadBatch || op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch)",
+    "Package": "./internal/operatorrehearsal",
+    "Test": "TestLeaseTransportRefresh/false",
+    "Marker": "MUTATION: lease-refresh-transport"
+  },
+  {
+    "ID": "lease-read-batch-floor-not-carved",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "req.Operation == operator.HostReadBatch && time.Until(deadline)",
+    "New": "true && time.Until(deadline)",
+    "Package": "./internal/operatorrehearsal",
+    "Test": "TestLeaseTransportRefresh/true",
+    "Marker": "MUTATION: lease-refresh-transport"
+  },
+  {
+    "ID": "lease-hostexecute-floor-removed",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "(op == operator.HostExecute || op == operator.HostReadBatch)",
+    "New": "(op == operator.HostReadBatch)",
+    "Package": "./internal/operatorgates",
+    "Test": "TestLeaseTransportKeepsScriptFloor",
+    "Marker": "MUTATION: lease-keeps-script-floor"
   }
 ]

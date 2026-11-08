@@ -1114,6 +1114,10 @@ unfreeze, replenish, required rollback and explicit recovery replacement bypass
 clock/arm hooks while retaining inventory and unknown-result latches. Refusals
 are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
 `clock-config-differ`. Existing gate/verdict paths do not call these interfaces.
+`host.lease-read` and `host.lease-read-batch` carry typed cursor inputs;
+the adapter generates the fixed lease reader and rejects scripts or unknown
+arguments. These observations use the original short refresh deadline, including
+transport; arbitrary host execution and batch scripts retain their 30 s floor.
 
 The unwired `operator.ClockBindingArtifacts` codec prepares receipt transport.
 It gzip-compresses receipt and evidence separately, preserving the original bytes

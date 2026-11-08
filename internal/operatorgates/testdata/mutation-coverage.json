@@ -471,7 +471,13 @@
     "history-progress-ignored",
     "history-window-read-ahead",
     "history-log-loss-outside-ignored",
-    "history-unparseable-next-complete"
+    "history-unparseable-next-complete",
+    "lease-read-any-script",
+    "lease-read-open-args",
+    "lease-read-wrong-target",
+    "lease-read-floor-not-carved",
+    "lease-read-batch-floor-not-carved",
+    "lease-hostexecute-floor-removed"
   ],
   "killed": [
     {
@@ -4060,6 +4066,48 @@
       "id": "history-unparseable-next-complete",
       "test": "TestPythonGuards/history-unparseable-next-complete",
       "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-read-any-script",
+      "test": "TestLeaseTransportRejectsScripts/false/script",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-read-open-args",
+      "test": "TestLeaseTransportRejectsScripts/false/unknown",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-read-wrong-target",
+      "test": "TestLeaseTransportRejectsScripts/false/target",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-read-floor-not-carved",
+      "test": "TestLeaseTransportRefresh/false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-read-batch-floor-not-carved",
+      "test": "TestLeaseTransportRefresh/true",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-hostexecute-floor-removed",
+      "test": "TestLeaseTransportKeepsScriptFloor",
+      "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""
     }
