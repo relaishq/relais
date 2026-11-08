@@ -511,7 +511,10 @@
     "lease-attempt-too-short",
     "lease-attempt-no-retry-room",
     "lease-batch-service-budget",
-    "lease-per-child-attempt-floor"
+    "lease-per-child-attempt-floor",
+    "lease-serial-service-floor",
+    "lease-serial-service-boundary",
+    "worker-stop-always-restores"
   ],
   "killed": [
     {
@@ -4380,6 +4383,27 @@
       "id": "lease-per-child-attempt-floor",
       "test": "TestLeaseSlowAdapter/batch=false/retry",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-serial-service-floor",
+      "test": "TestSerialLeaseServiceFloor/insufficient",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-serial-service-boundary",
+      "test": "TestSerialLeaseServiceFloor/exact",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "worker-stop-always-restores",
+      "test": "TestProductionWorkerStopRequiresLease/missing",
+      "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""
     }

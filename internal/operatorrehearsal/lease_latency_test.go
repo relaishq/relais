@@ -24,8 +24,12 @@ func (c latencyClock) Wall() time.Time        { return time.Unix(1793930000, 0).
 
 func TestLeaseSlowAdapter(t *testing.T) {
 	for _, batch := range []bool{false, true} {
-		for _, mode := range []string{"fresh", "retry", "queued-expired"} {
-			retry := mode == "retry"
+		modes := []string{"fresh", "retry", "queued-expired"}
+		if !batch {
+			modes = append(modes, "upper-costs", "upper-queued-expired")
+		}
+		for _, mode := range modes {
+			retry := mode == "retry" || strings.HasPrefix(mode, "upper-")
 			t.Run(fmt.Sprintf("batch=%v/%s", batch, mode), func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					clock := latencyClock{time.Now()}
@@ -49,11 +53,17 @@ func TestLeaseSlowAdapter(t *testing.T) {
 							reads++
 						}
 						delay := 300 * time.Millisecond
-						if reads == 1 && !telemetry {
+						if strings.HasPrefix(mode, "upper-") {
+							delay = 390 * time.Millisecond
+						}
+						if reads == 1 && !strings.HasPrefix(mode, "upper-") && !telemetry {
 							delay = 550 * time.Millisecond
 						}
 						if telemetry {
 							delay = 100 * time.Millisecond
+							if mode == "upper-costs" {
+								delay = 50 * time.Millisecond
+							}
 							if mode == "queued-expired" {
 								if batch {
 									delay = 250 * time.Millisecond
@@ -94,8 +104,12 @@ func TestLeaseSlowAdapter(t *testing.T) {
 					require.NoError(t, err)
 					err = guard.Refresh(context.Background(), 4*time.Second)
 					require.NoError(t, <-done)
-					if mode == "queued-expired" {
-						if err == nil || err.Error() != "clock-lease-expired" || session.Latched() || reads != 0 {
+					if mode == "queued-expired" || mode == "upper-queued-expired" {
+						wantReads := 0
+						if mode == "upper-queued-expired" {
+							wantReads = 3
+						}
+						if err == nil || err.Error() != "clock-lease-expired" || session.Latched() || reads != wantReads {
 							t.Fatal("MUTATION: lease-batch-service-budget", err, session.Latched(), reads)
 						}
 						return
@@ -103,7 +117,11 @@ func TestLeaseSlowAdapter(t *testing.T) {
 					if err != nil || session.Latched() || clock.Elapsed() > 4*time.Second {
 						t.Fatal("MUTATION: lease-slow-adapter", err, session.Latched(), clock.Elapsed(), reads)
 					}
-					if !strings.Contains(diagnostics.String(), "clock-lease-exec slot=") || !strings.Contains(diagnostics.String(), "durationMs=550") || !strings.Contains(diagnostics.String(), "clock-lease-read operation=") {
+					expected := "durationMs=550"
+					if mode == "upper-costs" {
+						expected = "durationMs=390"
+					}
+					if !strings.Contains(diagnostics.String(), "clock-lease-exec slot=") || !strings.Contains(diagnostics.String(), expected) || !strings.Contains(diagnostics.String(), "clock-lease-read operation=") {
 						t.Fatal("lease duration diagnostics missing", diagnostics.String())
 					}
 					want := 4

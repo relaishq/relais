@@ -107,8 +107,9 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 // Two attempts and two 100 ms polls fit inside 4P when P is one second.
 const leaseReadAttempt = 1800 * time.Millisecond
 
-// Two chrony reads are separated by 200 ms; retain 50 ms for framing/dispatch.
-const leaseReadMinimum = 250 * time.Millisecond
+// Reserve a complete serial read: observed warm reads were 300–390 ms,
+// with a 526 ms first-process maximum in the local measurement.
+const leaseReadMinimum = 550 * time.Millisecond
 
 // A queued batch needs the measured four-host service time before submission.
 const leaseReadBatchMinimum = 1600 * time.Millisecond

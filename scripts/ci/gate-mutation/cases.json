@@ -5529,5 +5529,35 @@
     "Test": "TestLeaseSlowAdapter/batch=false/retry",
     "Marker": "MUTATION: lease-slow-adapter",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-serial-service-floor",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "",
+    "Old": "const leaseReadMinimum = 550 * time.Millisecond",
+    "New": "const leaseReadMinimum = 250 * time.Millisecond",
+    "Test": "TestSerialLeaseServiceFloor/insufficient",
+    "Marker": "MUTATION: lease-serial-service-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-serial-service-boundary",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if remaining < minimum {",
+    "New": "if remaining <= minimum {",
+    "Test": "TestSerialLeaseServiceFloor/exact",
+    "Marker": "MUTATION: lease-serial-service-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "worker-stop-always-restores",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "leaseRestoration",
+    "Old": "case \"worker-stop\":\n\t\treturn rollback || recovery",
+    "New": "case \"worker-stop\":\n\t\treturn true",
+    "Test": "TestProductionWorkerStopRequiresLease/missing",
+    "Marker": "MUTATION: worker-stop-lease",
+    "Package": "./internal/operatorgates"
   }
 ]

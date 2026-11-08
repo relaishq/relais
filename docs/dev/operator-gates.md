@@ -1131,8 +1131,9 @@ arbitrary host execution and batch scripts retain their 30 s floor.
 Each whole observation (serial or batch) has a 1.8 s attempt timeout,
 including queue and transport. A retry that cannot fit that timeout within the
 original 4P deadline ends with `clock-lease-expired`; the send lock rechecks the
-remaining budget and the attempt context. A single read needs 250 ms after
-queueing (the 200 ms measurement plus 50 ms framing/dispatch margin); a four-host
+remaining budget and the attempt context. A single read needs 550 ms after
+queueing (covering measured 300–390 ms warm reads and a 526 ms first-process
+read); a four-host
 batch needs 1.6 s. The wire deadline is capped to the attempt deadline. Serial
 children consume the same attempt rather than each reserving another whole
 attempt. An unsent queued timeout is definite. Submitted read uncertainty still
