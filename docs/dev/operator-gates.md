@@ -1093,3 +1093,19 @@ cause. Archives omit addresses, source labels and opaque cursors. Selection stay
 diagnostic; acceptance, caller flags and judge inputs do not use it.
 `TestClockSelectionAdmissionArtifacts` exercises the real reader with oversized
 logs, a transient read failure and the real CLI. PR admission is a separate gate.
+
+Admission now re-measures an expired lease for at most four current poll periods
+before invoking the selector. It requires a newer reference update and retains
+tracking pages/cursors even when the lease is omitted. A failed refresh records
+`clock-lease-expired`; admission retries until its existing deadline. This
+changes only recorded receipt admission and adds no time to the helper deadline.
+
+The unwired `LeaseGuard`, `Session.ReadLeases`, `StepWithLeases` and
+`FailoverWithLeases` prepare fault enforcement for atomic activation. They age
+from monotonic request-send (including transport), never renew the same update's
+two-poll expiry, and check control pairs against B_control and worker pairs
+against B_worker−K. Checks repeat after arm and after the exchange lock. Start,
+unfreeze, replenish, required rollback and explicit recovery replacement bypass
+clock/arm hooks while retaining inventory and unknown-result latches. Refusals
+are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
+`clock-config-differ`. Existing gate/verdict paths do not call these interfaces.

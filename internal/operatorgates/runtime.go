@@ -94,7 +94,24 @@ func (r *ProcessRuntime) Inventory(ctx context.Context, target string, end time.
 	_, err := r.Session.FreshInventory(ctx, r.Peer, r.Pins, end, r.Pins[i].Commit, true)
 	return r.preflightFailure(err, "inventory")
 }
-func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (result StepResult, err error) {
+
+// LeaseStep is an explicit, currently unwired opt-in. Recovery permits the
+// replace needed to restore a settled worker; rollback uses the fixed release
+// restoration list. Neither bypasses inventory or the unknown-result latch.
+type LeaseStep struct {
+	Guard    *LeaseGuard
+	Recovery bool
+}
+
+func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
+	return r.step(ctx, op, slot, end, extra, nil)
+}
+
+func (r *ProcessRuntime) StepWithLeases(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra, lease LeaseStep) (StepResult, error) {
+	return r.step(ctx, op, slot, end, extra, &lease)
+}
+
+func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra, lease *LeaseStep) (result StepResult, err error) {
 	defer func() {
 		observedSlot := slot
 		if (op == "worker-status" || op == "worker-empty") && extra.Worker != "" {
@@ -119,6 +136,7 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 		return StepResult{}, fault("invalid-process-scope")
 	}
 	var stage *host.Stage
+	restore := lease != nil && leaseRestoration(op, r.Config.Operation == "rollback" && r.Config.Target == "from", lease.Recovery)
 	if !host.IsRead(op) {
 		deployed := ""
 		if !r.Config.Mixed {
@@ -131,7 +149,15 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 		if err != nil {
 			return StepResult{}, r.preflightFailure(err, "inventory")
 		}
-		if err = r.VerifyClocks(ctx, end); err != nil {
+		if lease == nil {
+			err = r.VerifyClocks(ctx, end)
+		} else if !restore {
+			if lease.Guard == nil {
+				return StepResult{}, fault("clock-lease-missing")
+			}
+			err = lease.Guard.Refresh(ctx, end)
+		}
+		if err != nil {
 			return StepResult{}, r.preflightFailure(err, "clocks")
 		}
 		var packed bytes.Buffer
@@ -174,10 +200,17 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 	if err != nil {
 		return StepResult{}, err
 	}
-	if !host.IsRead(op) && r.BeforeMutation != nil {
+	if !host.IsRead(op) && !restore && r.BeforeMutation != nil {
 		if err = r.BeforeMutation(ctx); err != nil {
 			return StepResult{}, err
 		}
+	}
+	var hooks []ExchangeHooks
+	if lease != nil && !host.IsRead(op) && !restore {
+		if err = lease.Guard.Check(); err != nil {
+			return StepResult{}, err
+		}
+		hooks = []ExchangeHooks{{BeforeSend: lease.Guard.Check}}
 	}
 	var observed StepResult
 	var operationErr error
@@ -231,7 +264,7 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 			}
 			return operator.Unknown
 		}
-		if op == "worker-down" && r.Bounds != nil {
+		if op == "worker-down" && (r.Bounds != nil || lease != nil) {
 			var bracket struct {
 				Before string `json:"signalBeforeUnixNs"`
 				After  string `json:"signalAfterUnixNs"`
@@ -240,7 +273,17 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 				return operator.Unknown
 			}
 			r.Session.retainClockBracket(slot, bracket.Before, bracket.After)
-			midpoint, e := clocks.SignalMidpoint(bracket.Before, bracket.After, r.ClockSamples[len(r.ClockSamples)-1].Worker, r.Bounds.FrontendWorkerBoundNS)
+			workerError, bound := int64(0), int64(0)
+			if lease != nil {
+				workerError, e = lease.Guard.workerError()
+				if e != nil {
+					return operator.Unknown
+				}
+				bound = lease.Guard.bounds.FrontendWorkerBoundNS
+			} else {
+				workerError, bound = r.ClockSamples[len(r.ClockSamples)-1].Worker, r.Bounds.FrontendWorkerBoundNS
+			}
+			midpoint, e := clocks.SignalMidpoint(bracket.Before, bracket.After, workerError, bound)
 			if e != nil {
 				return operator.Unknown
 			}
@@ -248,9 +291,12 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 			observed.Started = time.Unix(int64(ns/1_000_000_000), int64(ns%1_000_000_000))
 		}
 		return operator.Succeeded
-	})
+	}, hooks...)
 	observed.Certainty = certainty
 	if err != nil {
+		if lease != nil && certainty == operator.Failed && isLeaseRefusal(err) && !r.Session.Latched() {
+			return observed, err
+		}
 		return observed, fault("command-result-unknown")
 	}
 	if certainty == operator.Unknown {
@@ -339,11 +385,18 @@ func DecodeStepResult(op string, data json.RawMessage) (r StepResult, err error)
 }
 
 func (r *ProcessRuntime) preflightFailure(err error, kind string) error {
+	return r.Session.preflightFailure(err, kind)
+}
+
+func (s *Session) preflightFailure(err error, kind string) error {
 	if err == nil {
 		return nil
 	}
-	if r.Session.Latched() {
+	if s.Latched() {
 		return fault("command-result-unknown")
+	}
+	if isLeaseRefusal(err) {
+		return fault(err.Error())
 	}
 	var known *ProcedureError
 	if errors.As(err, &known) {

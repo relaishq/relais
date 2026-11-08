@@ -48,7 +48,12 @@ func (s *Session) CheckInbox(p Peer) error {
 
 // Exchange is the production serial request path used by gate implementations. A lost
 // pipe never leads to a second submission. Timeout preserves pending identity.
-func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, target, action string, args json.RawMessage, script []byte, end time.Duration, classify func(operator.Reply) operator.Certainty) (operator.Certainty, error) {
+type ExchangeHooks struct {
+	BeforeSend func() error // Pure check after the send lock; must not perform I/O.
+	Sent       func(time.Duration)
+}
+
+func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, target, action string, args json.RawMessage, script []byte, end time.Duration, classify func(operator.Reply) operator.Certainty, hooks ...ExchangeHooks) (operator.Certainty, error) {
 	s.mu.Lock()
 	end = min(end, s.Budget.end)
 	if s.activeEnd != nil {
@@ -72,6 +77,11 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 	if err := s.CheckInbox(p); err != nil {
 		return operator.Unknown, err
 	}
+	if len(hooks) > 0 && hooks[0].BeforeSend != nil {
+		if err := hooks[0].BeforeSend(); err != nil {
+			return operator.Failed, err
+		}
+	}
 	req, err := s.Issue(op, target, action, args, script, end)
 	if err != nil {
 		return operator.Unknown, err
@@ -85,6 +95,9 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 	requestWait, stop := context.WithTimeout(wait, s.requests[req.ID].end-s.clock.Elapsed())
 	defer stop()
 	wait = requestWait
+	if len(hooks) > 0 && hooks[0].Sent != nil {
+		hooks[0].Sent(s.clock.Elapsed())
+	}
 	if err = p.Send(wait, operator.Frame{Type: "request", Session: s.ID, Request: &req}); err != nil {
 		s.noteUnknownRequest(req.ID, transportRule(err, "send-failed"))
 		s.TransportLost()

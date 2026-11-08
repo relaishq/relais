@@ -1379,9 +1379,9 @@
     "ID": "skip-independent-clock-proof",
     "GuardFingerprint": "3b2fd031a7a9d349df86f862945293bbda1787a374efa6da32b755e30040d81c",
     "File": "internal/operatorgates/runtime.go",
-    "Function": "Step",
-    "Old": "if err = r.VerifyClocks(ctx, end); err != nil {",
-    "New": "if err = nil; err != nil {",
+    "Function": "step",
+    "Old": "err = r.VerifyClocks(ctx, end)",
+    "New": "err = nil",
     "Test": "TestRuntimeMissingClockStopsMutation",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -1390,9 +1390,9 @@
     "ID": "skip-real-fault-hook",
     "GuardFingerprint": "8ae25ca81b888d7682484d488bb8ace669bf7b73c69c8b6a04d68c2151006b1d",
     "File": "internal/operatorgates/runtime.go",
-    "Function": "Step",
-    "Old": "!host.IsRead(op) && r.BeforeMutation != nil",
-    "New": "false && !host.IsRead(op) && r.BeforeMutation != nil",
+    "Function": "step",
+    "Old": "!host.IsRead(op) && !restore && r.BeforeMutation != nil",
+    "New": "false && !host.IsRead(op) && !restore && r.BeforeMutation != nil",
     "Test": "TestRuntimeFreshProofAndFaultOrder",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -1456,7 +1456,7 @@
     "ID": "read-failure-as-unknown",
     "GuardFingerprint": "e14c8dae914680ead5fe20d30c8efaec0ffb587027af22a5852ef3244d8314ed",
     "File": "internal/operatorgates/runtime.go",
-    "Function": "Step",
+    "Function": "step",
     "Old": "envelope.Kind == \"failed\" && host.IsPureRead(op)",
     "New": "false && envelope.Kind == \"failed\" && host.IsPureRead(op)",
     "Test": "TestRuntimeReadCertainty",
@@ -1467,7 +1467,7 @@
     "ID": "impure-status-classed-pure",
     "GuardFingerprint": "c79042366427826d092694c07d95b8c937a929cecf97095804d40c5e639113a5",
     "File": "internal/operatorgates/runtime.go",
-    "Function": "Step",
+    "Function": "step",
     "Old": "envelope.Kind == \"failed\" && host.IsPureRead(op)",
     "New": "envelope.Kind == \"failed\" && (host.IsPureRead(op) || op==\"status\")",
     "Test": "TestRuntimeReadCertainty",
@@ -1522,7 +1522,7 @@
     "ID": "store-status-classified-as-mutation",
     "GuardFingerprint": "fa49b6ed9d80754e3e808b4287847e433565e2c2578dfb68d4c14ea1d39131f7",
     "File": "internal/operatorgates/runtime.go",
-    "Function": "Step",
+    "Function": "step",
     "Old": "if !host.IsRead(op) {",
     "New": "if !host.IsRead(op) || op==\"store-status\" {",
     "Test": "TestRuntimeReadCertainty",
@@ -3354,7 +3354,7 @@
   {
     "ID": "session-unknown-refusal-becomes-failure",
     "File": "internal/operatorgates/runtime.go",
-    "Function": "Step",
+    "Function": "step",
     "Receiver": "ProcessRuntime",
     "Old": "if certainty == operator.Unknown {\n\t\tif productFailure != nil {\n\t\t\treturn observed, productFailure",
     "New": "if certainty == operator.Unknown {\n\t\tif operationErr != nil {\n\t\t\treturn observed, operationErr",
@@ -4650,5 +4650,85 @@
     "Test": "TestBoundCoverageRebind",
     "Marker": "MUTATION: bound-rebind",
     "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-omit-transport",
+    "File": "internal/operatorgates/clocks/live_lease.go",
+    "Function": "At",
+    "Old": "int64(now-l.sent)",
+    "New": "l.observation.HostElapsedNS",
+    "Test": "TestLeaseTransportAndReread",
+    "Marker": "MUTATION: lease-transport",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-reread-renewal",
+    "File": "internal/operatorgates/clocks/live_lease.go",
+    "Function": "Observe",
+    "Old": "expiry = min(expiry, l.expiry)",
+    "New": "expiry = max(expiry, l.expiry)",
+    "Test": "TestLeaseTransportAndReread",
+    "Marker": "MUTATION: lease-reread-renewal",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-queued-expiry",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if len(hooks) > 0 && hooks[0].BeforeSend != nil {",
+    "New": "if false && len(hooks) > 0 && hooks[0].BeforeSend != nil {",
+    "Test": "TestLeaseGuardQueuedExpiry",
+    "Marker": "MUTATION: lease-queued-expiry",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-rollback-bypass",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "leaseRestoration",
+    "Old": "return rollback || recovery",
+    "New": "return false",
+    "Test": "TestLeaseGuardArmAndRestore/rollback",
+    "Marker": "MUTATION: lease-rollback-bypass",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "admission-lease-refresh-skipped",
+    "File": "internal/operatorgates/clocks/live_lease.go",
+    "Function": "RefreshLease",
+    "Old": "if !v.Expired {",
+    "New": "if true {",
+    "Test": "TestClockSelectionRefreshLease/fresh",
+    "Marker": "MUTATION: admission-retry-dropped",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-retry-dropped",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "result.Cause = clockSelectionCause(failed[i].Error())",
+    "New": "result.Cause = clockSelectionCause(failed[i].Error())\n\t\t\t\t\tif result.Cause == \"clock-lease-expired\" { return result }",
+    "Test": "TestClockSelectionRefreshLease/late",
+    "Marker": "MUTATION: admission-retry-dropped",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "malformed-lease-refreshed",
+    "File": "internal/operatorgates/clocks/live_lease.go",
+    "Function": "RefreshLease",
+    "Old": "if err != nil {\n\t\treturn first, &BindingError{\"clock-lease-missing\"}\n\t}",
+    "New": "if false {\n\t\treturn first, &BindingError{\"clock-lease-missing\"}\n\t}",
+    "Test": "TestMalformedLeaseDoesNotRefresh",
+    "Marker": "MUTATION: malformed-lease-refresh",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-reply-age-omitted",
+    "File": "internal/operatorgates/clocks/live_lease.go",
+    "Function": "At",
+    "Old": "int64(now-l.sent)",
+    "New": "l.observation.HostElapsedNS",
+    "Test": "TestLeaseReplyAging",
+    "Marker": "MUTATION: lease-reply-age",
+    "Package": "./internal/operatorgates"
   }
 ]

@@ -425,7 +425,15 @@
     "clock-bound-check-omit-K",
     "clock-bound-wrapper-wrong-run",
     "clock-bound-decoder-wrong-run",
-    "clock-bound-rebind"
+    "clock-bound-rebind",
+    "lease-omit-transport",
+    "lease-reread-renewal",
+    "lease-queued-expiry",
+    "lease-rollback-bypass",
+    "admission-lease-refresh-skipped",
+    "admission-retry-dropped",
+    "malformed-lease-refreshed",
+    "lease-reply-age-omitted"
   ],
   "killed": [
     {
@@ -3692,6 +3700,62 @@
       "id": "clock-bound-rebind",
       "test": "TestBoundCoverageRebind",
       "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-omit-transport",
+      "test": "TestLeaseTransportAndReread",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-reread-renewal",
+      "test": "TestLeaseTransportAndReread",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-queued-expiry",
+      "test": "TestLeaseGuardQueuedExpiry",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-rollback-bypass",
+      "test": "TestLeaseGuardArmAndRestore/rollback",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "admission-lease-refresh-skipped",
+      "test": "TestClockSelectionRefreshLease/fresh",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "admission-retry-dropped",
+      "test": "TestClockSelectionRefreshLease/late",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "malformed-lease-refreshed",
+      "test": "TestMalformedLeaseDoesNotRefresh",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-reply-age-omitted",
+      "test": "TestLeaseReplyAging",
+      "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""
     }
