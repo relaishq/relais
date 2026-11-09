@@ -146,6 +146,9 @@ func newRoundTripWorld(t *testing.T, batch bool) (*roundTripWorld, ProcedurePort
 			t.Fatal(err)
 		}
 		out := operator.HostReadBatchOutput{}
+		if req.Operation == operator.HostLeaseReadBatch {
+			out.SentAfterNS = make([]int64, 4)
+		}
 		for _, read := range args.Reads {
 			child := single(operator.Request{Operation: req.Operation, Action: req.Action, Target: read.Target})
 			child.ID = read.Target

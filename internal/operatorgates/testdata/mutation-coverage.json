@@ -521,7 +521,14 @@
     "lease-observation-read-dropped",
     "lease-observation-age-stripped",
     "lease-observation-source-leak",
-    "lease-observation-unbounded"
+    "lease-observation-unbounded",
+    "lease-slot-uses-batch-send",
+    "lease-batch-serialized",
+    "lease-child-unknown-erased",
+    "lease-slot-stamped-after-read",
+    "lease-batch-extra-timing",
+    "lease-batch-negative-timing",
+    "lease-batch-future-timing"
   ],
   "killed": [
     {
@@ -4459,6 +4466,55 @@
     {
       "id": "lease-observation-unbounded",
       "test": "TestLeaseObservationLimit",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-slot-uses-batch-send",
+      "test": "TestLeaseSlotExpiry",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-batch-serialized",
+      "test": "TestLeaseBatchConcurrentCertainty",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-child-unknown-erased",
+      "test": "TestLeaseBatchConcurrentCertainty",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-slot-stamped-after-read",
+      "test": "TestLeaseBatchConcurrentCertainty",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-batch-extra-timing",
+      "test": "TestLeaseBatchTimingMalformed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-batch-negative-timing",
+      "test": "TestLeaseBatchTimingMalformed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-batch-future-timing",
+      "test": "TestLeaseBatchTimingMalformed",
       "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""

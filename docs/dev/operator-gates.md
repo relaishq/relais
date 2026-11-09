@@ -1128,13 +1128,25 @@ arguments. A nonempty probe path must match trusted local per-slot configuration
 (the session's frontend inventory and probe file; the adapter's `LeaseProbeFiles`).
 These observations use the original short refresh deadline, including transport;
 arbitrary host execution and batch scripts retain their 30 s floor.
+Lease batches run their four fixed host reads concurrently and join every child;
+ordinary inventory/script batches stay serial. Each lease child reports the elapsed
+monotonic time from adapter batch entry to its own exec submission. Adding that
+offset to the gate's earlier batch send yields a lower bound on the child's send
+(and hence on reference-update time after subtracting reference age), because
+adapter batch entry cannot precede the gate's send. This contract uses local
+monotonic durations; no host wall clock or remote timestamp supplies gate time.
+Missing, negative or longer-than-exchange offsets refuse as malformed replies;
+there is no batch-send fallback. Serial lease exchanges already have independent
+gate send times; the production adapter advertises concurrent lease batches.
+A slow child can delay collection but cannot move any other child's immutable
+expiry. Every child's transport certainty is retained; unknown children latch.
 Each whole observation (serial or batch) has a 1.8 s attempt timeout,
 including queue and transport. A retry that cannot fit that timeout within the
 original 4P deadline ends with `clock-lease-expired`; the send lock rechecks the
 remaining budget and the attempt context. A single read needs 550 ms after
 queueing (covering measured 300–390 ms warm reads and a 526 ms first-process
 read); a four-host
-batch needs 1.6 s. The wire deadline is capped to the attempt deadline. Serial
+batch still reserves 1.6 s after queueing. The wire deadline is capped to the attempt deadline. Serial
 children consume the same attempt rather than each reserving another whole
 attempt. An unsent queued timeout is definite. Submitted read uncertainty still
 latches. Two 1.8 s attempts and two 100 ms polls fit inside 4P for a 1 s poll;
@@ -1143,6 +1155,8 @@ benchmark measured warm four-host reads at 1.20–1.32 s and first reads at
 1.48–1.57 s; these are local measurements, not runner timing guarantees.
 The rehearsal records `clock-lease-read` duration/budget and `clock-lease-exec`
 duration per slot, including failures, to measure actual exec and cold costs.
+A container-free parallel replay measured 320–347 ms warm batches and a
+610 ms first batch; actual runner exec costs still need measurement.
 These diagnostics do not enter verdict inputs. No warm-up read is added.
 Every bound preparation refusal retains its fixed `clock-lease-missing`,
 `clock-lease-expired`, `clock-lease-bound` or `clock-config-differ` cause in the

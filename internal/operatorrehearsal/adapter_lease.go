@@ -18,6 +18,8 @@ func (a *Adapter) executeLeaseRead(ctx context.Context, req operator.Request) (r
 	defer func() {
 		if a.Diagnostics != nil {
 			id, _ := strconv.ParseUint(req.ID, 10, 64)
+			a.mu.Lock()
+			defer a.mu.Unlock()
 			_, _ = fmt.Fprintf(a.Diagnostics, "clock-lease-read operation=%s requestId=%d durationMs=%d budgetMs=%d certainty=%s\n", req.Operation, id, time.Since(started).Milliseconds(), budget, reply.Transport)
 		}
 	}()

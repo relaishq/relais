@@ -236,6 +236,8 @@ func (a *Adapter) executeHost(bounded context.Context, req operator.Request) (re
 	started := time.Now()
 	defer func() {
 		if (req.Operation == operator.HostLeaseRead || req.Operation == operator.HostLeaseReadBatch) && a.Diagnostics != nil {
+			a.mu.Lock()
+			defer a.mu.Unlock()
 			_, _ = fmt.Fprintf(a.Diagnostics, "clock-lease-exec slot=%s durationMs=%d certainty=%s\n", req.Target, time.Since(started).Milliseconds(), reply.Transport)
 		}
 	}()

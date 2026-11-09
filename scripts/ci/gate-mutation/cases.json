@@ -3652,8 +3652,8 @@
     "ID": "batch-shared-host-parallel-probes",
     "File": "internal/operatorrehearsal/adapter_batch.go",
     "Function": "executeReadBatch",
-    "Old": "for i, read := range args.Reads {\n\t\tchild := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t}",
-    "New": "done := make(chan struct{}, len(args.Reads))\n\tfor i, read := range args.Reads {\n\t\tgo func() {\n\t\t\tchild := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t\t\tdone <- struct{}{}\n\t\t}()\n\t}\n\tfor range args.Reads { <-done }",
+    "Old": "if lease {\n\t\t\tpending.Add(1)",
+    "New": "if true {\n\t\t\tpending.Add(1)",
     "Test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
     "Marker": "MUTATION: batch-shared-host-serialized",
     "Package": "./internal/operatorrehearsal"
@@ -5628,6 +5628,76 @@
     "New": "if false {",
     "Test": "TestLeaseObservationLimit",
     "Marker": "MUTATION: lease-observation-limit",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-slot-uses-batch-send",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHostBatch",
+    "Old": "batchSent+time.Duration(batch.SentAfterNS[i])",
+    "New": "batchSent+0*time.Duration(batch.SentAfterNS[i])",
+    "Test": "TestLeaseSlotExpiry",
+    "Marker": "MUTATION: lease-slot-send",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-batch-serialized",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "if lease {\n\t\t\tpending.Add(1)",
+    "New": "if false {\n\t\t\tpending.Add(1)",
+    "Test": "TestLeaseBatchConcurrentCertainty",
+    "Marker": "MUTATION: lease-batch-parallel",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-child-unknown-erased",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "out.Replies[i] = a.executeHost(ctx, child)",
+    "New": "out.Replies[i] = a.executeHost(ctx, child)\n\t\tif out.Replies[i].Transport == operator.Unknown { out.Replies[i].Transport = operator.Succeeded; out.Replies[i].ExitCode = new(0) }",
+    "Test": "TestLeaseBatchConcurrentCertainty",
+    "Marker": "MUTATION: lease-child-certainty",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-slot-stamped-after-read",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "out.Replies[i] = a.executeHost(ctx, child)",
+    "New": "out.Replies[i] = a.executeHost(ctx, child)\n\t\tif lease { out.SentAfterNS[i] = time.Since(started).Nanoseconds() }",
+    "Test": "TestLeaseBatchConcurrentCertainty",
+    "Marker": "MUTATION: lease-slot-timestamp",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-batch-extra-timing",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHostBatch",
+    "Old": "len(batch.SentAfterNS) != len(inventory.Slots)",
+    "New": "len(batch.SentAfterNS) < len(inventory.Slots)",
+    "Test": "TestLeaseBatchTimingMalformed",
+    "Marker": "MUTATION: lease-batch-timing",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-batch-negative-timing",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHostBatch",
+    "Old": "offset < 0 || time.Duration(offset) > s.clock.Elapsed()-batchSent",
+    "New": "false || time.Duration(offset) > s.clock.Elapsed()-batchSent",
+    "Test": "TestLeaseBatchTimingMalformed",
+    "Marker": "MUTATION: lease-batch-timing",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-batch-future-timing",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHostBatch",
+    "Old": "offset < 0 || time.Duration(offset) > s.clock.Elapsed()-batchSent",
+    "New": "offset < 0",
+    "Test": "TestLeaseBatchTimingMalformed",
+    "Marker": "MUTATION: lease-batch-timing",
     "Package": "./internal/operatorgates"
   }
 ]

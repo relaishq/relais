@@ -129,6 +129,8 @@ type HostRead struct {
 // transport certainty, exit status and bounded HostOutput. Blobs are forbidden.
 type HostReadBatchOutput struct {
 	Replies []Reply `json:"replies"`
+	// Lease batches only: elapsed from adapter batch entry to each exec submission.
+	SentAfterNS []int64 `json:"sentAfterNs,omitempty"`
 }
 
 // HostLeaseReadArgs permits one host, or all four ordered hosts for a batch.

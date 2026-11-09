@@ -11,8 +11,8 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-// ReadLeases uses the bounded, read-only lease transport. Batch sends share one timestamp;
-// serial sends get independent timestamps. Tracking/probe cursors remain owned
+// ReadLeases uses bounded read-only transport. Batch children use independent
+// conservative send times; serial sends use their own exchange timestamps. Tracking/probe cursors remain owned
 // by the session, and transport uncertainty retains the normal fatal latch.
 func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (LeaseRead, error) {
 	rows, sent := map[string]clocks.Sample{}, map[string]time.Duration{}

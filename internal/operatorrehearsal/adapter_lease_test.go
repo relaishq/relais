@@ -10,7 +10,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates"
@@ -27,87 +29,98 @@ func (r leaseRunner) Run(ctx context.Context, c Command) CommandResult { return 
 func TestLeaseTransportRefresh(t *testing.T) {
 	for _, batch := range []bool{false, true} {
 		t.Run(fmt.Sprint(batch), func(t *testing.T) {
-			clock := &operatorgates.FakeClock{Now: time.Now()}
-			init := operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: []operator.Gate{operator.Rollout}}, ArmedAtUnixMS: strconv.FormatInt(clock.Now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(clock.Now.Add(time.Hour).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostExecute, operator.HostReadBatch, operator.HostLeaseRead}}
-			if batch {
-				init.Capabilities = append(init.Capabilities, operator.HostLeaseReadBatch)
-			}
-			session, err := operatorgates.NewSession("lease", init, clock)
-			require.NoError(t, err)
-			raw, err := os.ReadFile("../operatorgates/clocks/testdata/bound-receipt.json")
-			require.NoError(t, err)
-			var selection clocks.ClockSelection
-			require.NoError(t, json.Unmarshal(raw, &selection))
-			receipt := selection.Receipt
-			coverage, err := (clocks.CoverageEvidence{FrontendSlot: receipt.FrontendSlot, ControlSlot: receipt.ControlSlot}).WithBinding(clocks.ReceiptBinding{ReceiptSHA256: selection.SHA256, EvidenceSHA256: receipt.EvidenceSHA256, Bounds: receipt.Bounds}, receipt)
-			require.NoError(t, err)
-			calls := 0
-			mode := "fresh"
-			var cancelRead context.CancelFunc
-			runner := leaseRunner(func(ctx context.Context, c Command) CommandResult {
-				calls++
-				clock.Advance(20 * time.Millisecond)
-				deadline, _ := ctx.Deadline()
-				if time.Until(deadline) > 4*time.Second {
-					t.Fatal("MUTATION: lease-refresh-deadline", time.Until(deadline))
+			synctest.Test(t, func(t *testing.T) {
+				clock := &operatorgates.FakeClock{Now: time.Now()}
+				init := operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: []operator.Gate{operator.Rollout}}, ArmedAtUnixMS: strconv.FormatInt(clock.Now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(clock.Now.Add(time.Hour).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostExecute, operator.HostReadBatch, operator.HostLeaseRead}}
+				if batch {
+					init.Capabilities = append(init.Capabilities, operator.HostLeaseReadBatch)
 				}
-				require.Equal(t, host.ClockWithLease(nil, clock.Now.UnixMilli()-clock.Tick.Milliseconds(), "", nil), string(c.Input))
-				if mode == "cancel" {
-					cancelRead()
-					<-ctx.Done()
-					return CommandResult{Err: ctx.Err()}
+				session, err := operatorgates.NewSession("lease", init, clock)
+				require.NoError(t, err)
+				raw, err := os.ReadFile("../operatorgates/clocks/testdata/bound-receipt.json")
+				require.NoError(t, err)
+				var selection clocks.ClockSelection
+				require.NoError(t, json.Unmarshal(raw, &selection))
+				receipt := selection.Receipt
+				coverage, err := (clocks.CoverageEvidence{FrontendSlot: receipt.FrontendSlot, ControlSlot: receipt.ControlSlot}).WithBinding(clocks.ReceiptBinding{ReceiptSHA256: selection.SHA256, EvidenceSHA256: receipt.EvidenceSHA256, Bounds: receipt.Bounds}, receipt)
+				require.NoError(t, err)
+				calls := 0
+				var runnerMu sync.Mutex
+				mode := "fresh"
+				var cancelRead context.CancelFunc
+				runner := leaseRunner(func(ctx context.Context, c Command) CommandResult {
+					runnerMu.Lock()
+					defer runnerMu.Unlock()
+					calls++
+					clock.Advance(20 * time.Millisecond)
+					deadline, _ := ctx.Deadline()
+					if time.Until(deadline) > 4*time.Second {
+						t.Fatal("MUTATION: lease-refresh-deadline", time.Until(deadline))
+					}
+					require.Equal(t, host.ClockWithLease(nil, clock.Now.UnixMilli()-clock.Tick.Milliseconds(), "", nil), string(c.Input))
+					if mode == "cancel" {
+						cancelRead()
+						<-ctx.Done()
+						return CommandResult{Err: ctx.Err()}
+					}
+					if mode == "refuse" {
+						return CommandResult{Code: code(3)}
+					}
+					o := &clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1793930002100000000", ReferenceUnixNS: "1793930000000000000", ReferenceAgeNS: 2100000000, PollSeconds: "1", ResidualPPM: "0", SkewPPM: "0", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 20000000, HostElapsedNS: 20000000}
+					if calls > 4 {
+						o.ReferenceUnixNS = "1793930003000000000"
+						o.MeasuredUnixNS = "1793930003100000000"
+						o.ReferenceAgeNS = 100000000
+					}
+					sample := clocks.Sample{MeasuredUnixNS: o.MeasuredUnixNS, Lease: o, TrackingLog: &clocks.TrackingLog{ReadComplete: true}}
+					data, e := json.Marshal(sample)
+					require.NoError(t, e)
+					var packed bytes.Buffer
+					z := gzip.NewWriter(&packed)
+					_, e = z.Write(data)
+					require.NoError(t, e)
+					require.NoError(t, z.Close())
+					return CommandResult{Code: code(0), Stdout: []byte(base64.StdEncoding.EncodeToString(packed.Bytes()))}
+				})
+				adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner}
+				peer := NewLocalPeer(adapter, "lease", init)
+				defer peer.Close()
+				read := func(ctx context.Context, end time.Duration) (operatorgates.LeaseRead, error) {
+					return session.ReadLeases(ctx, peer, min(end, clock.Elapsed()+3900*time.Millisecond))
 				}
-				if mode == "refuse" {
-					return CommandResult{Code: code(3)}
+				guard, err := operatorgates.NewLeaseGuard(coverage, session, read, func(_ context.Context, d time.Duration) error { clock.Advance(d); return nil })
+				require.NoError(t, err)
+				if err = guard.Refresh(context.Background(), time.Minute); err != nil {
+					t.Fatal("MUTATION: lease-refresh-transport", err)
 				}
-				o := &clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1793930002100000000", ReferenceUnixNS: "1793930000000000000", ReferenceAgeNS: 2100000000, PollSeconds: "1", ResidualPPM: "0", SkewPPM: "0", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 20000000, HostElapsedNS: 20000000}
-				if calls > 4 {
-					o.ReferenceUnixNS = "1793930003000000000"
-					o.MeasuredUnixNS = "1793930003100000000"
-					o.ReferenceAgeNS = 100000000
+				require.Equal(t, 8, calls)
+				require.NoError(t, guard.Check())
+				require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
+				clock.Advance(2 * time.Second)
+				// The same reference cannot renew the expiry, even when the host reports a young age.
+				start := clock.Elapsed()
+				require.EqualError(t, guard.Refresh(context.Background(), time.Minute), "clock-lease-expired")
+				require.LessOrEqual(t, clock.Elapsed()-start, 4*time.Second)
+				require.GreaterOrEqual(t, clock.Elapsed()-start, 2*time.Second)
+				mode = "refuse"
+				require.Error(t, guard.Refresh(context.Background(), time.Minute))
+				require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				cancelRead = cancel
+				mode = "cancel"
+				before := calls
+				require.Error(t, guard.Refresh(ctx, time.Minute))
+				if batch {
+					// Cancellation can prevent still-unsent parallel children from starting.
+					require.GreaterOrEqual(t, calls, before+1)
+					require.LessOrEqual(t, calls, before+4)
+				} else {
+					require.Equal(t, before+1, calls)
 				}
-				sample := clocks.Sample{MeasuredUnixNS: o.MeasuredUnixNS, Lease: o, TrackingLog: &clocks.TrackingLog{ReadComplete: true}}
-				data, e := json.Marshal(sample)
-				require.NoError(t, e)
-				var packed bytes.Buffer
-				z := gzip.NewWriter(&packed)
-				_, e = z.Write(data)
-				require.NoError(t, e)
-				require.NoError(t, z.Close())
-				return CommandResult{Code: code(0), Stdout: []byte(base64.StdEncoding.EncodeToString(packed.Bytes()))}
+				require.True(t, session.Latched())
+				require.NotEqual(t, "unavailable", session.Uncertainties()[0].Kind)
 			})
-			adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner}
-			peer := NewLocalPeer(adapter, "lease", init)
-			defer peer.Close()
-			read := func(ctx context.Context, end time.Duration) (operatorgates.LeaseRead, error) {
-				return session.ReadLeases(ctx, peer, min(end, clock.Elapsed()+3900*time.Millisecond))
-			}
-			guard, err := operatorgates.NewLeaseGuard(coverage, session, read, func(_ context.Context, d time.Duration) error { clock.Advance(d); return nil })
-			require.NoError(t, err)
-			if err = guard.Refresh(context.Background(), time.Minute); err != nil {
-				t.Fatal("MUTATION: lease-refresh-transport", err)
-			}
-			require.Equal(t, 8, calls)
-			require.NoError(t, guard.Check())
-			require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
-			clock.Advance(2 * time.Second)
-			// The same reference cannot renew the expiry, even when the host reports a young age.
-			start := clock.Elapsed()
-			require.EqualError(t, guard.Refresh(context.Background(), time.Minute), "clock-lease-expired")
-			require.LessOrEqual(t, clock.Elapsed()-start, 4*time.Second)
-			require.GreaterOrEqual(t, clock.Elapsed()-start, 2*time.Second)
-			mode = "refuse"
-			require.Error(t, guard.Refresh(context.Background(), time.Minute))
-			require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			cancelRead = cancel
-			mode = "cancel"
-			before := calls
-			require.Error(t, guard.Refresh(ctx, time.Minute))
-			require.Equal(t, before+1, calls)
-			require.True(t, session.Latched())
-			require.NotEqual(t, "unavailable", session.Uncertainties()[0].Kind)
 		})
 	}
 }

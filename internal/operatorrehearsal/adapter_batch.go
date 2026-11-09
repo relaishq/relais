@@ -3,18 +3,18 @@ package operatorrehearsal
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-// Validate the entire fixed read set before starting any child. All containers
-// share the service CPU mask, so run one probe at a time: concurrent inventory
-// processes can disturb the media baseline immediately before a fault. Batching
-// removes protocol exchanges, not this local resource limit. Every child keeps
-// the original deadline and result, without retry or early exit.
+// Validate every read before submission. Inventory remains serial to avoid
+// disturbing the media baseline; fixed lease observations run concurrently.
+// Join every child, preserving its certainty and original deadline.
 func (a *Adapter) executeReadBatch(ctx context.Context, req operator.Request) operator.Reply {
+	started := time.Now()
 	var args operator.HostReadBatchArgs
 	if req.Target != "hosts" || (req.Action != "inventory" && req.Action != "clock") || len(req.Script) != 0 || len(req.Args) > operator.MaxFrameBytes/2 || observe.Decode(req.Args, &args, observe.Contract{"reads"}) != nil || len(args.Reads) != len(Slots) || a.Topology == nil || a.Runner == nil {
 		return refusal(req.ID, "invalid-request")
@@ -32,10 +32,27 @@ func (a *Adapter) executeReadBatch(ctx context.Context, req operator.Request) op
 		return refusal(req.ID, "deadline-before-submission")
 	}
 	out := operator.HostReadBatchOutput{Replies: make([]operator.Reply, len(Slots))}
-	for i, read := range args.Reads {
+	lease := req.Operation == operator.HostLeaseReadBatch
+	if lease {
+		out.SentAfterNS = make([]int64, len(Slots))
+	}
+	run := func(i int, read operator.HostRead) {
 		child := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}
+		if lease {
+			out.SentAfterNS[i] = time.Since(started).Nanoseconds()
+		}
 		out.Replies[i] = a.executeHost(ctx, child)
 	}
+	var pending sync.WaitGroup
+	for i, read := range args.Reads {
+		if lease {
+			pending.Add(1)
+			go func() { defer pending.Done(); run(i, read) }()
+		} else {
+			run(i, read)
+		}
+	}
+	pending.Wait()
 	payload, err := json.Marshal(out)
 	if err != nil || len(payload) > operator.MaxFrameBytes/2 {
 		return operator.Reply{ID: req.ID, Transport: operator.Unknown, UncertaintyRule: "truncated-output"}

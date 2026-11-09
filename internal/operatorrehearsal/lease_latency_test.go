@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -44,19 +45,20 @@ func TestLeaseSlowAdapter(t *testing.T) {
 					proof, err := (clocks.CoverageEvidence{FrontendSlot: f.Input.FrontendSlot, ControlSlot: f.Input.ControlSlot}).WithBinding(clocks.ReceiptBinding{ReceiptSHA256: f.Selection.SHA256, EvidenceSHA256: f.Selection.Receipt.EvidenceSHA256, Bounds: f.Selection.Receipt.Bounds}, f.Selection.Receipt)
 					require.NoError(t, err)
 					queued := make(chan struct{})
-					reads := 0
+					var reads atomic.Int32
 					runner := leaseRunner(func(ctx context.Context, c Command) CommandResult {
+						n := int32(0)
 						telemetry := string(c.Input) == "queued"
 						if telemetry {
 							close(queued)
 						} else {
-							reads++
+							n = reads.Add(1)
 						}
 						delay := 300 * time.Millisecond
 						if strings.HasPrefix(mode, "upper-") {
 							delay = 390 * time.Millisecond
 						}
-						if reads == 1 && !strings.HasPrefix(mode, "upper-") && !telemetry {
+						if n == 1 && !strings.HasPrefix(mode, "upper-") && !telemetry {
 							delay = 550 * time.Millisecond
 						}
 						if telemetry {
@@ -81,7 +83,7 @@ func TestLeaseSlowAdapter(t *testing.T) {
 							return CommandResult{Code: code(0)}
 						}
 						o := bindingtest.Observation(clock.Wall())
-						if retry && reads <= 4 {
+						if retry && n <= 4 {
 							o.ReferenceAgeNS = int64(2100 * time.Millisecond)
 							o.ReferenceUnixNS = strconv.FormatInt(clock.Wall().Add(-2100*time.Millisecond).UnixNano(), 10)
 						}
@@ -109,13 +111,13 @@ func TestLeaseSlowAdapter(t *testing.T) {
 						if mode == "upper-queued-expired" {
 							wantReads = 3
 						}
-						if err == nil || err.Error() != "clock-lease-expired" || session.Latched() || reads != wantReads {
-							t.Fatal("MUTATION: lease-batch-service-budget", err, session.Latched(), reads)
+						if err == nil || err.Error() != "clock-lease-expired" || session.Latched() || int(reads.Load()) != wantReads {
+							t.Fatal("MUTATION: lease-batch-service-budget", err, session.Latched(), reads.Load())
 						}
 						return
 					}
 					if err != nil || session.Latched() || clock.Elapsed() > 4*time.Second {
-						t.Fatal("MUTATION: lease-slow-adapter", err, session.Latched(), clock.Elapsed(), reads)
+						t.Fatal("MUTATION: lease-slow-adapter", err, session.Latched(), clock.Elapsed(), reads.Load())
 					}
 					expected := "durationMs=550"
 					if mode == "upper-costs" {
@@ -128,7 +130,7 @@ func TestLeaseSlowAdapter(t *testing.T) {
 					if retry {
 						want = 8
 					}
-					require.Equal(t, want, reads)
+					require.Equal(t, int32(want), reads.Load())
 					require.NoError(t, guard.Check())
 				})
 			})

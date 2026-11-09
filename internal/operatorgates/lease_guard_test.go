@@ -219,6 +219,9 @@ func TestLeaseReadRequestSend(t *testing.T) {
 				return hostReply(t, raw)
 			}
 			out := operator.HostReadBatchOutput{}
+			if req.Operation == operator.HostLeaseReadBatch {
+				out.SentAfterNS = []int64{10000000, 20000000, 30000000, 40000000}
+			}
 			for _, slot := range inventory.Slots {
 				r := hostReply(t, raw)
 				r.ID = slot
@@ -231,9 +234,9 @@ func TestLeaseReadRequestSend(t *testing.T) {
 		for i, slot := range inventory.Slots {
 			want := time.Duration(i) * 100 * time.Millisecond
 			if batch {
-				want = 0
+				want = time.Duration(i+1) * 10 * time.Millisecond
 			}
-			require.Equal(t, want, r.Sent[slot])
+			require.Equal(t, want, r.Sent[slot], "MUTATION: lease-slot-send")
 		}
 	}
 }
