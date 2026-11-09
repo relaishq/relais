@@ -109,7 +109,12 @@ func (e CoverageEvidence) Public() CoverageEvidence {
 	missing := map[string]observe.CoverageBreak{}
 	for _, slot := range []string{"relay", "shared", "w1", "w2"} {
 		if b, ok := e.MissingIntervals[slot]; ok {
-			b.Kind = "log-loss"
+			switch b.Kind {
+			case "cursor-gap", "log-rotation", "log-loss", "clock-step", "daemon-restart", "source-change", "leap-status", "self-consistency", "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ":
+			// Keep only fixed public cause names.
+			default:
+				b.Kind = "log-loss"
+			}
 			missing[slot] = b
 		}
 	}

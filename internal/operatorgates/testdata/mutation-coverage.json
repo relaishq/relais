@@ -532,7 +532,30 @@
     "lease-reference-race-not-retried",
     "lease-growth-not-rebased",
     "lease-source-change-accepted",
-    "lease-probes-evict-lease"
+    "lease-probes-evict-lease",
+    "rollback-postread-skipped",
+    "rollback-history-unchecked",
+    "rollback-postlease-expiry-ignored",
+    "rollback-endpoint-time-ignored",
+    "coverage-lease-kind-erased",
+    "rollback-lease-cause-lost",
+    "rollback-zero-start-used",
+    "rollback-zero-end-used",
+    "rollback-reversed-span-used",
+    "rollback-envelope-hides-media-span",
+    "rollback-partial-history-trusted",
+    "rollback-partial-accept-forgotten",
+    "rollback-restoration-reserve-spent",
+    "rollback-context-reserve-spent",
+    "rollback-old-row-after-event",
+    "rollback-old-row-equality-refused",
+    "rollback-new-row-regression",
+    "rollback-new-row-equality-refused",
+    "rollback-empty-old-accepted",
+    "rollback-empty-new-accepted",
+    "rollback-short-prefix-dropped",
+    "rollback-short-prefix-expanded",
+    "lease-coverage-as-break"
   ],
   "killed": [
     {
@@ -4548,6 +4571,167 @@
       "id": "lease-probes-evict-lease",
       "test": "TestPythonGuards/lease-probes-evict-lease",
       "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-postread-skipped",
+      "test": "TestRollbackContinuousLeaseCoverage/fresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-history-unchecked",
+      "test": "TestRollbackContinuousLeaseCoverage/gap",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-postlease-expiry-ignored",
+      "test": "TestRollbackContinuousLeaseCoverage/expired",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-endpoint-time-ignored",
+      "test": "TestRollbackContinuousLeaseCoverage/event-after-read",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "coverage-lease-kind-erased",
+      "test": "TestCoveragePublicLeaseCause",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-lease-cause-lost",
+      "test": "TestRollbackContinuousLeaseCoverage/missing",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-zero-start-used",
+      "test": "TestRollbackContinuousLeaseCoverage/zero-start",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-zero-end-used",
+      "test": "TestRollbackContinuousLeaseCoverage/zero-end",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-reversed-span-used",
+      "test": "TestRollbackContinuousLeaseCoverage/reversed-move",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-envelope-hides-media-span",
+      "test": "TestRollbackContinuousLeaseCoverage/mixed-failed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-partial-history-trusted",
+      "test": "TestRollbackContinuousLeaseCoverage/partial-hole",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-partial-accept-forgotten",
+      "test": "TestRollbackContinuousLeaseCoverage/partial-hole",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-restoration-reserve-spent",
+      "test": "TestRollbackContinuousLeaseCoverage/restore-budget",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-context-reserve-spent",
+      "test": "TestRollbackContinuousLeaseCoverage/context-budget",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-old-row-after-event",
+      "test": "TestRollbackProofBoundaries/old-after-event",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-old-row-equality-refused",
+      "test": "TestRollbackProofBoundaries/same-row",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-new-row-regression",
+      "test": "TestRollbackProofBoundaries/new-before-old",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-new-row-equality-refused",
+      "test": "TestRollbackProofBoundaries/same-row",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-empty-old-accepted",
+      "test": "TestRollbackProofBoundaries/empty-old",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-empty-new-accepted",
+      "test": "TestRollbackProofBoundaries/empty-new",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-short-prefix-dropped",
+      "test": "TestRollbackProofBoundaries/short-prefix",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rollback-short-prefix-expanded",
+      "test": "TestRollbackProofBoundaries/three-second-prefix",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-coverage-as-break",
+      "test": "TestCoveragePublicLeaseCause",
+      "package": "./internal/operatorgates/clocks",
       "evidence": "killed",
       "guardFingerprint": ""
     }

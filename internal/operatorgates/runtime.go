@@ -302,19 +302,49 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		return operator.Succeeded
 	}, hooks...)
 	observed.Certainty = certainty
-	if rollbackMove && certainty == operator.Succeeded && (lease.Guard == nil || lease.Guard.Check() != nil) {
-		r.Session.mu.Lock()
-		if r.Session.clockMissingIntervals == nil {
-			r.Session.clockMissingIntervals = map[string]observe.CoverageBreak{}
+	if rollbackMove && certainty == operator.Succeeded {
+		start, finish := observed.Started, observed.Ended
+		moves := observed.Drain.Moves
+		if op == "move" {
+			moves = []controlplane.MoveResult{observed.Move}
 		}
-		front, _ := inventory.ComponentSlot(r.Session.inventoryComponents, "signal")
-		b := observe.CoverageBreak{FromUnixSeconds: observed.Started.Unix(), UnixSeconds: observed.Ended.Unix(), Kind: "clock-lease-expired"}
-		if old, ok := r.Session.clockMissingIntervals[front]; ok {
-			b.FromUnixSeconds = min(b.FromUnixSeconds, old.FromUnixSeconds)
-			b.UnixSeconds = max(b.UnixSeconds, old.UnixSeconds)
+		haveSpan := false
+		for _, move := range moves {
+			if move.Start.IsZero() || move.End.IsZero() || move.End.Before(move.Start) {
+				continue
+			}
+			if !haveSpan || move.Start.Before(start) {
+				start = move.Start
+			}
+			if !haveSpan || move.End.After(finish) {
+				finish = move.End
+			}
+			haveSpan = true
 		}
-		r.Session.clockMissingIntervals[front] = b
-		r.Session.mu.Unlock()
+		coverageErr := error(fault("clock-lease-missing"))
+		if lease.Guard != nil {
+			coverageErr = lease.Guard.coverRestoration(ctx, end, start, finish)
+		}
+		if coverageErr != nil {
+			r.Session.mu.Lock()
+			if r.Session.clockMissingIntervals == nil {
+				r.Session.clockMissingIntervals = map[string]observe.CoverageBreak{}
+			}
+			front, _ := inventory.ComponentSlot(r.Session.inventoryComponents, "signal")
+			b := observe.CoverageBreak{FromUnixSeconds: start.Unix(), UnixSeconds: finish.Unix(), Kind: "clock-lease-missing"}
+			if old, ok := r.Session.clockMissingIntervals[front]; ok {
+				b.FromUnixSeconds = min(b.FromUnixSeconds, old.FromUnixSeconds)
+				b.UnixSeconds = max(b.UnixSeconds, old.UnixSeconds)
+			}
+			if isLeaseRefusal(coverageErr) {
+				b.Kind = coverageErr.Error()
+			}
+			r.Session.clockMissingIntervals[front] = b
+			r.Session.mu.Unlock()
+		}
+		if r.Session.Latched() {
+			err = fault("command-result-unknown")
+		}
 	}
 	if err != nil {
 		if certainty == operator.Failed && isLeaseRefusal(err) && !r.Session.Latched() {

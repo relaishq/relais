@@ -163,7 +163,7 @@ func coverageError(t CoverageTimeline, a, b int64, padded bool) (int64, string) 
 		// intentionally makes the maximum separation that overlaps ±2 s.
 		if br.FromUnixSeconds*coverageSecond-coverageSecond <= b && br.UnixSeconds*coverageSecond+coverageSecond >= a {
 			switch br.Kind {
-			case "cursor-gap", "log-rotation", "log-loss":
+			case "cursor-gap", "log-rotation", "log-loss", "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ":
 				return 0, "clock-coverage-missing"
 			default:
 				return 0, "clock-coverage-break"

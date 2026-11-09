@@ -505,7 +505,7 @@ seven exchanges. These counts are transport evidence, not a completed media gate
 | --- | ---: | ---: |
 | rollout | 197 | 92 |
 | control-restart | 232 | 109 |
-| upgrade-rollback | 320 | 149 |
+| upgrade-rollback | 332 | 152 |
 | failover | 63 | 39 |
 | relay-deploy | 22 | 10 |
 | load observation | 7 | 7 |
@@ -962,7 +962,8 @@ true sub-nanosecond digits still round outward.
 The enforced causes are:
 
 - `clock-coverage-missing`: missing endpoints/tail, invalid evidence, a row gap
-  above 60 seconds, or overlapping cursor gap, log rotation or log loss.
+  above 60 seconds, overlapping cursor gap, log rotation or log loss, or no valid
+  covering lease (`clock-lease-*` and lease `clock-config-differ`).
 - `clock-coverage-bound`: frontend maximum plus host maximum exceeds the fixed
   control or worker bound. Equality is accepted.
 - `clock-coverage-break`: an overlapping step, restart, source change,
@@ -1119,8 +1120,28 @@ against B_worker−K. Checks repeat after arm and after the exchange lock. Start
 unfreeze, replenish, required rollback and explicit recovery replacement bypass
 clock/arm hooks while retaining inventory and unknown-result latches. Refusals
 are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
-`clock-config-differ`. Unleased rollback drain moves remain restoration, but their
-evidence does not qualify. The recorder conservatively merges each slot’s
+`clock-config-differ`. A successful rollback move with an expired cache gets one
+post-operation lease read, capped at the existing 1.8-second attempt and outer
+deadline. It leaves a further 60-second `RestoreReserve` below its step
+deadline for subsequent restoration; in the normal release path that deadline
+already excludes one reserve, so 120 seconds remain. The caller context must
+also leave one reserve. Otherwise the
+optional read is skipped and timing stays uncovered. Unknown reads retain the
+normal fatal latch because transport reuse is unproven. A fresh endpoint lease
+and continuous, bounded tracking rows from the previous endpoint can certify
+the completed media event retrospectively. This
+does not renew the old lease or admit a fault. An incomplete lease accept
+invalidates the historical checkpoint: session cursors may have consumed rows
+that it did not store. A later complete accept establishes a new checkpoint,
+without certifying the lost interval. Final coverage must still close
+the event's padded interval; the read does not waive an open tail. Missing,
+invalid or over-bound endpoints, a broken tracking chain, or insufficient time
+leave the move uncovered. Restoration itself still runs, including when that
+read refuses; an unknown read still latches. Missing intervals use nonzero,
+ordered media receipt times, falling back to the command envelope if none
+exist, and public evidence preserves the fixed lease refusal name
+instead of calling lease expiry log loss. Judge pins and policy are unchanged.
+The recorder conservatively merges each slot’s
 unleased rollback spans; distant spans also exclude the interval between them.
 A reference lease expires after five poll periods (5P), including host reference
 age and gate transport age. Its measured error growth still ages through the

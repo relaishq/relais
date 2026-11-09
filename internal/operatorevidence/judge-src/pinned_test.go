@@ -64,7 +64,7 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases = append(cases, sanitizedTiming)
-	for _, name := range []string{"covered", "missing", "bound", "break", "kill-bracket", "falsified", "independent-failure", "independent-gap-failure", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage"} {
+	for _, name := range []string{"covered", "missing", "lease-missing", "bound", "break", "kill-bracket", "falsified", "independent-failure", "independent-gap-failure", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage"} {
 		cases = append(cases, coveragePoolFixture(t, name))
 	}
 	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
@@ -95,10 +95,11 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 				t.Fatal("byte-identical fixed judge sources produced different executables")
 			}
 			// Both pins build byte-identical executables (checked above), so the
-			// case sweep runs once. The production projection below runs at both.
+			// broad case sweep runs once; the lease-missing case and production
+			// projection below run at both pins.
 			sweep := cases
 			if executableSHA != "" {
-				sweep = nil
+				sweep = []previewPoolInput{coveragePoolFixture(t, "lease-missing")}
 			}
 			executableSHA = judge.SHA256
 			for _, input := range sweep {

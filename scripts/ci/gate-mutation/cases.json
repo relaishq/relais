@@ -5739,5 +5739,235 @@
     "Marker": "MUTATION: python-guard lease-probes-evict-lease",
     "Package": "./internal/operatorgates/host",
     "PythonTest": "clock_test.ProbeTests.test_lease_reserved_before_probe_prefix"
+  },
+  {
+    "ID": "rollback-postread-skipped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "read, err := g.readAttempt(ctx, end)",
+    "New": "read, err := LeaseRead{}, fault(\"clock-lease-expired\")",
+    "Test": "TestRollbackContinuousLeaseCoverage/fresh",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-history-unchecked",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "results := observe.EvaluateBoundClockCoverage(timelines, g.frontend, g.control, g.bounds.FrontendControlBoundNS, g.bounds.FrontendWorkerBoundNS, g.bounds.FrontendWorkerBoundNS-g.workerBound, windows, nil)",
+    "New": "_ = windows; results := []observe.CoverageResult{{}}",
+    "Test": "TestRollbackContinuousLeaseCoverage/gap",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-postlease-expiry-ignored",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if err := g.Check(); err != nil {",
+    "New": "if err := g.Check(); false { _ = err",
+    "Test": "TestRollbackContinuousLeaseCoverage/expired",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-endpoint-time-ignored",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "measured-g.bounds.FrontendControlBoundNS < finish.UnixNano()",
+    "New": "measured < 0",
+    "Test": "TestRollbackContinuousLeaseCoverage/event-after-read",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "coverage-lease-kind-erased",
+    "File": "internal/operatorgates/clocks/coverage.go",
+    "Function": "Public",
+    "Old": "// Keep only fixed public cause names.",
+    "New": "b.Kind = \"log-loss\"",
+    "Test": "TestCoveragePublicLeaseCause",
+    "Marker": "MUTATION: coverage-public-lease-cause",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "rollback-lease-cause-lost",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "b.Kind = coverageErr.Error()",
+    "New": "b.Kind = code(coverageErr)",
+    "Test": "TestRollbackContinuousLeaseCoverage/missing",
+    "Marker": "MUTATION: rollback-lease-cause",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-zero-start-used",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "move.Start.IsZero()",
+    "New": "false",
+    "Test": "TestRollbackContinuousLeaseCoverage/zero-start",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-zero-end-used",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "move.End.IsZero() || move.End.Before(move.Start)",
+    "New": "false",
+    "Test": "TestRollbackContinuousLeaseCoverage/zero-end",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-reversed-span-used",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "move.End.Before(move.Start)",
+    "New": "false",
+    "Test": "TestRollbackContinuousLeaseCoverage/reversed-move",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-envelope-hides-media-span",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "haveSpan := false",
+    "New": "haveSpan := true",
+    "Test": "TestRollbackContinuousLeaseCoverage/mixed-failed",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-partial-history-trusted",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "if !g.historyComplete {",
+    "New": "if false {",
+    "Test": "TestRollbackContinuousLeaseCoverage/partial-hole",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-partial-accept-forgotten",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "accept",
+    "Old": "g.historyComplete = false",
+    "New": "g.historyComplete = true",
+    "Test": "TestRollbackContinuousLeaseCoverage/partial-hole",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-restoration-reserve-spent",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "end -= RestoreReserve",
+    "New": "end -= 0",
+    "Test": "TestRollbackContinuousLeaseCoverage/restore-budget",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-context-reserve-spent",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "end = min(end, g.clock.Elapsed()+time.Until(deadline)-RestoreReserve)",
+    "New": "_ = deadline",
+    "Test": "TestRollbackContinuousLeaseCoverage/context-budget",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-old-row-after-event",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "oldLast > start.Unix()",
+    "New": "false",
+    "Test": "TestRollbackProofBoundaries/old-after-event",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-old-row-equality-refused",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "oldLast > start.Unix()",
+    "New": "oldLast >= start.Unix()",
+    "Test": "TestRollbackProofBoundaries/same-row",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-new-row-regression",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "newLast < oldLast",
+    "New": "false",
+    "Test": "TestRollbackProofBoundaries/new-before-old",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-new-row-equality-refused",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "newLast < oldLast",
+    "New": "newLast <= oldLast",
+    "Test": "TestRollbackProofBoundaries/same-row",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-empty-old-accepted",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if len(old.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "New": "if len(old.Rows) == 0 { return nil }",
+    "Test": "TestRollbackProofBoundaries/empty-old",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-empty-new-accepted",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if len(next.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "New": "if len(next.Rows) == 0 { return nil }",
+    "Test": "TestRollbackProofBoundaries/empty-new",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-short-prefix-dropped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if right-left < 3 {",
+    "New": "if false {",
+    "Test": "TestRollbackProofBoundaries/short-prefix",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-short-prefix-expanded",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if right-left < 3 {",
+    "New": "if right-left < 4 {",
+    "Test": "TestRollbackProofBoundaries/three-second-prefix",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-coverage-as-break",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageError",
+    "Old": ", \"clock-lease-missing\", \"clock-lease-expired\", \"clock-lease-bound\", \"clock-config-differ\"",
+    "New": "",
+    "Test": "TestCoveragePublicLeaseCause",
+    "Marker": "MUTATION: coverage-public-lease-cause",
+    "Package": "./internal/operatorgates/clocks"
   }
 ]

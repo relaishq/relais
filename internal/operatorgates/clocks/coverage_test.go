@@ -31,6 +31,32 @@ func TestCoveragePublicProjection(t *testing.T) {
 	}
 }
 
+func TestCoveragePublicLeaseCause(t *testing.T) {
+	for _, kind := range []string{"clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ", "private-clock-source"} {
+		e := boundCoverageFixture(t)
+		e.Windows = []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930010000000000"}}
+		e.MissingIntervals = map[string]observe.CoverageBreak{"shared": {FromUnixSeconds: 1793930010, UnixSeconds: 1793930010, Kind: kind}}
+		raw, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded CoverageEvidence
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		want, cause := kind, "clock-coverage-missing"
+		if kind == "private-clock-source" {
+			want, cause = "log-loss", "clock-coverage-missing"
+			if strings.Contains(string(raw), kind) {
+				t.Fatal("private missing-interval kind leaked")
+			}
+		}
+		if decoded.MissingIntervals["shared"].Kind != want || len(decoded.Results) != 1 || !slices.Equal(decoded.Results[0].Causes, []string{cause}) {
+			t.Fatal("MUTATION: coverage-public-lease-cause", kind, decoded)
+		}
+	}
+}
+
 func TestCoverageDiagnosticsAndQualificationUseFixedBounds(t *testing.T) {
 	for _, bound := range []int64{1000000, 4000000} {
 		e := CoverageEvidence{Bounds: FixedCoverageBounds(), FrontendSlot: "shared", ControlSlot: "shared", Windows: []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930020000000000"}}, Attempts: []CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, LeapStatus: "N", MaxErrorSeconds: .0001}, {UnixSeconds: 1793930030, LeapStatus: "N", MaxErrorSeconds: .0001}}}}}}}
