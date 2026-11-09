@@ -38,9 +38,10 @@ func TestClockCoverageRetainsRowsAfterFailedBatch(t *testing.T) {
 		}
 		return resourceTestReply(out)
 	}
-	require.Error(t, r.VerifyClocks(context.Background(), time.Minute))
+	_, err := s.FreshClocks(context.Background(), p, s.clockBinding.Binding.Bounds, time.Minute)
+	require.Error(t, err)
 	require.Empty(t, r.ClockSamples, "successful cache must remain unchanged")
-	e := s.coverageSnapshot(*r.Bounds)
+	e := s.coverageSnapshot(s.clockBinding.Binding.Bounds)
 	require.Len(t, e.Attempts, 1)
 	require.Len(t, e.Timelines()["relay"].Rows, 1)
 	require.Contains(t, string(s.clockCursors["relay"]), `"position":42`)
@@ -55,7 +56,7 @@ func resourceTestReply(v any) operator.Reply {
 func TestClockCoverageDrainConditionAndTimeout(t *testing.T) {
 	for _, mode := range []string{"ready", "cut-short", "timeout", "read-error", "unavailable"} {
 		t.Run(mode, func(t *testing.T) {
-			s, c := fixtureSession(t)
+			s, c := coverageFixtureSession(t)
 			s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}, "w1": {"w1"}, "w2": {"w2"}}
 			w := []observe.CoverageWindow{{Kind: "move", Worker: "w1", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}
 			reads := 0
@@ -70,7 +71,7 @@ func TestClockCoverageDrainConditionAndTimeout(t *testing.T) {
 				if mode == "timeout" {
 					end = 1793930021
 				}
-				sample := clocks.Sample{ErrorBoundNS: 1, MeasuredUnixNS: "1793930035000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: complete, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: end, LeapStatus: "N"}}, Cursor: json.RawMessage(`{"position":42,"anchor":"abc"}`)}}
+				sample := clocks.Sample{ErrorBoundNS: 1, MeasuredUnixNS: "1793930035000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: complete, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: end, LeapStatus: "N"}}, Cursor: json.RawMessage(`{"position":42,"anchor":"abc"}`)}}
 				raw, _ := json.Marshal(sample)
 				reply := hostReply(t, raw)
 				var out operator.HostOutput
@@ -147,16 +148,18 @@ func TestClockCoverageTransportsQualification(t *testing.T) {
 }
 
 func TestClockCoverageDrainsBeforeFinalJudgment(t *testing.T) {
-	s, c := fixtureSession(t)
+	s, c := coverageFixtureSession(t)
 	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
 	windows := []observe.CoverageWindow{{Kind: "move", Worker: "w1", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}
 	bounds := clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}
-	expected, err := operatorevidence.MarshalJudgeInput(operatorevidence.Pool{RunID: "run", Phases: []operatorevidence.MediaInput{}, ClockCoverage: &clocks.CoverageEvidence{Bounds: bounds, Windows: windows}})
+	initial := s.coverageSnapshot(bounds)
+	initial.Windows = windows
+	expected, err := operatorevidence.MarshalJudgeInput(operatorevidence.Pool{ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, RunID: "run", Phases: []operatorevidence.MediaInput{}, ClockCoverage: initial})
 	require.NoError(t, err)
 	order := []string{}
 	j := &coverageJudge{expected: expected, order: &order}
 	result := ResourceResult{}
-	pool := &EvidenceRuntime{RunID: "run", Judge: j, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
+	pool := &EvidenceRuntime{ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, RunID: "run", Judge: j, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
 		e := s.coverageSnapshot(bounds)
 		e.Windows = windows
 		e.Evaluate()
@@ -172,7 +175,7 @@ func TestClockCoverageDrainsBeforeFinalJudgment(t *testing.T) {
 	read := func(context.Context, string, string) (string, error) {
 		order = append(order, "read")
 		c.Advance(time.Second)
-		sample := clocks.Sample{MeasuredUnixNS: "1793930030000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: 1793930023, LeapStatus: "N"}}}}
+		sample := clocks.Sample{MeasuredUnixNS: "1793930030000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: 1793930023, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}}}}
 		raw, err := json.Marshal(sample)
 		require.NoError(t, err)
 		reply := hostReply(t, raw)
@@ -182,8 +185,8 @@ func TestClockCoverageDrainsBeforeFinalJudgment(t *testing.T) {
 	}
 	closed := s.coverageSnapshot(bounds)
 	closed.Windows = windows
-	closed.Attempts = []clocks.CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {ReadComplete: true, Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: 1793930023, LeapStatus: "N"}}}}}}
-	j.expected, err = operatorevidence.MarshalJudgeInput(operatorevidence.Pool{RunID: "run", Phases: []operatorevidence.MediaInput{}, ClockCoverage: closed})
+	closed.Attempts = []clocks.CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {ReadComplete: true, Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: 1793930023, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}}}}}}
+	j.expected, err = operatorevidence.MarshalJudgeInput(operatorevidence.Pool{ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, RunID: "run", Phases: []operatorevidence.MediaInput{}, ClockCoverage: closed})
 	require.NoError(t, err)
 	m, coverage, err := s.finalizePool(context.Background(), s.Budget.PoolEnd(), pool, bounds, read, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })
 	result.ClockCoverage = coverage
@@ -197,18 +200,18 @@ func TestClockCoverageDrainsBeforeFinalJudgment(t *testing.T) {
 }
 
 func TestClockCoverageOverflowKeepsPrefixAndSeparateBudgets(t *testing.T) {
-	s, _ := fixtureSession(t)
+	s, _ := coverageFixtureSession(t)
 	s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}}
 	sample := func(a, b int64) clocks.Evidence {
 		return clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000 + a, LeapStatus: "N", MaxErrorSeconds: .0001}, {UnixSeconds: 1793930000 + b, LeapStatus: "N", MaxErrorSeconds: .0001}}}}}}
 	}
 	for i := 0; i < clocks.CoverageAttemptLimit; i++ {
-		s.retainClockAttempt(sample(0, 30))
+		retainTestClockAttempt(s, sample(0, 30))
 	}
-	s.retainClockAttempt(sample(0, 30))
+	retainTestClockAttempt(s, sample(0, 30))
 	require.Empty(t, s.clockMissingIntervals, "dropping an exact replay loses no interval")
-	s.retainClockAttempt(sample(31, 32))
-	s.retainDrainClockAttempt(sample(33, 40))
+	retainTestClockAttempt(s, sample(31, 32))
+	retainTestDrainAttempt(s, sample(33, 40))
 	e := s.coverageSnapshot(clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100})
 	e.Windows = []observe.CoverageWindow{{Event: 0, Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930020000000000"}, {Event: 1, Kind: "move", StartUnixNS: "1793930031000000000", EndUnixNS: "1793930032000000000"}}
 	e.Evaluate()
@@ -218,14 +221,14 @@ func TestClockCoverageOverflowKeepsPrefixAndSeparateBudgets(t *testing.T) {
 	require.Len(t, e.DrainAttempts, 1)
 	require.Zero(t, e.OmittedDrainAttempts)
 	s.clockBrackets = make([]observe.CoverageBracket, 4096)
-	s.retainClockBracket("w1", "1793930010000000000", "1793930010000000100", nil)
+	s.retainClockBracket("w1", "1793930010000000000", "1793930010000000100", "1793930010000000050", nil)
 	after := s.coverageSnapshot(e.Bounds)
 	require.Equal(t, 1, after.OmittedBrackets)
 	require.Equal(t, 2, after.OmittedAttempts)
 	for len(s.clockDrainAttempts) < clocks.CoverageDrainAttemptLimit {
-		s.retainDrainClockAttempt(sample(33, 40))
+		retainTestDrainAttempt(s, sample(33, 40))
 	}
-	s.retainDrainClockAttempt(sample(41, 42))
+	retainTestDrainAttempt(s, sample(41, 42))
 	after = s.coverageSnapshot(e.Bounds)
 	after.Windows = e.Windows
 	after.Evaluate()
@@ -236,7 +239,7 @@ func TestClockCoverageOverflowKeepsPrefixAndSeparateBudgets(t *testing.T) {
 }
 
 func TestFinalCoverageLatencyCannotChangePoolDeadlineVerdict(t *testing.T) {
-	s, c := fixtureSession(t)
+	s, c := coverageFixtureSession(t)
 	order := []string{}
 	result := s.RunSequence(context.Background(), SequencePorts{
 		Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
@@ -261,35 +264,35 @@ func TestFinalCoverageLatencyCannotChangePoolDeadlineVerdict(t *testing.T) {
 func TestClockCoverageFalsificationLatchIsSticky(t *testing.T) {
 	for _, overflow := range []bool{false, true} {
 		t.Run(fmt.Sprint(overflow), func(t *testing.T) {
-			s, _ := fixtureSession(t)
+			s, _ := coverageFixtureSession(t)
 			clean := clocks.Evidence{Version: 2}
 			if overflow {
 				for range clocks.CoverageAttemptLimit {
-					s.retainClockAttempt(clean)
+					retainTestClockAttempt(s, clean)
 				}
 			}
 			bad := clocks.Evidence{Version: 2, Falsification: &clocks.Falsification{Records: []clocks.ProbeRecord{{Status: "falsified"}}}}
-			s.retainClockAttempt(bad)
-			s.retainClockAttempt(clean)
+			retainTestClockAttempt(s, bad)
+			retainTestClockAttempt(s, clean)
 			if !s.coverageSnapshot(clocks.Bounds{}).Falsified {
 				t.Fatal("MUTATION: clock-coverage-sticky-falsification")
 			}
-			s.retainDrainClockAttempt(clean)
+			retainTestDrainAttempt(s, clean)
 			if !s.coverageSnapshot(clocks.Bounds{}).Qualification().Falsified {
 				t.Fatal("MUTATION: clock-coverage-sticky-falsification")
 			}
 		})
 	}
-	s, _ := fixtureSession(t)
-	s.retainClockAttempt(clocks.Evidence{Version: 2})
+	s, _ := coverageFixtureSession(t)
+	retainTestClockAttempt(s, clocks.Evidence{Version: 2})
 	if s.coverageSnapshot(clocks.Bounds{}).Falsified {
 		t.Fatal("disabled prober falsified")
 	}
 }
 
 func TestClockCoverageFalsificationUsesCumulativeCounts(t *testing.T) {
-	s, _ := fixtureSession(t)
-	s.retainClockAttempt(clocks.Evidence{Version: 2, Falsification: &clocks.Falsification{CountsByStatus: map[string]int{"falsified": 1}}})
+	s, _ := coverageFixtureSession(t)
+	retainTestClockAttempt(s, clocks.Evidence{Version: 2, Falsification: &clocks.Falsification{CountsByStatus: map[string]int{"falsified": 1}}})
 	if !s.coverageSnapshot(clocks.Bounds{}).Falsified {
 		t.Fatal("cumulative falsification lost")
 	}
@@ -308,16 +311,16 @@ func (finalCoverageJudge) Judge(_ context.Context, pool operatorevidence.Pool) (
 	return out, nil
 }
 func TestFinalJudgmentRefreshesClockCoverage(t *testing.T) {
-	s, _ := fixtureSession(t)
+	s, _ := coverageFixtureSession(t)
 	closed := true
-	pool := &EvidenceRuntime{RunID: "run", Judge: finalCoverageJudge{}, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
+	pool := &EvidenceRuntime{ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, RunID: "run", Judge: finalCoverageJudge{}, Coverage: func([]observe.CoverageWindow) *clocks.CoverageEvidence {
 		last := int64(1793930030)
 		if !closed {
 			last = 1793930020
 		}
 		return &clocks.CoverageEvidence{Bounds: clocks.FixedCoverageBounds(), FrontendSlot: "shared", ControlSlot: "shared",
 			Windows:  []observe.CoverageWindow{{Kind: "move", StartUnixNS: "1793930010000000000", EndUnixNS: "1793930020000000000"}},
-			Attempts: []clocks.CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, LeapStatus: "N"}, {UnixSeconds: last, LeapStatus: "N"}}}}}}}
+			Attempts: []clocks.CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{"shared": {Rows: []observe.CoverageRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: last, LeapStatus: "N"}}}}}}}
 	}}
 	before, err := pool.Media(context.Background())
 	require.NoError(t, err)
@@ -339,8 +342,6 @@ func TestFinalJudgmentRefreshesClockCoverage(t *testing.T) {
 func TestSignalDiagnosticsAreRecordedOnly(t *testing.T) {
 	for _, diagnostic := range []any{nil, map[string]any{"priority": "nice--20", "involuntarySwitches": 1, "cpuBefore": 2, "cpuAfter": 3}, map[string]any{"involuntarySwitches": "malformed"}} {
 		r, p, _ := runtimeFixture(t)
-		r.Bounds = new(clocks.Bounds)
-		*r.Bounds = clocks.FixedCoverageBounds()
 		base := p.respond
 		p.respond = func(q operator.Request) operator.Reply {
 			if q.Action != "worker-down" {
@@ -350,7 +351,7 @@ func TestSignalDiagnosticsAreRecordedOnly(t *testing.T) {
 			if diagnostic != nil {
 				data["signalDiagnostics"] = diagnostic
 			}
-			return hostReply(t, oracleJSON(map[string]any{"kind": "ok", "started": r.Session.clock.Wall(), "ended": r.Session.clock.Wall(), "data": data}))
+			return hostReply(t, oracleJSON(map[string]any{"kind": "ok", "started": time.Unix(0, 1793930010000000000), "ended": time.Unix(0, 1793930010000000100), "data": data}))
 		}
 		_, err := r.Step(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"})
 		require.NoError(t, err)

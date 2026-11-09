@@ -11,7 +11,7 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-// ReadHistoricalTracking is unwired. first/last are inclusive frozen row seconds,
+// ReadHistoricalTracking reads inclusive frozen row seconds first/last,
 // including the predecessor/successor and all same-second updates. boundary is a
 // separate gate-owned read boundary; elapsed time since freeze never refuses.
 // read must honor ctx and its existing deadline. A refusal returns no partial log.

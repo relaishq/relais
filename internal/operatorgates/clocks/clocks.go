@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
@@ -65,12 +64,7 @@ func PublicSample(s Sample) Sample {
 	s.Tracking = ""
 	s.RecordedLease = nil
 	if s.Lease != nil {
-		o := *s.Lease
-		if value, err := RecordLease(o, o.HostElapsedNS); err == nil {
-			s.Lease, s.RecordedLease = &o, &value
-		} else {
-			s.Lease, s.RecordedLease = &LeaseObservation{Reason: "invalid-evidence"}, nil
-		}
+		s.Lease, s.RecordedLease = normalizeLease(*s.Lease)
 	}
 	if s.TrackingLog == nil {
 		return s
@@ -146,9 +140,7 @@ func Parse(data []byte) (s Sample, err error) {
 		s.Lease = &LeaseObservation{Reason: "invalid-evidence"}
 		var o LeaseObservation
 		if observe.Decode(lease, &o, nil) == nil {
-			if value, e := RecordLease(o, o.HostElapsedNS); e == nil {
-				s.Lease, s.RecordedLease = &o, &value
-			}
+			s.Lease, s.RecordedLease = normalizeLease(o)
 		}
 	}
 	s.ProbeLog = probe
@@ -183,15 +175,25 @@ func Check(rows map[string]Sample, bounds Bounds, frontendSlot, controlSlot stri
 	return e, nil
 }
 
-// SignalMidpoint preserves decimal nanoseconds without a float conversion.
-func SignalMidpoint(before, after string, workerBound, assumedBound int64) (string, error) {
-	if !nsPattern.MatchString(before) || !nsPattern.MatchString(after) || workerBound < 0 || assumedBound < 0 {
+var ErrSignalBracketWide = fmt.Errorf("signal bracket exceeds approved mapping")
+
+// SignalMidpoint validates the coverage timestamp range and optional host start/end
+// envelope, preserving decimal nanoseconds without a float conversion.
+func SignalMidpoint(before, after string, workerBound, assumedBound int64, envelope ...time.Time) (string, error) {
+	lo, okB := observe.CoverageNS(before)
+	hi, okA := observe.CoverageNS(after)
+	if !okB || !okA || workerBound < 0 || assumedBound < 0 {
 		return "", fmt.Errorf("missing signal bracket")
 	}
-	b, _ := strconv.ParseUint(before, 10, 64)
-	a, _ := strconv.ParseUint(after, 10, 64)
-	if a < b || (a-b+1)/2 > uint64(assumedBound) || workerBound > assumedBound-int64((a-b+1)/2) {
-		return "", fmt.Errorf("signal bracket exceeds approved mapping")
+	if len(envelope) > 0 && (len(envelope) != 2 || envelope[0].IsZero() || envelope[1].Before(envelope[0]) || time.Unix(0, lo).Before(envelope[0]) || time.Unix(0, hi).After(envelope[1])) {
+		return "", fmt.Errorf("signal bracket outside operation envelope")
 	}
-	return strconv.FormatUint(b+(a-b)/2, 10), nil
+	b, a := uint64(lo), uint64(hi)
+	if a < b || (a-b+1)/2 > uint64(assumedBound) || workerBound > assumedBound-int64((a-b+1)/2) {
+		if a < b {
+			return "", fmt.Errorf("reversed signal bracket")
+		}
+		return fmt.Sprintf("%019d", b+(a-b)/2), ErrSignalBracketWide
+	}
+	return fmt.Sprintf("%019d", b+(a-b)/2), nil
 }

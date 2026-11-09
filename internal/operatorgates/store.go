@@ -13,6 +13,7 @@ import (
 type SessionStoreCapability struct {
 	Session *Session
 	Peer    Peer
+	Guard   *LeaseGuard
 }
 
 func (s SessionStoreCapability) Observe(ctx context.Context, end time.Duration) (StoreObservation, error) {
@@ -32,7 +33,7 @@ func (s SessionStoreCapability) Observe(ctx context.Context, end time.Duration) 
 	return observation, nil
 }
 func (s SessionStoreCapability) Failover(ctx context.Context, end time.Duration) error {
-	return s.failover(ctx, end, nil)
+	return s.FailoverWithLeases(ctx, end, s.Guard)
 }
 
 func (s SessionStoreCapability) FailoverWithLeases(ctx context.Context, end time.Duration, guard *LeaseGuard) error {
@@ -79,5 +80,5 @@ func (s *Session) OptionalStore(p Peer) StoreCapability {
 	if !s.capabilities[operator.StoreObserve] || !s.capabilities[operator.StoreFailover] {
 		return nil
 	}
-	return SessionStoreCapability{Session: s, Peer: p}
+	return SessionStoreCapability{Session: s, Peer: p, Guard: s.liveLeaseGuard}
 }

@@ -175,9 +175,9 @@ func TestClockSelectPostWindowStateAndFreshness(t *testing.T) {
 			case "reference":
 				in.Hosts[0].Tracking.Rows[last].Reference = "changed-source"
 			case "expired":
-				in.Hosts[0].Lease.ReferenceAgeNS = 1000000000
+				in.Hosts[0].Lease.ReferenceAgeNS = 4000000000
 				n, _ := strconv.ParseInt(in.Hosts[0].Lease.MeasuredUnixNS, 10, 64)
-				in.Hosts[0].Lease.ReferenceUnixNS = fmt.Sprint(n - 1000000000)
+				in.Hosts[0].Lease.ReferenceUnixNS = fmt.Sprint(n - 4000000000)
 			case "stale":
 				n := in.Hosts[0].Tracking.Rows[last].UnixSeconds*1000000000 + 60000000001
 				in.Hosts[0].Lease.MeasuredUnixNS = fmt.Sprint(n)
@@ -369,8 +369,8 @@ func TestRecordedLeaseAndOptionalParsingAreVerdictNeutral(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "1/500", l.GrowthPPM)
 	require.Equal(t, int64(1002), l.BoundNS)
-	require.Equal(t, int64(1e9), l.RemainingNS)
-	l, err = RecordLease(o, 2e9)
+	require.Equal(t, int64(4e9), l.RemainingNS)
+	l, err = RecordLease(o, 5e9)
 	require.NoError(t, err)
 	require.True(t, l.Expired)
 	_, err = RecordLease(o, 1)

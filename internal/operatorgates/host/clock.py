@@ -217,16 +217,16 @@ def read_clock(cursor=None, run_start_unix_ms=0, probe_file='', probe_cursor=Non
         since = min([since] + [b['fromUnixSeconds'] for b in timeline['breaks'] if not b['beforeRun']])
         timeline['rows'] = []
         timeline['breaks'] = [dict(kind='cursor-gap', fromUnixSeconds=min(since, now), unixSeconds=max(since, now), beforeRun=False)]
-    if probe_file:
-        result = add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)
     if lease:
-        # New launchers opt in. Existing reads have identical commands, timing
-        # and output. Extension pressure cannot evict baseline rows or probes.
+        # Reserve the lease before the loss-free probe prefix consumes wire room.
+        # Never evict baseline tracking rows to fit this evidence.
         extra = lease_evidence()
         candidate = dict(result, lease=extra)
         raw = json.dumps(candidate).encode()
         if len(raw) <= 256000 and len(base64.b64encode(gzip.compress(raw))) <= WIRE_LIMIT:
             result = candidate
+    if probe_file:
+        result = add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)
     return result
 
 
@@ -253,29 +253,43 @@ def lease_poll():
 
 
 def lease_evidence():
+    reason = 'tracking-invalid'
     try:
         started = time.monotonic_ns()
         first = lease_tracking()
         first_done = time.monotonic_ns()
-        time.sleep(0.2)
-        second_send = time.monotonic_ns()
-        second = lease_tracking()
-        measured = time.time_ns()
-        poll = lease_poll()
-        elapsed = time.monotonic_ns() - started
-        require(first[0] == second[0] and first[3] == second[3], 'Clock update during lease read')
+        # A normal reference update can cross the pair. Rebase on that report,
+        # then measure growth only between two reads of the same update.
+        for attempt in range(2):
+            time.sleep(0.2)
+            second_send = time.monotonic_ns()
+            second = lease_tracking()
+            measured = time.time_ns()
+            if first[0] != second[0]:
+                return dict(available=False, reason='source-changed')
+            if first[3] == second[3]:
+                break
+            if attempt == 1:
+                return dict(available=False, reason='reference-changing')
+            first, first_done = second, time.monotonic_ns()
+        reason = 'dispersion-invalid'
         require(second_send > first_done and Decimal(second[11]) >= Decimal(first[11]), 'Invalid dispersion growth')
         reference = int(Decimal(second[3]) * 10**9)
         require(0 < reference <= measured, 'Invalid reference time')
         error = abs(Decimal(second[4])) + Decimal(second[10]) / 2 + Decimal(second[11])
+        reason = 'poll-invalid'
+        poll = lease_poll()
+        elapsed = time.monotonic_ns() - started
         return dict(available=True, reason='', errorBoundNs=int((error * 10**9 + 2).to_integral_value(rounding='ROUND_CEILING')),
                     measuredUnixNs=str(measured), referenceUnixNs=str(reference), referenceAgeNs=measured-reference,
                     pollSeconds=str(poll), residualPpm=second[8], skewPpm=second[9],
                     dispersionStartSeconds=first[11], dispersionEndSeconds=second[11],
                     intervalNs=second_send-first_done, hostElapsedNs=elapsed)
+    except (OSError, subprocess.SubprocessError):
+        return dict(available=False, reason='read-failed')
     except Exception:
-        # Optional diagnostic failures never alter the scalar clock admission.
-        return dict(available=False, reason='unavailable')
+        # Fixed stage codes retain the reason without exposing chrony output.
+        return dict(available=False, reason=reason)
 
 
 # Mirror internal/clockprobe.ParseLine. A marker is file-wide, not a timestamp.

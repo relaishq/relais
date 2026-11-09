@@ -11,8 +11,8 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-// ReadLeases is unwired until 5b6. Batch sends share one request-send timestamp;
-// serial sends get independent timestamps. Tracking/probe cursors remain owned
+// ReadLeases uses bounded read-only transport. Every batch child is anchored
+// to the gate-owned batch send; serial reads use their own exchange send. Tracking/probe cursors remain owned
 // by the session, and transport uncertainty retains the normal fatal latch.
 func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (LeaseRead, error) {
 	rows, sent := map[string]clocks.Sample{}, map[string]time.Duration{}
@@ -63,7 +63,11 @@ func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (Le
 		e.Falsification = s.clockProbeHistory.Snapshot(front, map[string]string{"control": control, "w1": "w1", "w2": "w2"})
 	}
 	s.mu.Unlock()
-	return LeaseRead{Evidence: e, Sent: sent}, err
+	read := LeaseRead{Evidence: e, Sent: sent}
+	if s.leaseReadObserved != nil {
+		s.leaseReadObserved(read, s.clock.Elapsed())
+	}
+	return read, err
 }
 
 func (s *Session) observeLeases(ctx context.Context, p Peer, end time.Duration, input func(string) operator.HostLeaseReadInput, decode func(string, string) error, sent func(string, time.Duration)) error {

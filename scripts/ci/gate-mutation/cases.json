@@ -1378,13 +1378,13 @@
   {
     "ID": "skip-independent-clock-proof",
     "GuardFingerprint": "3b2fd031a7a9d349df86f862945293bbda1787a374efa6da32b755e30040d81c",
-    "File": "internal/operatorgates/runtime.go",
-    "Function": "step",
-    "Old": "err = r.VerifyClocks(ctx, end)",
-    "New": "err = nil",
     "Test": "TestRuntimeMissingClockStopsMutation",
     "Marker": "MUTATION:",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "if lease.Guard == nil {\n\t\t\t\treturn StepResult{}, fault(\"clock-lease-missing\")\n\t\t\t}",
+    "New": "if lease.Guard == nil { return StepResult{}, nil }"
   },
   {
     "ID": "skip-real-fault-hook",
@@ -3652,8 +3652,8 @@
     "ID": "batch-shared-host-parallel-probes",
     "File": "internal/operatorrehearsal/adapter_batch.go",
     "Function": "executeReadBatch",
-    "Old": "for i, read := range args.Reads {\n\t\tchild := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t}",
-    "New": "done := make(chan struct{}, len(args.Reads))\n\tfor i, read := range args.Reads {\n\t\tgo func() {\n\t\t\tchild := operator.Request{ID: read.Target, Operation: req.Operation, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t\t\tdone <- struct{}{}\n\t\t}()\n\t}\n\tfor range args.Reads { <-done }",
+    "Old": "if req.Operation == operator.HostLeaseReadBatch {\n\t\t\tpending.Add(1)",
+    "New": "if true {\n\t\t\tpending.Add(1)",
     "Test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
     "Marker": "MUTATION: batch-shared-host-serialized",
     "Package": "./internal/operatorrehearsal"
@@ -4403,13 +4403,13 @@
   },
   {
     "ID": "clock-binding-accept-unvalidated-claim",
-    "File": "internal/operatorgates/session.go",
-    "Function": "NewSession",
-    "Old": "if init.Scenario.ClockReceiptSHA256 != \"\" {",
-    "New": "if false {",
     "Test": "TestSessionRefusesUnvalidatedReceipt",
     "Marker": "MUTATION: receipt-claim-not-active",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "BindClock",
+    "Old": "if s.scenario.ClockReceiptSHA256 == \"\" || len(s.clockArtifacts.ReceiptGZIP) == 0 || len(s.clockArtifacts.EvidenceGZIP) == 0 {",
+    "New": "if false {"
   },
   {
     "ID": "clock-bound-fixed-source",
@@ -4683,13 +4683,13 @@
   },
   {
     "ID": "lease-rollback-bypass",
-    "File": "internal/operatorgates/lease_guard.go",
-    "Function": "leaseRestoration",
-    "Old": "return rollback || recovery",
-    "New": "return false",
     "Test": "TestLeaseGuardArmAndRestore/rollback",
     "Marker": "MUTATION: lease-rollback-bypass",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "leaseRestoration",
+    "Old": "case \"replace\":\n\t\treturn rollback || recovery",
+    "New": "case \"replace\":\n\t\treturn false"
   },
   {
     "ID": "admission-lease-refresh-skipped",
@@ -4723,10 +4723,10 @@
   },
   {
     "ID": "lease-reply-age-omitted",
-    "File": "internal/operatorgates/clocks/live_lease.go",
-    "Function": "At",
-    "Old": "int64(now-l.sent)",
-    "New": "l.observation.HostElapsedNS",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "workerError, e = lease.Guard.workerError()",
+    "New": "workerError, e = 0, nil",
     "Test": "TestLeaseReplyAging",
     "Marker": "MUTATION: lease-reply-age",
     "Package": "./internal/operatorgates"
@@ -4775,8 +4775,8 @@
     "ID": "resource-drain-prepared-dropped",
     "File": "internal/operatorgates/resource_sequence.go",
     "Function": "Run",
-    "Old": "result.ClockCoverage, coveragePrepared = coverage, true",
-    "New": "result.ClockCoverage = coverage",
+    "Old": "coveragePrepared = len(s.clockDrainAttempts)+s.clockDrainAttemptsOmitted > attemptsBefore",
+    "New": "coveragePrepared = attemptsBefore < 0",
     "Test": "TestResourceRunnerCallerStartBudget/coverage-drain",
     "Marker": "MUTATION: resource-final-drain",
     "Package": "./internal/operatorgates"
@@ -4785,8 +4785,8 @@
     "ID": "resource-drain-report-dropped",
     "File": "internal/operatorgates/resource_sequence.go",
     "Function": "Run",
-    "Old": "result.ClockCoverage, coveragePrepared = coverage, true",
-    "New": "coveragePrepared = true",
+    "Old": "result.ClockCoverage = coverage",
+    "New": "_ = coverage",
     "Test": "TestResourceRunnerCallerStartBudget/coverage-drain",
     "Marker": "MUTATION: resource-final-drain",
     "Package": "./internal/operatorgates"
@@ -5218,5 +5218,756 @@
     "Package": "./internal/operatorrehearsal",
     "Test": "TestLeaseTransportRejectsScripts/false/probe-slot",
     "Marker": "MUTATION: lease-only-input"
+  },
+  {
+    "ID": "mismatch-accepted",
+    "File": "internal/operatorgates/clocks/binding.go",
+    "Function": "BindReceipt",
+    "Old": "receipt.Bounds != in.ConfigBounds || receipt.Bounds != in.CallerBounds",
+    "New": "false",
+    "Test": "TestAtomicBindingBeforeMedia/mismatch",
+    "Marker": "MUTATION: mismatch-accepted",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "head-binding-lost",
+    "File": "internal/operatorrehearsal/head_caller.go",
+    "Function": "headInit",
+    "Old": "r.boundInit.Scenario.ClockReceiptSHA256",
+    "New": "\"\"",
+    "Test": "TestHeadBindingRetention",
+    "Marker": "MUTATION: head-binding-lost",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "fault-bypass",
+    "Test": "TestActivatedFaultGuard",
+    "Marker": "MUTATION: fault-bypass",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/runtime.go",
+        "Function": "step",
+        "Old": "if err = lease.Guard.Check(); err != nil {",
+        "New": "if err = nil; err != nil {"
+      },
+      {
+        "File": "internal/operatorgates/runtime.go",
+        "Function": "step",
+        "Old": "hooks = []ExchangeHooks{{BeforeSend: lease.Guard.Check}}",
+        "New": "hooks = nil"
+      }
+    ]
+  },
+  {
+    "ID": "unbound-pass",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Old": "status := operator.NotRun",
+    "New": "status := operator.Passed",
+    "Test": "TestUnboundProductionRefuses",
+    "Marker": "MUTATION: unbound-pass",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-unleased-counted",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "rollbackMove && certainty == operator.Succeeded",
+    "New": "false && rollbackMove && certainty == operator.Succeeded",
+    "Test": "TestRollbackUnleasedCounted",
+    "Marker": "MUTATION: rollback-unleased-counted",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "coverage-prepared-without-drain",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Old": "coveragePrepared = len(s.clockDrainAttempts)+s.clockDrainAttemptsOmitted > attemptsBefore",
+    "New": "coveragePrepared = attemptsBefore >= 0",
+    "Test": "TestResourceRunnerCallerStartBudget/coverage-skipped",
+    "Marker": "MUTATION: coverage-prepared",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "wide-bracket-latches",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "if e != nil && !errors.Is(e, clocks.ErrSignalBracketWide) {",
+    "New": "if e != nil {",
+    "Test": "TestActivatedBracketCertainty/wide",
+    "Marker": "MUTATION: bracket-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "malformed-bracket-unlatched",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "if e != nil && !errors.Is(e, clocks.ErrSignalBracketWide) {",
+    "New": "if false && e != nil && !errors.Is(e, clocks.ErrSignalBracketWide) {",
+    "Test": "TestActivatedBracketCertainty/malformed",
+    "Marker": "MUTATION: bracket-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-attempt-budget",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "readAttempt",
+    "Old": "end-g.clock.Elapsed() < leaseReadAttempt",
+    "New": "false",
+    "Test": "TestLeaseAttemptBudget",
+    "Marker": "MUTATION: lease-attempt-budget",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-queue-budget",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if remaining < minimum {",
+    "New": "if false && remaining < minimum {",
+    "Test": "TestLeaseQueueAttemptBudget",
+    "Marker": "MUTATION: lease-queue-budget",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-refusal-latched",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": ", isLeaseRefusal(prep)",
+    "New": "",
+    "Test": "TestLeasePrepareRefusalDoesNotLatch",
+    "Marker": "MUTATION: lease-refusal-latched",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-queue-timeout",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if (op == operator.HostLeaseRead || op == operator.HostLeaseReadBatch) && errors.Is(wait.Err(), context.DeadlineExceeded) {",
+    "New": "if false {",
+    "Test": "TestLeaseQueuedTimeoutIsDefinite",
+    "Marker": "MUTATION: lease-queue-timeout",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "helper-run-deadline",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Function": "",
+    "Old": "duration = min(duration, max(0, (args.until_unix_ns-time.time_ns()) / 1e9))",
+    "New": "duration = args.seconds",
+    "Test": "TestPythonGuards/helper-run-deadline",
+    "Marker": "MUTATION: python-guard helper-run-deadline",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_probe_test.HelperTests.test_absolute_run_deadline"
+  },
+  {
+    "ID": "store-unleased",
+    "File": "internal/operatorgates/store.go",
+    "Function": "Failover",
+    "Old": "return s.FailoverWithLeases(ctx, end, s.Guard)",
+    "New": "return s.failover(ctx, end, nil)",
+    "Test": "TestBoundStoreRequiresGuard",
+    "Marker": "MUTATION: store-unleased",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "bracket-malformed-wide",
+    "File": "internal/operatorgates/clocks/clocks.go",
+    "Function": "SignalMidpoint",
+    "Old": "!okB || !okA",
+    "New": "(!okB && false) || !okA",
+    "Test": "TestSignalBracketRangeAndEnvelope",
+    "Marker": "MUTATION: bracket-malformed-wide",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "verify-bound-ignore",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "VerifyClocks",
+    "Old": "return r.preflightFailure(err, \"clocks\")\n}",
+    "New": "return nil\n}",
+    "Test": "TestVerifyBoundSnapshotError",
+    "Marker": "MUTATION: verify-bound-ignore",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "bind-admission",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "r.runtime.Leases = guard",
+    "New": "r.runtime.Leases = nil; _ = guard",
+    "Test": "TestBindAdmission/valid",
+    "Marker": "MUTATION: bind-admission",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-latch-cleared",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "r.session != nil && !r.session.Latched() && len(r.session.Uncertainties()) == 0",
+    "New": "r.session != nil",
+    "Test": "TestBindAdmission/latched",
+    "Marker": "MUTATION: admission-replacement",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-uncertainty-cleared",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "len(r.session.Uncertainties()) == 0",
+    "New": "true",
+    "Test": "TestBindAdmission/uncertain",
+    "Marker": "MUTATION: admission-replacement",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-late-uncertainty-cleared",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "if !clean() {\n\t\t_ = peer.Close()\n\t\treturn errors.New(\"command-result-unknown\")\n\t}",
+    "New": "",
+    "Test": "TestBindAdmission/late-uncertain",
+    "Marker": "MUTATION: admission-replacement",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "admission-probe-files",
+    "File": "internal/operatorrehearsal/clock_binding.go",
+    "Function": "bindAdmission",
+    "Old": "LeaseProbeFiles: r.leaseProbeFiles()",
+    "New": "LeaseProbeFiles: nil",
+    "Test": "TestBindAdmission/valid",
+    "Marker": "MUTATION: admission-probe-files",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-attempt-context",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if remaining < minimum {",
+    "New": "if false && remaining < minimum {",
+    "Test": "TestLeaseAttemptContext/queued",
+    "Marker": "MUTATION: lease-attempt-context",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-attempt-deadline",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "end = min(end, s.clock.Elapsed()+remaining)",
+    "New": "_ = remaining",
+    "Test": "TestLeaseAttemptContext/deadline",
+    "Marker": "MUTATION: lease-attempt-deadline",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "bracket-envelope-dropped",
+    "File": "internal/operatorgates/clocks/clocks.go",
+    "Function": "SignalMidpoint",
+    "Old": "if len(envelope) > 0 && (len(envelope) != 2 || envelope[0].IsZero() || envelope[1].Before(envelope[0]) || time.Unix(0, lo).Before(envelope[0]) || time.Unix(0, hi).After(envelope[1])) {",
+    "New": "if false {",
+    "Test": "TestActivatedBracketCertainty/outside-start",
+    "Marker": "MUTATION: bracket-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-short-budget-waits",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "Refresh",
+    "Old": "if until-g.clock.Elapsed() < leaseReadAttempt {\n\t\t\treturn fault(\"clock-lease-expired\")",
+    "New": "if until-g.clock.Elapsed() < leaseReadAttempt {\n _ = g.pause(ctx, until-g.clock.Elapsed())\n\t\t\treturn fault(\"clock-lease-expired\")",
+    "Test": "TestLeaseGuardReturnsKnownExpiry",
+    "Marker": "MUTATION: lease-short-budget-waits",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "repair-operation-mutates",
+    "File": "internal/operatorrehearsal/precondition.go",
+    "Function": "restoreControl",
+    "Old": "ports := r.ports()",
+    "New": "original := r.process.Operation; r.process.Operation = \"rollback\"; defer func(){r.process.Operation=original}(); ports := r.ports()",
+    "Test": "TestCalibrationCleanupChecksNativeDeploymentState/missing-unit-sequence",
+    "Marker": "MUTATION: repair-operation",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-attempt-too-short",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "",
+    "Old": "const leaseReadAttempt = 1800 * time.Millisecond",
+    "New": "const leaseReadAttempt = time.Second",
+    "Test": "TestLeaseSlowAdapter/batch=true/fresh",
+    "Marker": "MUTATION: lease-slow-adapter",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-attempt-no-retry-room",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "",
+    "Old": "const leaseReadAttempt = 1800 * time.Millisecond",
+    "New": "const leaseReadAttempt = 3 * time.Second",
+    "Test": "TestLeaseAttemptRetryRoom",
+    "Marker": "MUTATION: lease-attempt-retry-room",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-batch-service-budget",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "minimum = leaseReadBatchMinimum",
+    "New": "minimum = leaseReadMinimum",
+    "Test": "TestLeaseSlowAdapter/batch=true/queued-expired",
+    "Marker": "MUTATION: lease-batch-service-budget",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-per-child-attempt-floor",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "minimum := leaseReadMinimum",
+    "New": "minimum := leaseReadAttempt",
+    "Test": "TestLeaseSlowAdapter/batch=false/retry",
+    "Marker": "MUTATION: lease-slow-adapter",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-serial-service-floor",
+    "File": "internal/operatorgates/clock_binding.go",
+    "Function": "",
+    "Old": "const leaseReadMinimum = 550 * time.Millisecond",
+    "New": "const leaseReadMinimum = 250 * time.Millisecond",
+    "Test": "TestSerialLeaseServiceFloor/insufficient",
+    "Marker": "MUTATION: lease-serial-service-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-serial-service-boundary",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if remaining < minimum {",
+    "New": "if remaining <= minimum {",
+    "Test": "TestSerialLeaseServiceFloor/exact",
+    "Marker": "MUTATION: lease-serial-service-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "worker-stop-always-restores",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "leaseRestoration",
+    "Old": "case \"worker-stop\":\n\t\treturn rollback || recovery",
+    "New": "case \"worker-stop\":\n\t\treturn true",
+    "Test": "TestProductionWorkerStopRequiresLease/missing",
+    "Marker": "MUTATION: worker-stop-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-refusal-public-cause",
+    "File": "internal/operatorrehearsal/report.go",
+    "Function": "publicCode",
+    "Old": "case \"clock-lease-missing\", \"clock-lease-expired\", \"clock-lease-bound\", \"clock-config-differ\":\n\t\treturn s",
+    "New": "",
+    "Test": "TestLeaseRefusalPublicCause/clock-lease-expired",
+    "Marker": "MUTATION: lease-refusal-public-cause",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-guard-diagnostic-dropped",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "VerifyClocks",
+    "Old": "if r.Session != nil && isLeaseRefusal(refusal) {",
+    "New": "if false && r.Session != nil && isLeaseRefusal(refusal) {",
+    "Test": "TestBoundClockRefusalDiagnostic/clock-lease-expired",
+    "Marker": "MUTATION: lease-guard-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-not-wired",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Old": "s.leaseReadObserved = r.Timing.RecordLeaseRead",
+    "New": "s.leaseReadObserved = nil",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+    "Marker": "MUTATION: lease-observation-wired",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-read-dropped",
+    "File": "internal/operatorgates/lease_read.go",
+    "Function": "ReadLeases",
+    "Old": "s.leaseReadObserved(read, s.clock.Elapsed())",
+    "New": "",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+    "Marker": "MUTATION: lease-observation-wired",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-age-stripped",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordLeaseRead",
+    "Old": "sent, int64(received),",
+    "New": "sent, 0,",
+    "Test": "TestLeaseObservationDiagnostics",
+    "Marker": "MUTATION: lease-observation-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-source-leak",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordLeaseRead",
+    "Old": "clocks.PublicEvidence(read.Evidence)",
+    "New": "read.Evidence",
+    "Test": "TestLeaseObservationDiagnostics",
+    "Marker": "MUTATION: lease-observation-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-observation-unbounded",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordLeaseRead",
+    "Old": "if r.refreshes >= 256 {",
+    "New": "if false {",
+    "Test": "TestLeaseObservationLimit",
+    "Marker": "MUTATION: lease-observation-limit",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-batch-uses-reply-time",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHostBatch",
+    "Old": "var batch operator.HostReadBatchOutput",
+    "New": "var batch operator.HostReadBatchOutput\n\t\tif len(sent) > 0 { for _, slot := range inventory.Slots { sent[0](slot, s.clock.Elapsed()) } }",
+    "Test": "TestLeaseSlotExpiry",
+    "Marker": "MUTATION: lease-batch-send",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-batch-serialized",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "if req.Operation == operator.HostLeaseReadBatch {\n\t\t\tpending.Add(1)",
+    "New": "if false {\n\t\t\tpending.Add(1)",
+    "Test": "TestLeaseBatchConcurrentCertainty",
+    "Marker": "MUTATION: lease-batch-parallel",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-child-unknown-erased",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "out.Replies[i] = a.executeHost(ctx, child)",
+    "New": "out.Replies[i] = a.executeHost(ctx, child)\n\t\tif out.Replies[i].Transport == operator.Unknown { out.Replies[i].Transport = operator.Succeeded; out.Replies[i].ExitCode = new(0) }",
+    "Test": "TestLeaseBatchConcurrentCertainty",
+    "Marker": "MUTATION: lease-child-certainty",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-back-to-two-polls",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "",
+    "Old": "const LeaseValidityPolls int64 = 5",
+    "New": "const LeaseValidityPolls int64 = 2",
+    "Test": "TestLeaseFivePollValidity",
+    "Marker": "MUTATION: lease-five-polls",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-refresh-window-not-grown",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "",
+    "Old": "const LeaseRefreshPolls int64 = 2 * LeaseValidityPolls",
+    "New": "const LeaseRefreshPolls int64 = 4",
+    "Test": "TestLeaseRefreshTenPollWindow",
+    "Marker": "MUTATION: lease-ten-poll-refresh",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-unavailable-reason-erased",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "normalizeLease",
+    "Old": "return &LeaseObservation{Reason: o.Reason}, nil",
+    "New": "return &LeaseObservation{Reason: \"invalid-evidence\"}, nil",
+    "Test": "TestLeaseUnavailableReasonPreserved",
+    "Marker": "MUTATION: lease-unavailable-reason",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-unavailable-label-exposed",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "normalizeLease",
+    "Old": "return &LeaseObservation{Reason: \"invalid-evidence\"}, nil",
+    "New": "return &LeaseObservation{Reason: o.Reason}, nil",
+    "Test": "TestLeaseUnavailableReasonSanitized",
+    "Marker": "MUTATION: lease-reason-sanitized",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-reference-race-not-retried",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "for attempt in range(2):",
+    "New": "for attempt in range(1):",
+    "Test": "TestPythonGuards/lease-reference-race-not-retried",
+    "Marker": "MUTATION: python-guard lease-reference-race-not-retried",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.LeaseTests.test_reference_update_rebases_growth_pair"
+  },
+  {
+    "ID": "lease-growth-not-rebased",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "first, first_done = second, time.monotonic_ns()",
+    "New": "first_done = time.monotonic_ns()",
+    "Test": "TestPythonGuards/lease-growth-not-rebased",
+    "Marker": "MUTATION: python-guard lease-growth-not-rebased",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.LeaseTests.test_reference_update_rebases_growth_pair"
+  },
+  {
+    "ID": "lease-source-change-accepted",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "if first[0] != second[0]:",
+    "New": "if False:",
+    "Test": "TestPythonGuards/lease-source-change-accepted",
+    "Marker": "MUTATION: python-guard lease-source-change-accepted",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.LeaseTests.test_invalid_data_and_read_failures_remain_unavailable"
+  },
+  {
+    "ID": "lease-probes-evict-lease",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "    if lease:\n        # Reserve the lease before the loss-free probe prefix consumes wire room.\n        # Never evict baseline tracking rows to fit this evidence.\n        extra = lease_evidence()\n        candidate = dict(result, lease=extra)\n        raw = json.dumps(candidate).encode()\n        if len(raw) <= 256000 and len(base64.b64encode(gzip.compress(raw))) <= WIRE_LIMIT:\n            result = candidate\n    if probe_file:\n        result = add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)\n",
+    "New": "    if probe_file:\n        result = add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)\n    if lease:\n        # Reserve the lease before the loss-free probe prefix consumes wire room.\n        # Never evict baseline tracking rows to fit this evidence.\n        extra = lease_evidence()\n        candidate = dict(result, lease=extra)\n        raw = json.dumps(candidate).encode()\n        if len(raw) <= 256000 and len(base64.b64encode(gzip.compress(raw))) <= WIRE_LIMIT:\n            result = candidate\n",
+    "Test": "TestPythonGuards/lease-probes-evict-lease",
+    "Marker": "MUTATION: python-guard lease-probes-evict-lease",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.ProbeTests.test_lease_reserved_before_probe_prefix"
+  },
+  {
+    "ID": "rollback-postread-skipped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "read, err := g.readAttempt(ctx, end)",
+    "New": "read, err := LeaseRead{}, fault(\"clock-lease-expired\")",
+    "Test": "TestRollbackContinuousLeaseCoverage/fresh",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-history-unchecked",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "results := observe.EvaluateBoundClockCoverage(timelines, g.frontend, g.control, g.bounds.FrontendControlBoundNS, g.bounds.FrontendWorkerBoundNS, g.bounds.FrontendWorkerBoundNS-g.workerBound, windows, nil)",
+    "New": "_ = windows; results := []observe.CoverageResult{{}}",
+    "Test": "TestRollbackContinuousLeaseCoverage/gap",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-postlease-expiry-ignored",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if err := g.Check(); err != nil {",
+    "New": "if err := g.Check(); false { _ = err",
+    "Test": "TestRollbackContinuousLeaseCoverage/expired",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-endpoint-time-ignored",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "measured-g.bounds.FrontendControlBoundNS < finish.UnixNano()",
+    "New": "measured < 0",
+    "Test": "TestRollbackContinuousLeaseCoverage/event-after-read",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "coverage-lease-kind-erased",
+    "File": "internal/operatorgates/clocks/coverage.go",
+    "Function": "Public",
+    "Old": "// Keep only fixed public cause names.",
+    "New": "b.Kind = \"log-loss\"",
+    "Test": "TestCoveragePublicLeaseCause",
+    "Marker": "MUTATION: coverage-public-lease-cause",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "rollback-lease-cause-lost",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "b.Kind = coverageErr.Error()",
+    "New": "b.Kind = code(coverageErr)",
+    "Test": "TestRollbackContinuousLeaseCoverage/missing",
+    "Marker": "MUTATION: rollback-lease-cause",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-zero-start-used",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "move.Start.IsZero()",
+    "New": "false",
+    "Test": "TestRollbackContinuousLeaseCoverage/zero-start",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-zero-end-used",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "move.End.IsZero() || move.End.Before(move.Start)",
+    "New": "false",
+    "Test": "TestRollbackContinuousLeaseCoverage/zero-end",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-reversed-span-used",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "move.End.Before(move.Start)",
+    "New": "false",
+    "Test": "TestRollbackContinuousLeaseCoverage/reversed-move",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-envelope-hides-media-span",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "haveSpan := false",
+    "New": "haveSpan := true",
+    "Test": "TestRollbackContinuousLeaseCoverage/mixed-failed",
+    "Marker": "MUTATION: rollback-local-span",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-partial-history-trusted",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "if !g.historyComplete {",
+    "New": "if false {",
+    "Test": "TestRollbackContinuousLeaseCoverage/partial-hole",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-partial-accept-forgotten",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "accept",
+    "Old": "g.historyComplete = false",
+    "New": "g.historyComplete = true",
+    "Test": "TestRollbackContinuousLeaseCoverage/partial-hole",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-restoration-reserve-spent",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "end -= RestoreReserve",
+    "New": "end -= 0",
+    "Test": "TestRollbackContinuousLeaseCoverage/restore-budget",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-context-reserve-spent",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "end = min(end, g.clock.Elapsed()+time.Until(deadline)-RestoreReserve)",
+    "New": "_ = deadline",
+    "Test": "TestRollbackContinuousLeaseCoverage/context-budget",
+    "Marker": "MUTATION: rollback-continuous-lease",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-old-row-after-event",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "oldLast > start.Unix()",
+    "New": "false",
+    "Test": "TestRollbackProofBoundaries/old-after-event",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-old-row-equality-refused",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "oldLast > start.Unix()",
+    "New": "oldLast >= start.Unix()",
+    "Test": "TestRollbackProofBoundaries/same-row",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-new-row-regression",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "newLast < oldLast",
+    "New": "false",
+    "Test": "TestRollbackProofBoundaries/new-before-old",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-new-row-equality-refused",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "newLast < oldLast",
+    "New": "newLast <= oldLast",
+    "Test": "TestRollbackProofBoundaries/same-row",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-empty-old-accepted",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if len(old.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "New": "if len(old.Rows) == 0 { return nil }",
+    "Test": "TestRollbackProofBoundaries/empty-old",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-empty-new-accepted",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if len(next.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "New": "if len(next.Rows) == 0 { return nil }",
+    "Test": "TestRollbackProofBoundaries/empty-new",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-short-prefix-dropped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if right-left < 3 {",
+    "New": "if false {",
+    "Test": "TestRollbackProofBoundaries/short-prefix",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rollback-short-prefix-expanded",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "restorationProof",
+    "Old": "if right-left < 3 {",
+    "New": "if right-left < 4 {",
+    "Test": "TestRollbackProofBoundaries/three-second-prefix",
+    "Marker": "MUTATION: rollback-proof-boundary",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-coverage-as-break",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageError",
+    "Old": ", \"clock-lease-missing\", \"clock-lease-expired\", \"clock-lease-bound\", \"clock-config-differ\"",
+    "New": "",
+    "Test": "TestCoveragePublicLeaseCause",
+    "Marker": "MUTATION: coverage-public-lease-cause",
+    "Package": "./internal/operatorgates/clocks"
   }
 ]

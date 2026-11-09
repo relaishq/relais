@@ -49,6 +49,7 @@ type SignalDiagnostics struct {
 }
 
 type CoverageBracket struct {
+	LeaseExcluded  bool               `json:"leaseExcluded,omitempty"`
 	Diagnostics    *SignalDiagnostics `json:"signalDiagnostics,omitempty"`
 	Worker         string             `json:"worker"`
 	MidpointUnixNS string             `json:"midpointUnixNs"`
@@ -133,7 +134,7 @@ func coverageSpans(w CoverageWindow, control string, cb, wb int64, brackets []Co
 	}
 	before, x := CoverageNS(found.BeforeUnixNS)
 	after, y := CoverageNS(found.AfterUnixNS)
-	if !x || !y || after < before || before+(after-before)/2 != a {
+	if found.LeaseExcluded || !x || !y || after < before || before+(after-before)/2 != a {
 		return nil, "clock-coverage-kill-bracket"
 	}
 	return []coverageSpan{{slot: w.Worker, a: before, b: after, bound: wb, half: (after - before + 1) / 2, signal: true}, {slot: control, a: b, b: b, bound: cb}}, ""
@@ -162,7 +163,7 @@ func coverageError(t CoverageTimeline, a, b int64, padded bool) (int64, string) 
 		// intentionally makes the maximum separation that overlaps ±2 s.
 		if br.FromUnixSeconds*coverageSecond-coverageSecond <= b && br.UnixSeconds*coverageSecond+coverageSecond >= a {
 			switch br.Kind {
-			case "cursor-gap", "log-rotation", "log-loss":
+			case "cursor-gap", "log-rotation", "log-loss", "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ":
 				return 0, "clock-coverage-missing"
 			default:
 				return 0, "clock-coverage-break"

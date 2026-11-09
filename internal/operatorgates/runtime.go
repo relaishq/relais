@@ -33,7 +33,7 @@ type ProcessRuntime struct {
 	Config         *ProcessConfig
 	Architecture   string
 	Pins           []inventory.Pin
-	Bounds         *clocks.Bounds
+	Leases         *LeaseGuard
 	ClockObserved  func(clocks.Evidence)
 	ClockSamples   []clocks.Evidence
 	BeforeMutation func(context.Context) error
@@ -62,24 +62,24 @@ func ValidateProcessParameters(p ProcessParameters) error {
 	}
 	return nil
 }
-func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) error {
-	if r.Bounds == nil {
-		return fault("missing-clock-assumptions")
+func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) (refusal error) {
+	defer func() {
+		if r.Session != nil && isLeaseRefusal(refusal) {
+			r.Session.observationFailure("hosts", "clock", refusal)
+		}
+	}()
+	if r.Leases == nil {
+		return fault("clock-lease-missing")
 	}
-	if len(r.ClockSamples) > 0 && r.Session.clock.Wall().Sub(r.ClockSamples[len(r.ClockSamples)-1].At) < time.Minute {
-		return nil
+	if err := r.Leases.Refresh(ctx, end); err != nil {
+		return r.preflightFailure(err, "clocks")
 	}
-	if r.Config != nil {
-		r.Session.mu.Lock()
-		r.Session.clockProbeFile = r.Config.Parameters.ClockProbeFile
-		r.Session.mu.Unlock()
-	}
-	e, err := r.Session.FreshClocks(ctx, r.Peer, *r.Bounds, end)
-	if r.ClockObserved != nil && !e.At.IsZero() {
-		r.ClockObserved(e)
-	}
+	e, err := r.Leases.Snapshot()
 	if err == nil {
 		r.ClockSamples = append(r.ClockSamples, e)
+		if r.ClockObserved != nil {
+			r.ClockObserved(e)
+		}
 	}
 	return r.preflightFailure(err, "clocks")
 }
@@ -95,7 +95,7 @@ func (r *ProcessRuntime) Inventory(ctx context.Context, target string, end time.
 	return r.preflightFailure(err, "inventory")
 }
 
-// LeaseStep is an explicit, currently unwired opt-in. Recovery permits the
+// LeaseStep supplies the bound fault guard. Recovery permits the
 // replace needed to restore a settled worker; rollback uses the fixed release
 // restoration list. Neither bypasses inventory or the unknown-result latch.
 type LeaseStep struct {
@@ -104,14 +104,14 @@ type LeaseStep struct {
 }
 
 func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
-	return r.step(ctx, op, slot, end, extra, nil)
+	return r.StepWithLeases(ctx, op, slot, end, extra, LeaseStep{Guard: r.Leases})
 }
 
 func (r *ProcessRuntime) StepWithLeases(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra, lease LeaseStep) (StepResult, error) {
-	return r.step(ctx, op, slot, end, extra, &lease)
+	return r.step(ctx, op, slot, end, extra, lease)
 }
 
-func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra, lease *LeaseStep) (result StepResult, err error) {
+func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra, lease LeaseStep) (result StepResult, err error) {
 	defer func() {
 		observedSlot := slot
 		if (op == "worker-status" || op == "worker-empty") && extra.Worker != "" {
@@ -136,7 +136,8 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		return StepResult{}, fault("invalid-process-scope")
 	}
 	var stage *host.Stage
-	restore := lease != nil && leaseRestoration(op, r.Config.Operation == "rollback" && r.Config.Target == "from", lease.Recovery)
+	rollbackMove := (op == "move" || op == "drain") && r.Config.Operation == "rollback" && r.Config.Target == "from"
+	restore := rollbackMove || leaseRestoration(op, r.Config.Operation == "rollback" && r.Config.Target == "from", lease.Recovery)
 	if !host.IsRead(op) {
 		deployed := ""
 		if !r.Config.Mixed {
@@ -149,9 +150,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		if err != nil {
 			return StepResult{}, r.preflightFailure(err, "inventory")
 		}
-		if lease == nil {
-			err = r.VerifyClocks(ctx, end)
-		} else if !restore {
+		if !restore {
 			if lease.Guard == nil {
 				return StepResult{}, fault("clock-lease-missing")
 			}
@@ -206,7 +205,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		}
 	}
 	var hooks []ExchangeHooks
-	if lease != nil && !host.IsRead(op) && !restore {
+	if !host.IsRead(op) && !restore {
 		if err = lease.Guard.Check(); err != nil {
 			return StepResult{}, err
 		}
@@ -264,7 +263,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			}
 			return operator.Unknown
 		}
-		if op == "worker-down" && (r.Bounds != nil || lease != nil) {
+		if op == "worker-down" {
 			var bracket struct {
 				Before string `json:"signalBeforeUnixNs"`
 				After  string `json:"signalAfterUnixNs"`
@@ -279,19 +278,22 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			if json.Unmarshal(envelope.Data, &diagnostic) != nil {
 				diagnostic.Signal = nil
 			}
-			r.Session.retainClockBracket(slot, bracket.Before, bracket.After, diagnostic.Signal)
 			workerError, bound := int64(0), int64(0)
-			if lease != nil {
-				workerError, e = lease.Guard.workerError()
-				if e != nil {
-					return operator.Unknown
-				}
-				bound = lease.Guard.bounds.FrontendWorkerBoundNS
-			} else {
-				workerError, bound = r.ClockSamples[len(r.ClockSamples)-1].Worker, r.Bounds.FrontendWorkerBoundNS
-			}
-			midpoint, e := clocks.SignalMidpoint(bracket.Before, bracket.After, workerError, bound)
+			workerError, e = lease.Guard.workerError()
 			if e != nil {
+				return operator.Unknown
+			}
+			bound = lease.Guard.bounds.FrontendWorkerBoundNS
+			midpoint, e := clocks.SignalMidpoint(bracket.Before, bracket.After, workerError, bound, envelope.Started, envelope.Ended)
+			r.Session.retainClockBracket(slot, bracket.Before, bracket.After, midpoint, diagnostic.Signal)
+			if errors.Is(e, clocks.ErrSignalBracketWide) {
+				r.Session.mu.Lock()
+				if n := len(r.Session.clockBrackets); n > 0 && r.Session.clockBrackets[n-1].Worker == slot && r.Session.clockBrackets[n-1].BeforeUnixNS == bracket.Before && r.Session.clockBrackets[n-1].AfterUnixNS == bracket.After {
+					r.Session.clockBrackets[n-1].LeaseExcluded = true
+				}
+				r.Session.mu.Unlock()
+			}
+			if e != nil && !errors.Is(e, clocks.ErrSignalBracketWide) {
 				return operator.Unknown
 			}
 			ns, _ := strconv.ParseUint(midpoint, 10, 64)
@@ -300,8 +302,52 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		return operator.Succeeded
 	}, hooks...)
 	observed.Certainty = certainty
+	if rollbackMove && certainty == operator.Succeeded {
+		start, finish := observed.Started, observed.Ended
+		moves := observed.Drain.Moves
+		if op == "move" {
+			moves = []controlplane.MoveResult{observed.Move}
+		}
+		haveSpan := false
+		for _, move := range moves {
+			if move.Start.IsZero() || move.End.IsZero() || move.End.Before(move.Start) {
+				continue
+			}
+			if !haveSpan || move.Start.Before(start) {
+				start = move.Start
+			}
+			if !haveSpan || move.End.After(finish) {
+				finish = move.End
+			}
+			haveSpan = true
+		}
+		coverageErr := error(fault("clock-lease-missing"))
+		if lease.Guard != nil {
+			coverageErr = lease.Guard.coverRestoration(ctx, end, start, finish)
+		}
+		if coverageErr != nil {
+			r.Session.mu.Lock()
+			if r.Session.clockMissingIntervals == nil {
+				r.Session.clockMissingIntervals = map[string]observe.CoverageBreak{}
+			}
+			front, _ := inventory.ComponentSlot(r.Session.inventoryComponents, "signal")
+			b := observe.CoverageBreak{FromUnixSeconds: start.Unix(), UnixSeconds: finish.Unix(), Kind: "clock-lease-missing"}
+			if old, ok := r.Session.clockMissingIntervals[front]; ok {
+				b.FromUnixSeconds = min(b.FromUnixSeconds, old.FromUnixSeconds)
+				b.UnixSeconds = max(b.UnixSeconds, old.UnixSeconds)
+			}
+			if isLeaseRefusal(coverageErr) {
+				b.Kind = coverageErr.Error()
+			}
+			r.Session.clockMissingIntervals[front] = b
+			r.Session.mu.Unlock()
+		}
+		if r.Session.Latched() {
+			err = fault("command-result-unknown")
+		}
+	}
 	if err != nil {
-		if lease != nil && certainty == operator.Failed && isLeaseRefusal(err) && !r.Session.Latched() {
+		if certainty == operator.Failed && isLeaseRefusal(err) && !r.Session.Latched() {
 			return observed, err
 		}
 		return observed, fault("command-result-unknown")

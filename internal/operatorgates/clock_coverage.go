@@ -3,7 +3,6 @@ package operatorgates
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
@@ -101,7 +100,10 @@ func (s *Session) noteClockLoss(e clocks.Evidence) {
 	}
 }
 
-func (s *Session) coverageSnapshot(bounds clocks.Bounds) *clocks.CoverageEvidence {
+func (s *Session) coverageSnapshot(_ clocks.Bounds) *clocks.CoverageEvidence {
+	if s.clockBinding == nil {
+		return &clocks.CoverageEvidence{Binding: &observe.ClockBinding{}}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, _ := inventory.ComponentSlot(s.inventoryComponents, "signal")
@@ -110,14 +112,11 @@ func (s *Session) coverageSnapshot(bounds clocks.Bounds) *clocks.CoverageEvidenc
 	for slot, b := range s.clockMissingIntervals {
 		missing[slot] = b
 	}
-	return &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: bounds, Attempts: coverageAttempts(s.clockAttempts), DrainAttempts: coverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...)}
+	return &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: s.clockBinding.Binding.Bounds, Attempts: boundCoverageAttempts(s.clockAttempts), DrainAttempts: boundCoverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...), ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, Binding: s.clockBinding}
 }
-func (s *Session) retainClockBracket(worker, before, after string, diagnostics *observe.SignalDiagnostics) {
-	b, okB := observe.CoverageNS(before)
-	a, okA := observe.CoverageNS(after)
-	midpoint := "unavailable"
-	if okB && okA && a >= b {
-		midpoint = strconv.FormatInt(b+(a-b)/2, 10)
+func (s *Session) retainClockBracket(worker, before, after, midpoint string, diagnostics *observe.SignalDiagnostics) {
+	if midpoint == "" {
+		midpoint = "unavailable"
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,7 +157,8 @@ func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, win
 			if bounded.Err() != nil || s.clock.Elapsed() >= end {
 				break
 			}
-			stdout, err := read(bounded, slot, host.Clock(cursors[slot], s.Budget.armed))
+			script := host.ClockWithLease(cursors[slot], s.Budget.armed, "", nil)
+			stdout, err := read(bounded, slot, script)
 			if err != nil {
 				continue
 			}
@@ -194,13 +194,6 @@ func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, win
 	return e
 }
 
-func coverageAttempts(attempts []clocks.Evidence) []clocks.CoverageAttempt {
-	out := make([]clocks.CoverageAttempt, 0, len(attempts))
-	for _, a := range attempts {
-		out = append(out, clocks.NewCoverageAttempt(a))
-	}
-	return out
-}
 func (s *Session) ClockAttempts() []clocks.Evidence {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -218,4 +211,12 @@ func (s *Session) ClockCoverageFalsified() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.clockCoverageFalsified
+}
+
+func boundCoverageAttempts(attempts []clocks.Evidence) []clocks.CoverageAttempt {
+	out := []clocks.CoverageAttempt{}
+	for _, a := range attempts {
+		out = append(out, clocks.NewBoundCoverageAttempt(a))
+	}
+	return out
 }

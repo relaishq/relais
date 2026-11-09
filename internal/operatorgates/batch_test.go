@@ -17,9 +17,10 @@ func TestBatchedProofFailureAndUncertainty(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			r, peer, _ := runtimeFixture(t)
 			r.Session.capabilities[operator.HostReadBatch] = true
+			r.Session.capabilities[operator.HostLeaseReadBatch] = true
 			original := peer.respond
 			peer.respond = func(req operator.Request) operator.Reply {
-				if req.Operation != operator.HostReadBatch {
+				if req.Operation != operator.HostReadBatch && req.Operation != operator.HostLeaseReadBatch {
 					return original(req)
 				}
 				var args operator.HostReadBatchArgs
@@ -28,7 +29,7 @@ func TestBatchedProofFailureAndUncertainty(t *testing.T) {
 				}
 				out := operator.HostReadBatchOutput{}
 				for _, read := range args.Reads {
-					child := original(operator.Request{Action: req.Action, Target: read.Target})
+					child := original(operator.Request{Operation: req.Operation, Action: req.Action, Target: read.Target})
 					child.ID = read.Target
 					out.Replies = append(out.Replies, child)
 				}

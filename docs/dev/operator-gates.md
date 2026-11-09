@@ -109,8 +109,8 @@ in-run even if they start earlier. Undated loss records conservatively count
 in-run. Historical rows and breaks remain recorded; rehearsal acceptance counts
 only breaks with `beforeRun: false` and checks coverage of in-run timestamps.
 
-The fixed pre-fault clock admission stays unchanged. Slice 4b uses retained
-timelines to qualify event windows, as described below. Attempted refreshes
+Receipt-bound lease admission protects faults. Retained timelines qualify event
+windows, as described below. Attempted refreshes
 with a failing host also retain a
 non-zero `At` and available host timelines, including in batch mode. Such
 failed refreshes count toward the recorder's 256-refresh cap, but do not enter
@@ -119,16 +119,19 @@ For rehearsal acceptance, inspect all four slots in `host-clocks` JSONL or
 report `clocks`: require version 2, usable per-host cursors, a continuous row
 timeline covering the run including its tail, no in-run breaks, and zero
 `omitted_refreshes`. An empty batch or a non-zero `At` alone proves no coverage.
-Coverage is enforced with the fixed bounds. Bound selection belongs to slice 5.
+Coverage uses the receipt bounds, as described below.
 
-## Recorded clock selection (slice 5a)
+## Clock selection and binding
 
 `relais-gates clock-select -evidence admission.json -policy policy.json` writes
 a version-1 receipt and its SHA-256 digest to stdout. Refusal exits 1 and writes
 a fixed reason to stderr; it emits no receipt. The command performs no host,
-caller or judge operations. Selection and lease evidence are recorded only:
-existing gate bounds, caller flags, clock admission, coverage qualification and
-judge outputs stay unchanged. A receipt is not authorization to use its bounds.
+caller or judge operations. Production resource runs require this receipt and its
+evidence in Init. `BindClock` recomputes both digests, validates launcher policy,
+run, roles, caller flags and drift, and independently reads the frozen rows.
+It runs before media in calibration, the resource sequence and the head phase.
+A missing receipt refuses; bound/drift disagreement returns
+`gate-caller-bounds-differ`. Unbound sessions are for setup only.
 
 The launcher supplies `clocks.SelectionEvidence`: a run ID, inventory-resolved
 `frontendSlot` and `controlSlot`, `callerLeapMode`, admission start/end in Unix
@@ -502,7 +505,7 @@ seven exchanges. These counts are transport evidence, not a completed media gate
 | --- | ---: | ---: |
 | rollout | 197 | 92 |
 | control-restart | 232 | 109 |
-| upgrade-rollback | 320 | 149 |
+| upgrade-rollback | 332 | 152 |
 | failover | 63 | 39 |
 | relay-deploy | 22 | 10 |
 | load observation | 7 | 7 |
@@ -897,10 +900,9 @@ fields. Other negative values and out-of-range indexes remain invalid.
 
 Clock evidence stays version 2. The judge now makes uncovered event windows
 undecided. It does not change the pass rule or make a passing window fail.
-Independent failures remain failures. The fixed bounds stay at 2 ms for control,
-3 ms for workers and 100 ppm for caller drift. The pre-fault `clocks.Check`
-stays unchanged. Lease aging, `maxclockerror` declaration and receipt binding
-belong to slice 5. There is no freeze-gap rule.
+Independent failures remain failures. Control and worker bounds come from the
+validated receipt; caller drift stays 100 ppm. Prospective leases protect faults
+and retrospective timelines qualify evidence. There is no freeze-gap rule.
 
 A session retains every clock read attempt, including successful slots in a
 failed batch. Those slots can already have advanced their tracking cursors.
@@ -913,22 +915,21 @@ only. Policy history keeps its earliest 256 attempts; drain history has its own
 `omittedBrackets` are separate counters. Overflow preserves the retained prefix.
 Per-slot `missingIntervals` bound omitted evidence, so a later drain cannot
 bridge omitted rows; dropping an exact replay creates no loss interval.
-`report.clocks` remains the successful policy-sample cache, with its original
-Control/Worker/Drift values. Attempts and drain samples live only under coverage.
+`report.clocks` retains successful lease-aged Control/Worker and observed Drift
+values. Attempts and drain samples live only under coverage.
 
 One optional `clockCoverage` object belongs to the run-level media `Pool`, not
 individual phases. It contains `version`, inventory-derived `frontendSlot` and
-`controlSlot`, fixed `bounds`, cursor-free numeric policy `attempts`, separate
+`controlSlot`, receipt `bounds` and digest, cursor-free numeric policy `attempts`, separate
 `drainAttempts`, omission counters and per-slot `missingIntervals`,
 `killBrackets`, `windows`, diagnostic `results` and `drainComplete`. Each window
 uses zero-based `phase` and `event` indexes and preserves its receipt's start,
 end, kind and affected worker slot. Brackets retain worker slot and decimal
 Before/After/midpoint nanoseconds, without operation or session identities.
 Results contain sorted, unique causes. Before transport, the collector evaluates
-the retained evidence with the shared fixed bounds. A different configured
-control bound, worker bound or drift makes coverage undecided with
-`clock-coverage-bound` in both recorded results and qualification. It sends one compact `clockCoverage`
-object with `results` and the `falsified` latch. It does not send tracking rows.
+the retained evidence with the validated receipt bounds. Binding disagreement
+refuses. It sends one compact `clockCoverage` object with receipt digest, bounds,
+`results` and the `falsified` latch. It does not send tracking rows.
 The existing total judge input limit still applies. Each pinned release first
 runs its own `r.Judge()`. The added qualification then marks matching windows
 undecided and removes trust from their metrics. Trusted failures stay trusted.
@@ -961,7 +962,8 @@ true sub-nanosecond digits still round outward.
 The enforced causes are:
 
 - `clock-coverage-missing`: missing endpoints/tail, invalid evidence, a row gap
-  above 60 seconds, or overlapping cursor gap, log rotation or log loss.
+  above 60 seconds, overlapping cursor gap, log rotation or log loss, or no valid
+  covering lease (`clock-lease-*` and lease `clock-config-differ`).
 - `clock-coverage-bound`: frontend maximum plus host maximum exceeds the fixed
   control or worker bound. Equality is accepted.
 - `clock-coverage-break`: an overlapping step, restart, source change,
@@ -1072,14 +1074,17 @@ The frontend also needs `--output RUN_LOCAL_FILE` and all three
 `--peer control=http://PRIVATE_IPV4:PORT`, `--peer w1=...`, `--peer w2=...`.
 Use an isolated private network: this unauthenticated helper accepts private IPv4,
 bypasses proxies, timestamps after TCP connect, and probes at 1 Hz (750 ms socket
-timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–300 s.
+timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–6300 s and the launcher
+passes `--until-unix-ns` to preserve the original run deadline. Shutdown is
+cooperative; stalled peers can delay exit beyond that deadline.
 
 After negative controls restore, rehearsal establishes/drains cursors before
 starting helpers or the admission timer, without reading the probe file. This
 preflight has a ten-second budget including a two-second guard to keep overflow
 breaks outside the selector's margin. Startup history remains recorded. Then
 parallel reads/selection start at 123 s within a fixed 150 s admission deadline;
-setup has ten seconds inside that deadline and helper lifetimes use the remainder.
+setup has ten seconds inside that deadline. Helpers then remain available through
+the original session deadline for run-long falsification observations.
 Non-cancelled exits wait through deadline +2 s before calibration (152 s plus
 preflight, at most 162 s). Parent cancellation skips that wait and returns promptly;
 deployment cleanup removes the helpers with their containers. Generated chrony
@@ -1094,44 +1099,117 @@ not characterize independent hosts; changed reference updates can refuse leases.
 The real CLI archives `clock-selection.json`, `clock-admission-evidence.json`,
 `clock-selection-policy.json` and `clock-selection-status.json`. Report
 `clockSelection` and logs print digests, bounds and counts or the fixed refusal
-cause. Archives omit addresses, source labels and opaque cursors. Selection stays
-diagnostic; acceptance, caller flags and judge inputs do not use it.
+cause. Archives omit addresses, source labels and opaque cursors. Rehearsal refuses
+before calibration without an admitted receipt. Selected bounds reach both pinned
+caller manifests and external coverage qualification. Pinned product bytes and
+judge policies remain unchanged; stored classifications cannot be re-bounded.
 `TestClockSelectionAdmissionArtifacts` exercises the real reader with oversized
 logs, a transient read failure and the real CLI. PR admission is a separate gate.
 
-Admission now re-measures an expired lease for at most four current poll periods
+Admission now re-measures an expired lease for at most ten current poll periods
 before invoking the selector. It requires a newer reference update and retains
 tracking pages/cursors even when the lease is omitted. A failed refresh records
 `clock-lease-expired`; admission retries until its existing deadline. This
-changes only recorded receipt admission and adds no time to the helper deadline.
+adds no time to the admission or session deadline.
 
-The unwired `LeaseGuard`, `Session.ReadLeases`, `StepWithLeases` and
-`FailoverWithLeases` prepare fault enforcement for atomic activation. They age
+`LeaseGuard`, `Session.ReadLeases`, `StepWithLeases` and
+`FailoverWithLeases` enforce faults in bound runs. They age
 from monotonic request-send (including transport), never renew the same update's
-two-poll expiry, and check control pairs against B_control and worker pairs
+five-poll expiry, and check control pairs against B_control and worker pairs
 against B_worker−K. Checks repeat after arm and after the exchange lock. Start,
 unfreeze, replenish, required rollback and explicit recovery replacement bypass
 clock/arm hooks while retaining inventory and unknown-result latches. Refusals
 are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
-`clock-config-differ`. Existing gate/verdict paths do not call these interfaces.
+`clock-config-differ`. A successful rollback move with an expired cache gets one
+post-operation lease read, capped at the existing 1.8-second attempt and outer
+deadline. It leaves a further 60-second `RestoreReserve` below its step
+deadline for subsequent restoration; in the normal release path that deadline
+already excludes one reserve, so 120 seconds remain. The caller context must
+also leave one reserve. Otherwise the
+optional read is skipped and timing stays uncovered. Unknown reads retain the
+normal fatal latch because transport reuse is unproven. A fresh endpoint lease
+and continuous, bounded tracking rows from the previous endpoint can certify
+the completed media event retrospectively. This
+does not renew the old lease or admit a fault. An incomplete lease accept
+invalidates the historical checkpoint: session cursors may have consumed rows
+that it did not store. A later complete accept establishes a new checkpoint,
+without certifying the lost interval. Final coverage must still close
+the event's padded interval; the read does not waive an open tail. Missing,
+invalid or over-bound endpoints, a broken tracking chain, or insufficient time
+leave the move uncovered. Restoration itself still runs, including when that
+read refuses; an unknown read still latches. Missing intervals use nonzero,
+ordered media receipt times, falling back to the command envelope if none
+exist, and public evidence preserves the fixed lease refusal name
+instead of calling lease expiry log loss. Judge pins and policy are unchanged.
+The recorder conservatively merges each slot’s
+unleased rollback spans; distant spans also exclude the interval between them.
+A reference lease expires after five poll periods (5P), including host reference
+age and gate transport age. Its measured error growth still ages through the
+entire interval. Rereading the same reference may shorten its expiry, never renew it.
+The refresh window is 10P, twice validity: at a one-second poll this accommodates
+the observed four-second update gap plus two 1.8-second attempts and polling.
+It is always capped by the existing run, pool, collection and caller context
+limits. No outer deadline, selected bound, reserve, ceiling or drift changes.
+The host retries one reference change across its 200 ms dispersion pair, using
+the new report as a baseline; rates never bridge two reference updates. A second
+change or invalid data still refuses. Fixed unavailable reason codes survive
+parsing and public sanitization; arbitrary host text remains `invalid-evidence`.
 `host.lease-read` and `host.lease-read-batch` carry typed cursor inputs;
 the adapter generates the fixed lease reader and rejects scripts or unknown
 arguments. A nonempty probe path must match trusted local per-slot configuration
 (the session's frontend inventory and probe file; the adapter's `LeaseProbeFiles`).
 These observations use the original short refresh deadline, including transport;
 arbitrary host execution and batch scripts retain their 30 s floor.
-There is no fixed per-attempt lease transport timeout yet. Activation must define
-one including queue time and the complete serial/batch observation, then refuse
-an expired-lease retry as `clock-lease-expired` when that timeout cannot fit the
-remaining 4P window, rechecking after the send lock. Do not extend 4P or replace
-it with a longer transport context.
+Lease batches run their four fixed host reads concurrently and join every child;
+ordinary inventory/script batches stay serial. Every batch child's lease is anchored
+to the gate's own monotonic request-send time after the send lock. Adapter timing
+claims cannot move that anchor. Parallel collection still charges the entire batch
+round trip (about 0.33 s warm) to every lease. Serial exchanges use their own gate
+send times. Every child's certainty is retained; unknown children latch, and a
+reread of the same reference cannot extend its expiry.
+Each whole observation (serial or batch) has a 1.8 s attempt timeout,
+including queue and transport. A retry that cannot fit that timeout within the
+original 10P deadline ends with `clock-lease-expired`; the send lock rechecks the
+remaining budget and the attempt context. A single read needs 550 ms after
+queueing (covering measured 300–390 ms warm reads and a 526 ms first-process
+read); a four-host
+batch still reserves 1.6 s after queueing. The wire deadline is capped to the attempt deadline. Serial
+children consume the same attempt rather than each reserving another whole
+attempt. An unsent queued timeout is definite. Submitted read uncertainty still
+latches. Two 1.8 s attempts and two 100 ms polls fit inside 10P for a 1 s poll;
+no run, collection or refresh deadline grows. A container-free adapter/session
+benchmark measured warm four-host reads at 1.20–1.32 s and first reads at
+1.48–1.57 s; these are local measurements, not runner timing guarantees.
+The rehearsal records `clock-lease-read` duration/budget and `clock-lease-exec`
+duration per slot, including failures, to measure actual exec and cold costs.
+A container-free parallel replay measured 320–347 ms warm batches and a
+610 ms first batch; actual runner exec costs still need measurement.
+These diagnostics do not enter verdict inputs. No warm-up read is added.
+Every bound preparation refusal retains its fixed `clock-lease-missing`,
+`clock-lease-expired`, `clock-lease-bound` or `clock-config-differ` cause in the
+gate reason and `precondition-check` diagnostics, including head-caller reports.
+`clock-lease-observation` JSON records retain sanitized lease observations and
+gate-owned `sentNs`/`receivedNs` for successful and refused guard reads, within
+the existing 256-refresh diagnostic cap. This allows replay of leases at read receipt;
+normalized coverage rows alone cannot reconstruct reference ages or expiry.
 
-The unwired `operator.ClockBindingArtifacts` codec prepares receipt transport.
-It gzip-compresses receipt and evidence separately, preserving the original bytes
-for `BindReceipt` to recompute both digests. Each decoded artifact is limited to
-8 MiB; the combined compressed bytes are limited to half the existing frame
-budget, leaving room for base64 expansion and Init metadata. Init does not accept
-this envelope yet; the codec changes no caller, gate or judge input.
+`operator.ClockBindingArtifacts` carries receipt and evidence in Init, compressed
+separately with an 8 MiB decoded limit each and a half-frame combined wire limit.
+Head Init retains the receipt and original armed/end times. Gate-owned historical
+paging uses a separate current read boundary and preserves exact column-14 tokens;
+it checks the frozen interval without moving the trailing admission window.
+Live cursors start at the independently read tail; there is no freeze-gap rule.
+Coverage, padding, Check and both pinned judge summaries use the same bound proof.
+The pre-judge drain retains its 110-second judge reserve and only marks coverage
+prepared when an actual drain attempt ran.
+
+A well-formed wide signal bracket counts the kill as executed. It excludes only
+that kill's timing evidence with `clock-coverage-kill-bracket`; recovery is still
+judged. Missing, malformed and reversed brackets retain the unknown-result latch.
+Well-formed timestamps must satisfy the coverage range and lie inside the host
+operation envelope before width can exclude timing alone.
+Selected bounds can decide the former fixed-bound first-content near-tie. A wide
+bracket, expired lease or invalid binding can remove qualification or refuse a run.
 
 Signal brackets optionally retain `signalDiagnostics`: helper CPU IDs before/after,
 thread involuntary/voluntary context-switch deltas, thread CPU time, and priority.

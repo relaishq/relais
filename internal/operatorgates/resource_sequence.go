@@ -24,15 +24,17 @@ import (
 // Resource names and launch paths stay with the resource server. The judge is
 // the hash-verified local public executable, not a peer-supplied verdict.
 type ResourceConfig struct {
-	Parameters   ProcessParameters        `json:"parameters"`
-	Pins         []inventory.Pin          `json:"pins"`
-	Bounds       clocks.Bounds            `json:"bounds"`
-	Architecture string                   `json:"architecture"`
-	Endpoints    operatorcaller.Endpoints `json:"endpoints"`
-	Token        string                   `json:"token"`
-	CallerIDBase uint64                   `json:"callerIdBase,omitempty"`
-	JudgeBinary  string                   `json:"judgeBinary"`
-	Admission    *AdmissionPlan           `json:"admission,omitempty"`
+	ClockPolicy   clocks.SelectionPolicy   `json:"clockPolicy"`
+	ClockLeapMode string                   `json:"clockLeapMode"`
+	Parameters    ProcessParameters        `json:"parameters"`
+	Pins          []inventory.Pin          `json:"pins"`
+	Bounds        clocks.Bounds            `json:"bounds"`
+	Architecture  string                   `json:"architecture"`
+	Endpoints     operatorcaller.Endpoints `json:"endpoints"`
+	Token         string                   `json:"token"`
+	CallerIDBase  uint64                   `json:"callerIdBase,omitempty"`
+	JudgeBinary   string                   `json:"judgeBinary"`
+	Admission     *AdmissionPlan           `json:"admission,omitempty"`
 }
 type ResourceResult struct {
 	ClockCoverage *clocks.CoverageEvidence
@@ -119,10 +121,36 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		r.Started(s)
 	}
 	result := ResourceResult{CallerStopped: map[operator.Gate]bool{}}
-	if r.validate(s) != nil {
+	if r.Timing != nil {
+		s.leaseReadObserved = r.Timing.RecordLeaseRead
+	}
+	pause := r.Sleep
+	if pause == nil {
+		pause = resourcePause
+	}
+	setupErr := r.validate(s)
+	if setupErr == nil {
+		setupErr = s.BindClock(ctx, peer, r.Config, min(s.Budget.end, s.clock.Elapsed()+2*time.Minute))
+	}
+	var guard *LeaseGuard
+	if setupErr == nil {
+		guard, setupErr = s.BoundLeaseGuard(peer, pause)
+		s.liveLeaseGuard = guard
+	}
+	if setupErr != nil {
+		reason := "precondition-failed"
+		var binding *clocks.BindingError
+		if errors.As(setupErr, &binding) {
+			reason = binding.Cause
+		}
+		status := operator.NotRun
+		if s.Latched() {
+			status = operator.Inconclusive
+			reason = "command-result-unknown"
+		}
 		for _, gate := range s.gates {
-			result.Gates = append(result.Gates, operator.GateResult{Gate: gate, Status: operator.NotRun, Reason: "precondition-failed"})
-			result.Procedures = append(result.Procedures, ProcedureResult{Status: operator.NotRun, Reason: "precondition-failed"})
+			result.Gates = append(result.Gates, operator.GateResult{Gate: gate, Status: status, Reason: reason})
+			result.Procedures = append(result.Procedures, ProcedureResult{Status: status, Reason: reason})
 		}
 		s.retainGateDiagnostics(&result.SequenceResult, result.CallerStopped)
 		if r.Finished != nil {
@@ -131,10 +159,6 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		return result.Gates
 	}
 	c := r.Config
-	pause := r.Sleep
-	if pause == nil {
-		pause = resourcePause
-	}
 	judge := r.Judge
 	if judge == nil {
 		judge = operatorevidence.PinnedJudge{Commit: s.scenario.Judge.SourceCommit, SHA256: s.scenario.Judge.SHA256, Binary: c.JudgeBinary}
@@ -143,11 +167,11 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		judge = timingJudge{MediaJudge: judge, recorder: r.Timing}
 	}
 	process := &ProcessConfig{Parameters: c.Parameters, ArmedAt: time.UnixMilli(s.Budget.armed), Trials: true, Pool: true}
-	runtime := &ProcessRuntime{Session: s, Peer: peer, Config: process, Architecture: c.Architecture, Pins: c.Pins, Bounds: &c.Bounds}
+	runtime := &ProcessRuntime{Session: s, Peer: peer, Config: process, Architecture: c.Architecture, Pins: c.Pins, Leases: guard}
 	if r.Timing != nil {
 		runtime.ClockObserved = r.Timing.RecordClocks
 	}
-	pool := &EvidenceRuntime{RunID: c.Endpoints.RunID, Judge: judge}
+	pool := &EvidenceRuntime{RunID: c.Endpoints.RunID, Judge: judge, ClockReceiptSHA256: s.scenario.ClockReceiptSHA256}
 	coveragePrepared := false
 	pool.Coverage = func(windows []observe.CoverageWindow) *clocks.CoverageEvidence {
 		e := s.coverageSnapshot(c.Bounds)
@@ -210,6 +234,9 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			process.Mixed = false
 			runtime.BeforeMutation = nil
 			if err := GatePrecondition(ctx, process, procedures(), end); err != nil {
+				return err
+			}
+			if err := runtime.VerifyClocks(ctx, end); err != nil {
 				return err
 			}
 			now := s.clock.Elapsed()
@@ -303,9 +330,11 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			}, stop)
 		},
 		Finalize: func(ctx context.Context, end time.Duration) (*MediaSummary, error) {
+			attemptsBefore := len(s.clockDrainAttempts) + s.clockDrainAttemptsOmitted
 			summary, coverage, err := s.finalizePool(ctx, end, pool, c.Bounds, r.CoverageRead, pause)
 			if coverage != nil {
-				result.ClockCoverage, coveragePrepared = coverage, true
+				result.ClockCoverage = coverage
+				coveragePrepared = len(s.clockDrainAttempts)+s.clockDrainAttemptsOmitted > attemptsBefore
 			}
 			result.PoolError = err != nil
 			return summary, err

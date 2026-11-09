@@ -4,11 +4,13 @@ import (
 	"context"
 	"math"
 	"math/big"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 )
 
 type LeaseRead struct {
@@ -16,20 +18,22 @@ type LeaseRead struct {
 	Sent     map[string]time.Duration
 }
 
-// LeaseGuard is prepared for atomic activation in 5b6. No verdict path creates
-// one yet. Its reader must timestamp request-send after the exchange lock.
+// LeaseGuard protects bound fault operations. Its reader timestamps request-send
+// after the exchange lock.
 type LeaseGuard struct {
 	mu, refresh               sync.Mutex
 	clock                     Clock
 	read                      func(context.Context, time.Duration) (LeaseRead, error)
 	pause                     func(context.Context, time.Duration) error
 	leases                    map[string]clocks.Lease
+	samples                   map[string]clocks.Sample
 	observations              map[string]clocks.LeaseObservation
 	bounds                    clocks.Bounds
 	frontend, control, growth string
 	workerBound               int64
 	frozenEnd                 int64
 	invalid                   bool
+	historyComplete           bool
 }
 
 func NewLeaseGuard(e clocks.CoverageEvidence, session *Session, read func(context.Context, time.Duration) (LeaseRead, error), pause func(context.Context, time.Duration) error) (*LeaseGuard, error) {
@@ -37,12 +41,15 @@ func NewLeaseGuard(e clocks.CoverageEvidence, session *Session, read func(contex
 		return nil, fault("clock-config-differ")
 	}
 	r := e.Binding.Receipt
-	return &LeaseGuard{clock: session.clock, read: read, pause: pause, leases: map[string]clocks.Lease{}, observations: map[string]clocks.LeaseObservation{}, bounds: r.Bounds, frontend: r.FrontendSlot, control: r.ControlSlot, growth: r.Policy.MaxDispersionGrowthPPM, workerBound: r.Bounds.FrontendWorkerBoundNS - r.Policy.SignalReserveNS, frozenEnd: r.EndUnixSeconds}, nil
+	return &LeaseGuard{clock: session.clock, read: read, pause: pause, leases: map[string]clocks.Lease{}, samples: map[string]clocks.Sample{}, observations: map[string]clocks.LeaseObservation{}, bounds: r.Bounds, frontend: r.FrontendSlot, control: r.ControlSlot, growth: r.Policy.MaxDispersionGrowthPPM, workerBound: r.Bounds.FrontendWorkerBoundNS - r.Policy.SignalReserveNS, frozenEnd: r.EndUnixSeconds}, nil
 }
 
 func (g *LeaseGuard) accept(r LeaseRead) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// Session cursors advance even if acceptance stops before storing every slot.
+	// A later historical proof must not bridge rows lost at that boundary.
+	g.historyComplete = false
 	g.invalid = g.invalid || clocks.HasFalsification(r.Evidence)
 	for _, s := range r.Evidence.Clocks {
 		if s.TrackingLog == nil {
@@ -70,7 +77,9 @@ func (g *LeaseGuard) accept(r LeaseRead) error {
 			return err
 		}
 		g.leases[slot], g.observations[slot] = l, *s.Lease
+		g.samples[slot] = s
 	}
+	g.historyComplete = true
 	return nil
 }
 
@@ -132,7 +141,7 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 	}
 	// A partial initial accept deliberately stays missing on later calls.
 	if len(g.observations) == 0 {
-		r, err := g.read(ctx, end)
+		r, err := g.readAttempt(ctx, end)
 		accepted := g.accept(r)
 		if err != nil {
 			return err
@@ -162,8 +171,11 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 		if g.clock.Elapsed() >= until {
 			break
 		}
+		if until-g.clock.Elapsed() < leaseReadAttempt {
+			return fault("clock-lease-expired")
+		}
 		wait, done := context.WithTimeout(ctx, until-g.clock.Elapsed())
-		r, err := g.read(wait, until)
+		r, err := g.readAttempt(wait, until)
 		done()
 		accepted := g.accept(r)
 		if err != nil {
@@ -194,7 +206,9 @@ func leaseRestoration(op string, rollback, recovery bool) bool {
 		return true
 	case "replace":
 		return rollback || recovery
-	case "freeze", "drain", "worker-stop", "relay-stage", "relay-stop", "control-stop", "signal-stop":
+	case "worker-stop":
+		return rollback || recovery
+	case "freeze", "drain", "relay-stage", "relay-stop", "control-stop", "signal-stop":
 		return rollback
 	}
 	return false
@@ -209,4 +223,98 @@ func isLeaseRefusal(err error) bool {
 		return true
 	}
 	return false
+}
+
+func (g *LeaseGuard) readAttempt(ctx context.Context, end time.Duration) (LeaseRead, error) {
+	if end-g.clock.Elapsed() < leaseReadAttempt {
+		return LeaseRead{}, fault("clock-lease-expired")
+	}
+	bounded, cancel := context.WithTimeout(ctx, leaseReadAttempt)
+	defer cancel()
+	return g.read(bounded, end)
+}
+
+// coverRestoration never admits an operation: restoration has already completed.
+// An expired cache needs one fresh endpoint lease plus a continuous retrospective
+// tracking chain. Final coverage must still close and bound the actual event.
+func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, start, finish time.Time) error {
+	g.refresh.Lock()
+	defer g.refresh.Unlock()
+	err := g.Check()
+	if err == nil || err.Error() != "clock-lease-expired" {
+		return err
+	}
+	g.mu.Lock()
+	if !g.historyComplete {
+		g.mu.Unlock()
+		return fault("clock-lease-missing")
+	}
+	before := clocks.NewBoundCoverageAttempt(clocks.Evidence{Clocks: g.samples})
+	g.mu.Unlock()
+	// Optional timing evidence cannot consume the existing restoration reserve.
+	end -= RestoreReserve
+	if deadline, ok := ctx.Deadline(); ok {
+		end = min(end, g.clock.Elapsed()+time.Until(deadline)-RestoreReserve)
+	}
+	read, err := g.readAttempt(ctx, end)
+	accepted := g.accept(read)
+	if err != nil {
+		return err
+	}
+	if accepted != nil {
+		return accepted
+	}
+	return g.restorationProof(before, read, start, finish)
+}
+
+func (g *LeaseGuard) restorationProof(before clocks.CoverageAttempt, read LeaseRead, start, finish time.Time) error {
+	if err := g.Check(); err != nil {
+		return err
+	}
+	if finish.Before(start) {
+		return fault("clock-lease-missing")
+	}
+	after := clocks.NewBoundCoverageAttempt(read.Evidence)
+	timelines := map[string]observe.CoverageTimeline{}
+	left, right := int64(0), int64(math.MaxInt64)
+	for _, slot := range []string{g.frontend, g.control} {
+		old, next := before.Clocks[slot], after.Clocks[slot]
+		sample := read.Evidence.Clocks[slot]
+		// Both endpoints were fully accepted; empty tracking reads are still legal.
+		if len(old.Rows) == 0 {
+			return fault("clock-lease-missing")
+		}
+		if len(next.Rows) == 0 {
+			return fault("clock-lease-missing")
+		}
+		oldLast, newLast := old.Rows[len(old.Rows)-1].UnixSeconds, next.Rows[len(next.Rows)-1].UnixSeconds
+		measured, _ := strconv.ParseInt(sample.Lease.MeasuredUnixNS, 10, 64)
+		if oldLast > start.Unix() || measured-g.bounds.FrontendControlBoundNS < finish.UnixNano() || newLast < oldLast {
+			return fault("clock-lease-missing")
+		}
+		left = max(left, oldLast)
+		right = min(right, newLast)
+		old.Rows = append(old.Rows, next.Rows...)
+		old.Breaks = append(old.Breaks, next.Breaks...)
+		old.ReadComplete = next.ReadComplete
+		timelines[slot] = old
+	}
+	// A sub-three-second prefix has no possible >60 s continuity gap. The final
+	// evaluator still requires the event's padded closing rows; no tail is waived.
+	if right-left < 3 {
+		return nil
+	}
+	windows := []observe.CoverageWindow{{Kind: "move", StartUnixNS: clocks.TimestampNS((left+1)*1e9 + g.bounds.FrontendControlBoundNS), EndUnixNS: clocks.TimestampNS((right-1)*1e9 - g.bounds.FrontendControlBoundNS)}}
+	results := observe.EvaluateBoundClockCoverage(timelines, g.frontend, g.control, g.bounds.FrontendControlBoundNS, g.bounds.FrontendWorkerBoundNS, g.bounds.FrontendWorkerBoundNS-g.workerBound, windows, nil)
+	for _, cause := range results[0].Causes {
+		switch cause {
+		case "clock-coverage-bound":
+			return fault("clock-lease-bound")
+		case "clock-coverage-break", "clock-coverage-leap":
+			return fault("clock-config-differ")
+		default:
+			return fault("clock-lease-missing")
+		}
+	}
+	return nil
 }

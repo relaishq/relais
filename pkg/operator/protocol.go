@@ -35,7 +35,7 @@ const (
 	// reads; adapters must join every result and must never retry a child.
 	HostReadBatch Operation = "host.read-batch"
 	// Lease observations carry typed inputs only; adapters generate the reader.
-	// Unlike arbitrary host scripts, these reads may use a bounded 4P deadline.
+	// Unlike arbitrary host scripts, these reads may use a bounded 10P deadline.
 	HostLeaseRead      Operation = "host.lease-read"
 	HostLeaseReadBatch Operation = "host.lease-read-batch"
 	CallerReady        Operation = "caller.ready"
@@ -87,10 +87,11 @@ type Blob struct {
 }
 
 type Init struct {
-	Scenario      Scenario    `json:"scenario"`
-	ArmedAtUnixMS string      `json:"armedAtUnixMs"`
-	EndUnixMS     string      `json:"endUnixMs"`
-	Capabilities  []Operation `json:"capabilities"`
+	ClockBinding  *ClockBindingArtifacts `json:"clockBinding,omitempty"`
+	Scenario      Scenario               `json:"scenario"`
+	ArmedAtUnixMS string                 `json:"armedAtUnixMs"`
+	EndUnixMS     string                 `json:"endUnixMs"`
+	Capabilities  []Operation            `json:"capabilities"`
 }
 
 type Hello struct {

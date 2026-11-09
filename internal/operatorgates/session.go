@@ -59,6 +59,10 @@ type Session struct {
 	uncertainties   []operator.Uncertainty
 	uncertaintySink func(operator.Uncertainty)
 
+	leaseReadObserved         func(LeaseRead, time.Duration)
+	liveLeaseGuard            *LeaseGuard
+	clockArtifacts            operator.ClockBindingArtifacts
+	clockBinding              *observe.ClockBinding
 	clockCoverageFalsified    bool
 	clockAttempts             []clocks.Evidence
 	clockAttemptsOmitted      int
@@ -77,10 +81,7 @@ type Session struct {
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
-	// Reject receipt claims until Init binding is activated in 5b6.
-	if init.Scenario.ClockReceiptSHA256 != "" {
-		return nil, &clocks.BindingError{Cause: "clock-binding-not-active"}
-	}
+	// Setup may be unbound. BindClock owns receipt validation before any caller.
 	if id == "" || len(id) > 128 || !digestPattern.MatchString(init.Scenario.Digest) || init.Scenario.SchemaVersion != 1 || len(init.Scenario.Gates) == 0 || len(init.Scenario.Gates) > 6 {
 		return nil, errors.New("invalid-init")
 	}
@@ -96,6 +97,9 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 		return nil, err
 	}
 	s := &Session{exchange: make(chan struct{}, 1), digest: init.Scenario.Digest, ID: id, Budget: budget, clock: clock, capabilities: map[operator.Operation]bool{}, requests: map[string]*pending{}, gates: append([]operator.Gate{}, init.Scenario.Gates...)}
+	if init.ClockBinding != nil {
+		s.clockArtifacts = *init.ClockBinding
+	}
 	s.scenario = init.Scenario
 	s.scenario.Gates = slices.Clone(init.Scenario.Gates)
 	for _, op := range init.Capabilities {

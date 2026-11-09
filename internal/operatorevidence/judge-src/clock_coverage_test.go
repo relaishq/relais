@@ -68,10 +68,14 @@ func coveragePoolFixture(t *testing.T, scenario string) previewPoolInput {
 		}
 		e.Attempts[0].Clocks["shared"] = timeline
 	}
+	if scenario == "lease-missing" {
+		n, _ := observe.CoverageNS(e.Windows[0].StartUnixNS)
+		e.MissingIntervals = map[string]observe.CoverageBreak{"shared": {FromUnixSeconds: n / 1e9, UnixSeconds: n / 1e9, Kind: "clock-lease-expired"}}
+	}
 	q := e.Qualification()
 	input.ClockCoverage = &q
 	switch scenario {
-	case "covered", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage":
+	case "covered", "lease-missing", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage":
 	case "missing":
 		input.ClockCoverage = nil
 	case "falsified":
@@ -92,7 +96,7 @@ func coveragePoolFixture(t *testing.T, scenario string) previewPoolInput {
 }
 
 func TestClockCoverageQualifiesPhasesAndPool(t *testing.T) {
-	for _, scenario := range []string{"covered", "missing", "bound", "break", "kill-bracket", "falsified", "independent-failure", "independent-gap-failure", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage"} {
+	for _, scenario := range []string{"covered", "missing", "lease-missing", "bound", "break", "kill-bracket", "falsified", "independent-failure", "independent-gap-failure", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage"} {
 		t.Run(scenario, func(t *testing.T) {
 			input := coveragePoolFixture(t, scenario)
 			got := pooledPreviewMedia(&input)
@@ -113,7 +117,7 @@ func TestClockCoverageQualifiesPhasesAndPool(t *testing.T) {
 			}
 			if scenario != "covered" && scenario != "independent-failure" && scenario != "independent-gap-failure" {
 				wantCause := "clock-coverage-" + scenario
-				if scenario == "repair-gap-with-later-sample" || scenario == "omit-final-coverage" {
+				if scenario == "lease-missing" || scenario == "repair-gap-with-later-sample" || scenario == "omit-final-coverage" {
 					wantCause = "clock-coverage-missing"
 				}
 				if scenario == "omit-frontend-error" {

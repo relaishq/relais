@@ -164,18 +164,25 @@ func TestRepresentationFixtures(t *testing.T) {
 		case "processes.signalNanoseconds":
 			runtime, peer, _ := runtimeFixture(t)
 			respond := peer.respond
-			peer.respond = func(request operator.Request) operator.Reply {
-				if request.Action == "worker-down" {
-					return hostReply(t, req.Inputs[0])
+			stamp := int64(9223372034854775807)
+			want := time.Unix(0, stamp)
+			// Project the old unsigned fixture onto the supported signed range.
+			var envelope map[string]json.RawMessage
+			_ = json.Unmarshal(req.Inputs[0], &envelope)
+			envelope["started"], _ = json.Marshal(want)
+			envelope["ended"], _ = json.Marshal(want)
+			envelope["data"] = json.RawMessage(`{"completed":true,"signalBeforeUnixNs":"9223372034854775807","signalAfterUnixNs":"9223372034854775807"}`)
+			peer.respond = func(q operator.Request) operator.Reply {
+				if q.Action == "worker-down" {
+					return hostReply(t, oracleJSON(envelope))
 				}
-				return respond(request)
+				return respond(q)
 			}
 			actual, err := runtime.Step(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"})
-			var want time.Time
-			_ = json.Unmarshal(res.Value, &want)
 			if err != nil || !actual.Started.Equal(want) {
 				t.Fatal("MUTATION: representation-signal-ns", actual.Started, want, err)
 			}
+
 		default:
 			t.Fatal("unreplayed representation", req.Operation)
 		}

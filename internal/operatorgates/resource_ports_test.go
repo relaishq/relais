@@ -193,6 +193,7 @@ func TestResourceStoreFailoverRequests(t *testing.T) {
 			}
 			return r
 		}}
+		testStoreLease(t, s)
 		store := s.OptionalStore(peer)
 		before, err := store.Observe(context.Background(), time.Minute)
 		if err != nil || before.Primary != "a" {

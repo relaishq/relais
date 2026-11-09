@@ -81,7 +81,7 @@ func TestClockSelectionRefreshLease(t *testing.T) {
 						return out, nil
 					}
 					admittingReads++
-					if mode == "fresh" && admittingReads > 1 || mode == "late" && p.now().Unix() >= 1792886530 {
+					if mode == "fresh" && admittingReads > 1 || mode == "late" && p.now().Unix() >= 1792886536 {
 						return out, nil
 					}
 				}
@@ -97,7 +97,7 @@ func TestClockSelectionRefreshLease(t *testing.T) {
 				} else {
 					var o clocks.LeaseObservation
 					require.NoError(t, json.Unmarshal(doc["lease"], &o))
-					o.ReferenceAgeNS = 3140000000
+					o.ReferenceAgeNS = 6140000000
 					var measured int64
 					_, err = fmt.Sscan(o.MeasuredUnixNS, &measured)
 					require.NoError(t, err)

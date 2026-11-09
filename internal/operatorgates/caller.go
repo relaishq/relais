@@ -25,12 +25,13 @@ type MediaJudge interface {
 // EvidenceRuntime retains survivor phases for one release pin. Collection can
 // append while a measurement retains telemetry; finalization only reads evidence.
 type EvidenceRuntime struct {
-	RunID    string
-	Judge    MediaJudge
-	Coverage func([]observe.CoverageWindow) *clocks.CoverageEvidence
-	mu       sync.Mutex
-	phases   []operatorevidence.Phase
-	missing  bool
+	RunID              string
+	ClockReceiptSHA256 string
+	Judge              MediaJudge
+	Coverage           func([]observe.CoverageWindow) *clocks.CoverageEvidence
+	mu                 sync.Mutex
+	phases             []operatorevidence.Phase
+	missing            bool
 }
 
 func (r *EvidenceRuntime) Add(phase operatorevidence.Phase, missing bool) {
@@ -54,6 +55,7 @@ func (r *EvidenceRuntime) media(ctx context.Context, prepare func(*clocks.Covera
 	if err != nil {
 		return nil, fault("precondition-failed:media-pool")
 	}
+	pool.ClockReceiptSHA256 = r.ClockReceiptSHA256
 	if r.Coverage != nil {
 		pool.ClockCoverage = r.Coverage(operatorevidence.CoverageWindows(pool))
 	}

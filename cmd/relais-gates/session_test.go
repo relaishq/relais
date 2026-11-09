@@ -17,12 +17,14 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/bindingtest"
 	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
 type resourceFixture struct {
+	Clock                bindingtest.Fixture
 	Scenario             operator.Scenario
 	Config               operatorgates.ResourceConfig
 	Inventories          map[string]json.RawMessage
@@ -47,6 +49,34 @@ func sessionFixture(t *testing.T) resourceFixture {
 	}
 	return f
 }
+func (f *resourceFixture) bind(t *testing.T) {
+	t.Helper()
+	var err error
+	f.Clock, err = bindingtest.New(f.Config.Endpoints.RunID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Scenario, err = operator.BuildScenarioIdentity(f.Scenario, f.Clock.Selection.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Config.Bounds = f.Clock.Selection.Receipt.Bounds
+	f.Config.ClockPolicy = f.Clock.Policy
+	f.Config.ClockLeapMode = "unsmeared"
+	f.Config.Endpoints.FrontendControlBoundNS = f.Config.Bounds.FrontendControlBoundNS
+	f.Config.Endpoints.FrontendWorkerBoundNS = f.Config.Bounds.FrontendWorkerBoundNS
+}
+func (f resourceFixture) clockReply(q operator.Request) (operator.Reply, bool) {
+	if q.Action != "clock" {
+		return operator.Reply{}, false
+	}
+	if q.Operation == operator.HostLeaseRead {
+		time.Sleep(20 * time.Millisecond)
+	}
+	raw, _ := json.Marshal(operator.HostOutput{Stdout: f.Clock.Wire(string(q.Script), time.Now())})
+	return operator.Reply{ID: q.ID, Transport: operator.Succeeded, ExitCode: new(int), Payload: raw}, true
+}
+
 func packedHost(t *testing.T, data []byte) json.RawMessage {
 	t.Helper()
 	var b bytes.Buffer
@@ -74,6 +104,7 @@ func TestSessionBinaryUsesResourceSequence(t *testing.T) {
 	for _, mode := range []string{"unknown-start", "unknown-start-evidence", "unknown-create", "not-near", "missing-capability", "definite-refusal", "unknown-inventory"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := sessionFixture(t)
+			fixture.bind(t)
 			config := filepath.Join(t.TempDir(), "config.json")
 			raw, _ := json.Marshal(fixture.Config)
 			if err := os.WriteFile(config, raw, 0600); err != nil {
@@ -90,14 +121,15 @@ func TestSessionBinaryUsesResourceSequence(t *testing.T) {
 				t.Fatal(hello, err)
 			}
 			now := time.Now()
-			init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostExecute, operator.CallerReady, operator.CallerStart, operator.CallerStop, operator.MailboxRead, operator.MailboxCreate}}
+			init := operator.Init{ClockBinding: &fixture.Clock.Artifacts, Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10), Capabilities: []operator.Operation{operator.HostLeaseRead, operator.HostExecute, operator.CallerReady, operator.CallerStart, operator.CallerStop, operator.MailboxRead, operator.MailboxCreate}}
 			if mode == "missing-capability" {
-				init.Capabilities = []operator.Operation{operator.HostExecute, operator.CallerReady, operator.CallerStop, operator.MailboxRead, operator.MailboxCreate}
+				init.Capabilities = []operator.Operation{operator.HostLeaseRead, operator.HostExecute, operator.CallerReady, operator.CallerStop, operator.MailboxRead, operator.MailboxCreate}
 			}
 			if err = peer.Send(ctx, operator.Frame{Type: "init", Session: "run-resources", Init: &init}); err != nil {
 				t.Fatal(err)
 			}
 			requests := []string{}
+			requestCount := 0
 			traces := []operator.Trace{}
 			var final *operator.Result
 			var manifest operatorcaller.Manifest
@@ -109,14 +141,19 @@ func TestSessionBinaryUsesResourceSequence(t *testing.T) {
 				switch f.Type {
 				case "request":
 					q := f.Request
-					requests = append(requests, string(q.Operation)+"/"+q.Target+"/"+q.Action)
-					if q.ID != strconv.Itoa(len(requests)) || q.RemainingMS <= 0 || q.RemainingMS > 15*time.Minute.Milliseconds() || q.DeadlineUnixMS == "" {
+					requestCount++
+					if mode == "unknown-inventory" || requestCount > 12 {
+						requests = append(requests, string(q.Operation)+"/"+q.Target+"/"+q.Action)
+					}
+					if q.ID != strconv.Itoa(requestCount) || q.RemainingMS <= 0 || q.RemainingMS > 15*time.Minute.Milliseconds() || q.DeadlineUnixMS == "" {
 						t.Fatal("MUTATION: session-resource-sequence request identity/deadline", q)
 					}
 					reply := operator.Reply{ID: q.ID, Transport: operator.Succeeded, ExitCode: new(int)}
 					switch q.Operation {
-					case operator.HostExecute:
+					case operator.HostExecute, operator.HostLeaseRead:
 						switch q.Action {
+						case "clock":
+							reply, _ = fixture.clockReply(*q)
 						case "inventory":
 							reply.Payload = packedHost(t, fixture.Inventories[q.Target])
 							if mode == "unknown-inventory" {
@@ -208,6 +245,13 @@ func TestSessionBinaryUsesResourceSequence(t *testing.T) {
 			if mode == "unknown-inventory" {
 				expected = expected[:1]
 			}
+			if mode != "missing-capability" && mode != "unknown-inventory" {
+				leases := []string{}
+				for _, slot := range []string{"relay", "w1", "w2", "shared"} {
+					leases = append(leases, "host.lease-read/"+slot+"/clock")
+				}
+				expected = append(append(append([]string{}, expected[:5]...), leases...), expected[5:]...)
+			}
 			if !reflect.DeepEqual(requests, expected) {
 				t.Fatalf("MUTATION: session-resource-sequence mode=%s requests=%v expected=%v", mode, requests, expected)
 			}
@@ -218,7 +262,7 @@ func TestSessionBinaryUsesResourceSequence(t *testing.T) {
 			if wantLatch && (final.FirstError == nil || final.FirstError.Certainty != operator.Unknown || len(final.Uncertainties) == 0) {
 				t.Fatalf("MUTATION: session-resource-sequence unknown became definite: %+v traces=%v", final, traces)
 			}
-			if mode == "missing-capability" && (len(traces) != 0 || final.Gates[0].Reason != "precondition-failed") {
+			if mode == "missing-capability" && (len(requests) != 0 || final.Gates[0].Reason != "precondition-failed") {
 				t.Fatal("MUTATION: session-resource-sequence fabricated capability", final)
 			}
 		})

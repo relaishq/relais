@@ -103,3 +103,37 @@ func TestClockRecorderRetainsTrackingTimeline(t *testing.T) {
 		t.Fatal("lost recorded timeline", out.String(), r.Err())
 	}
 }
+
+func TestLeaseObservationDiagnostics(t *testing.T) {
+	var output bytes.Buffer
+	recorder := TimingRecorder{Writer: &output}
+	o := clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1793930000100000000", ReferenceUnixNS: "1793930000000000000", ReferenceAgeNS: 100000000, PollSeconds: "1", ResidualPPM: "0", SkewPPM: "0", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 20000000, HostElapsedNS: 50000000}
+	read := LeaseRead{Evidence: clocks.Evidence{Version: 2, Clocks: map[string]clocks.Sample{"relay": {Lease: &o, MeasuredUnixNS: o.MeasuredUnixNS, Tracking: "private-reference", TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{Reference: "private-reference", LeapStatus: "N"}}}}}}, Sent: map[string]time.Duration{"relay": time.Second, "private-reference": 2 * time.Second}}
+	recorder.RecordLeaseRead(read, 2300*time.Millisecond)
+	var got struct {
+		Type       string           `json:"type"`
+		SentNS     map[string]int64 `json:"sentNs"`
+		ReceivedNS int64            `json:"receivedNs"`
+		Evidence   clocks.Evidence  `json:"evidence"`
+	}
+	if json.Unmarshal(output.Bytes(), &got) != nil || got.Type != "clock-lease-observation" || got.SentNS["relay"] != int64(time.Second) || len(got.SentNS) != 1 || got.ReceivedNS != int64(2300*time.Millisecond) || got.Evidence.Clocks["relay"].Lease == nil || got.Evidence.Clocks["relay"].Lease.ReferenceAgeNS != 100000000 || strings.Contains(output.String(), "private-reference") {
+		t.Fatal("MUTATION: lease-observation-diagnostic", output.String())
+	}
+}
+
+func TestLeaseObservationLimit(t *testing.T) {
+	var output bytes.Buffer
+	recorder := TimingRecorder{Writer: &output}
+	for i := 0; i < 257; i++ {
+		recorder.RecordLeaseRead(LeaseRead{}, 0)
+	}
+	recorder.RecordClocks(clocks.Evidence{})
+	recorder.Finish()
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	var final struct {
+		Omitted int `json:"omitted_refreshes"`
+	}
+	if len(lines) != 257 || json.Unmarshal([]byte(lines[len(lines)-1]), &final) != nil || final.Omitted != 2 {
+		t.Fatal("MUTATION: lease-observation-limit", len(lines), final.Omitted)
+	}
+}

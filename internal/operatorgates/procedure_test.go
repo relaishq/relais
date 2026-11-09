@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates/bindingtest"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/oracletest"
@@ -219,11 +220,17 @@ func runtimeFixture(t *testing.T) (*ProcessRuntime, *observationPeer, *[]string)
 		case "inventory":
 			return hostReply(t, fixtures[req.Target])
 		case "clock":
+			if req.Operation == operator.HostLeaseRead || req.Operation == operator.HostLeaseReadBatch {
+				clock.Advance(20 * time.Millisecond)
+				o := bindingtest.Observation(time.Unix(1793930000, 0).Add(clock.Elapsed()))
+				return hostReply(t, oracleJSON(clocks.Sample{MeasuredUnixNS: o.MeasuredUnixNS, Lease: &o, TrackingLog: &clocks.TrackingLog{ReadComplete: true}}))
+			}
 			return hostReply(t, []byte(`{"errorBoundNs":0,"rateErrorPpm":0,"measuredUnixNs":"1792886400000000000"}`))
 		}
 		return hostReply(t, []byte(`{"kind":"ok","started":"1970-01-01T00:16:40Z","ended":"1970-01-01T00:16:40Z","data":{"completed":true}}`))
 	}}
-	runtime := &ProcessRuntime{Session: s, Peer: peer, Config: g.c, Pins: pins, Bounds: &clocks.Bounds{}, BeforeMutation: func(context.Context) error { order = append(order, "fault"); return nil }}
+	runtime := &ProcessRuntime{Session: s, Peer: peer, Config: g.c, Pins: pins, BeforeMutation: func(context.Context) error { order = append(order, "fault"); return nil }}
+	testRuntimeLeases(t, runtime)
 	return runtime, peer, &order
 }
 func TestRuntimeFreshProofAndFaultOrder(t *testing.T) {
@@ -235,16 +242,16 @@ func TestRuntimeFreshProofAndFaultOrder(t *testing.T) {
 			t.Fatalf("MUTATION: fresh-proof-fault-order step %s: %v", op, err)
 		}
 	}
-	expected := "inventory:relay,inventory:w1,inventory:w2,inventory:shared,clock:relay,clock:w1,clock:w2,clock:shared,fault,freeze:shared,inventory:relay,inventory:w1,inventory:w2,inventory:shared,fault,unfreeze:shared"
+	expected := "inventory:relay,inventory:w1,inventory:w2,inventory:shared,clock:relay,clock:w1,clock:w2,clock:shared,fault,freeze:shared,inventory:relay,inventory:w1,inventory:w2,inventory:shared,unfreeze:shared"
 	if strings.Join(*order, ",") != expected {
 		t.Fatalf("MUTATION: fresh-proof-fault-order got %v", *order)
 	}
 }
 func TestRuntimeMissingClockStopsMutation(t *testing.T) {
 	runtime, peer, _ := runtimeFixture(t)
-	runtime.Bounds = nil
+	runtime.Leases = nil
 	_, err := runtime.Step(context.Background(), "freeze", "shared", time.Minute, ProcessExtra{})
-	if code(err) != "missing-clock-assumptions" || peer.sent != 4 {
+	if code(err) != "clock-lease-missing" || peer.sent != 4 {
 		t.Fatal("MUTATION: runtime-clock-proof")
 	}
 }
@@ -484,6 +491,7 @@ func TestOptionalStoreUnknownIsNeverReplayed(t *testing.T) {
 	}
 	s.capabilities[operator.StoreObserve] = true
 	s.capabilities[operator.StoreFailover] = true
+	testStoreLease(t, s)
 	store := s.OptionalStore(peer)
 	if store == nil {
 		t.Fatal("complete optional capability missing")
@@ -626,17 +634,17 @@ func TestFailoverDoesNotReplayUnknownStoreRead(t *testing.T) {
 	}
 }
 
-func TestSignalBracketKeepsUnsignedNanoseconds(t *testing.T) {
+func TestSignalBracketKeepsExactNanoseconds(t *testing.T) {
 	runtime, peer, _ := runtimeFixture(t)
 	respond := peer.respond
 	peer.respond = func(req operator.Request) operator.Reply {
 		if req.Action == "worker-down" {
-			return hostReply(t, []byte(`{"kind":"ok","started":"1970-01-01T00:16:40Z","ended":"1970-01-01T00:16:40Z","data":{"completed":true,"signalBeforeUnixNs":"9999999999999999998","signalAfterUnixNs":"9999999999999999998"}}`))
+			return hostReply(t, []byte(`{"kind":"ok","started":"2262-04-11T23:47:14.854775807Z","ended":"2262-04-11T23:47:14.854775807Z","data":{"completed":true,"signalBeforeUnixNs":"9223372034854775807","signalAfterUnixNs":"9223372034854775807"}}`))
 		}
 		return respond(req)
 	}
 	r, err := runtime.Step(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"})
-	if err != nil || !r.Started.Equal(time.Unix(9999999999, 999999998)) {
+	if err != nil || !r.Started.Equal(time.Unix(0, 9223372034854775807)) {
 		t.Fatal("signal nanoseconds were rounded or overflowed", err, r.Started)
 	}
 }
