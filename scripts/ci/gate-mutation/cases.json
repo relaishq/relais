@@ -3652,7 +3652,7 @@
     "ID": "batch-shared-host-parallel-probes",
     "File": "internal/operatorrehearsal/adapter_batch.go",
     "Function": "executeReadBatch",
-    "Old": "if lease {\n\t\t\tpending.Add(1)",
+    "Old": "if req.Operation == operator.HostLeaseReadBatch {\n\t\t\tpending.Add(1)",
     "New": "if true {\n\t\t\tpending.Add(1)",
     "Test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
     "Marker": "MUTATION: batch-shared-host-serialized",
@@ -5506,9 +5506,9 @@
     "Function": "",
     "Old": "const leaseReadAttempt = 1800 * time.Millisecond",
     "New": "const leaseReadAttempt = 3 * time.Second",
-    "Test": "TestLeaseSlowAdapter/batch=true/retry",
-    "Marker": "MUTATION: lease-slow-adapter",
-    "Package": "./internal/operatorrehearsal"
+    "Test": "TestLeaseAttemptRetryRoom",
+    "Marker": "MUTATION: lease-attempt-retry-room",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "lease-batch-service-budget",
@@ -5631,20 +5631,20 @@
     "Package": "./internal/operatorgates"
   },
   {
-    "ID": "lease-slot-uses-batch-send",
+    "ID": "lease-batch-uses-reply-time",
     "File": "internal/operatorgates/observations.go",
     "Function": "observeHostBatch",
-    "Old": "batchSent+time.Duration(batch.SentAfterNS[i])",
-    "New": "batchSent+0*time.Duration(batch.SentAfterNS[i])",
+    "Old": "var batch operator.HostReadBatchOutput",
+    "New": "var batch operator.HostReadBatchOutput\n\t\tif len(sent) > 0 { for _, slot := range inventory.Slots { sent[0](slot, s.clock.Elapsed()) } }",
     "Test": "TestLeaseSlotExpiry",
-    "Marker": "MUTATION: lease-slot-send",
+    "Marker": "MUTATION: lease-batch-send",
     "Package": "./internal/operatorgates"
   },
   {
     "ID": "lease-batch-serialized",
     "File": "internal/operatorrehearsal/adapter_batch.go",
     "Function": "executeReadBatch",
-    "Old": "if lease {\n\t\t\tpending.Add(1)",
+    "Old": "if req.Operation == operator.HostLeaseReadBatch {\n\t\t\tpending.Add(1)",
     "New": "if false {\n\t\t\tpending.Add(1)",
     "Test": "TestLeaseBatchConcurrentCertainty",
     "Marker": "MUTATION: lease-batch-parallel",
@@ -5659,45 +5659,5 @@
     "Test": "TestLeaseBatchConcurrentCertainty",
     "Marker": "MUTATION: lease-child-certainty",
     "Package": "./internal/operatorrehearsal"
-  },
-  {
-    "ID": "lease-slot-stamped-after-read",
-    "File": "internal/operatorrehearsal/adapter_batch.go",
-    "Function": "executeReadBatch",
-    "Old": "out.Replies[i] = a.executeHost(ctx, child)",
-    "New": "out.Replies[i] = a.executeHost(ctx, child)\n\t\tif lease { out.SentAfterNS[i] = time.Since(started).Nanoseconds() }",
-    "Test": "TestLeaseBatchConcurrentCertainty",
-    "Marker": "MUTATION: lease-slot-timestamp",
-    "Package": "./internal/operatorrehearsal"
-  },
-  {
-    "ID": "lease-batch-extra-timing",
-    "File": "internal/operatorgates/observations.go",
-    "Function": "observeHostBatch",
-    "Old": "len(batch.SentAfterNS) != len(inventory.Slots)",
-    "New": "len(batch.SentAfterNS) < len(inventory.Slots)",
-    "Test": "TestLeaseBatchTimingMalformed",
-    "Marker": "MUTATION: lease-batch-timing",
-    "Package": "./internal/operatorgates"
-  },
-  {
-    "ID": "lease-batch-negative-timing",
-    "File": "internal/operatorgates/observations.go",
-    "Function": "observeHostBatch",
-    "Old": "offset < 0 || time.Duration(offset) > s.clock.Elapsed()-batchSent",
-    "New": "false || time.Duration(offset) > s.clock.Elapsed()-batchSent",
-    "Test": "TestLeaseBatchTimingMalformed",
-    "Marker": "MUTATION: lease-batch-timing",
-    "Package": "./internal/operatorgates"
-  },
-  {
-    "ID": "lease-batch-future-timing",
-    "File": "internal/operatorgates/observations.go",
-    "Function": "observeHostBatch",
-    "Old": "offset < 0 || time.Duration(offset) > s.clock.Elapsed()-batchSent",
-    "New": "offset < 0",
-    "Test": "TestLeaseBatchTimingMalformed",
-    "Marker": "MUTATION: lease-batch-timing",
-    "Package": "./internal/operatorgates"
   }
 ]

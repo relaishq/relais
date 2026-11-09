@@ -1129,17 +1129,12 @@ arguments. A nonempty probe path must match trusted local per-slot configuration
 These observations use the original short refresh deadline, including transport;
 arbitrary host execution and batch scripts retain their 30 s floor.
 Lease batches run their four fixed host reads concurrently and join every child;
-ordinary inventory/script batches stay serial. Each lease child reports the elapsed
-monotonic time from adapter batch entry to its own exec submission. Adding that
-offset to the gate's earlier batch send yields a lower bound on the child's send
-(and hence on reference-update time after subtracting reference age), because
-adapter batch entry cannot precede the gate's send. This contract uses local
-monotonic durations; no host wall clock or remote timestamp supplies gate time.
-Missing, negative or longer-than-exchange offsets refuse as malformed replies;
-there is no batch-send fallback. Serial lease exchanges already have independent
-gate send times; the production adapter advertises concurrent lease batches.
-A slow child can delay collection but cannot move any other child's immutable
-expiry. Every child's transport certainty is retained; unknown children latch.
+ordinary inventory/script batches stay serial. Every batch child's lease is anchored
+to the gate's own monotonic request-send time after the send lock. Adapter timing
+claims cannot move that anchor. Parallel collection still charges the entire batch
+round trip (about 0.33 s warm) to every lease. Serial exchanges use their own gate
+send times. Every child's certainty is retained; unknown children latch, and a
+reread of the same reference cannot extend its expiry.
 Each whole observation (serial or batch) has a 1.8 s attempt timeout,
 including queue and transport. A retry that cannot fit that timeout within the
 original 4P deadline ends with `clock-lease-expired`; the send lock rechecks the

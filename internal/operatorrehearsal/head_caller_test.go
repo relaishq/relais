@@ -368,9 +368,6 @@ func TestClockFalsificationSeedsLaterSequenceWindows(t *testing.T) {
 				return operator.Reply{Transport: operator.Failed}
 			}
 			out := operator.HostReadBatchOutput{}
-			if req.Operation == operator.HostLeaseReadBatch {
-				out.SentAfterNS = make([]int64, 4)
-			}
 			for _, read := range reads.Reads {
 				data := inventories[read.Target]
 				if req.Action == "clock" {

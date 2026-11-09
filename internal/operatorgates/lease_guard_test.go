@@ -219,9 +219,6 @@ func TestLeaseReadRequestSend(t *testing.T) {
 				return hostReply(t, raw)
 			}
 			out := operator.HostReadBatchOutput{}
-			if req.Operation == operator.HostLeaseReadBatch {
-				out.SentAfterNS = []int64{10000000, 20000000, 30000000, 40000000}
-			}
 			for _, slot := range inventory.Slots {
 				r := hostReply(t, raw)
 				r.ID = slot
@@ -234,9 +231,9 @@ func TestLeaseReadRequestSend(t *testing.T) {
 		for i, slot := range inventory.Slots {
 			want := time.Duration(i) * 100 * time.Millisecond
 			if batch {
-				want = time.Duration(i+1) * 10 * time.Millisecond
+				want = 0
 			}
-			require.Equal(t, want, r.Sent[slot], "MUTATION: lease-slot-send")
+			require.Equal(t, want, r.Sent[slot], "MUTATION: lease-batch-send")
 		}
 	}
 }
@@ -306,5 +303,36 @@ func TestLeasePreflightErrors(t *testing.T) {
 			_, err = r.StepWithLeases(context.Background(), "freeze", "shared", time.Minute, ProcessExtra{}, LeaseStep{Guard: g})
 		}
 		require.EqualError(t, err, "precondition-failed:clocks")
+	}
+}
+
+// The first slow read reuses the expired reference. The second gets a new one.
+// Both complete within 4P only when a full attempt still fits after the poll.
+func TestLeaseAttemptRetryRoom(t *testing.T) {
+	c := &leaseTestClock{tick: time.Second}
+	g, r := leaseGuardFixture(t, c)
+	c.advance(2 * time.Second)
+	start := c.Elapsed()
+	calls := 0
+	g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
+	g.read = func(context.Context, time.Duration) (LeaseRead, error) {
+		calls++
+		sent := c.Elapsed()
+		c.advance(1700 * time.Millisecond)
+		for slot, sample := range r.Evidence.Clocks {
+			o := *sample.Lease
+			if calls == 2 {
+				o.ReferenceUnixNS = "1793930001000000000"
+				o.MeasuredUnixNS = "1793930001100000000"
+			}
+			sample.Lease = &o
+			r.Evidence.Clocks[slot] = sample
+			r.Sent[slot] = sent
+		}
+		return r, nil
+	}
+	err := g.Refresh(context.Background(), time.Minute)
+	if err != nil || calls != 2 || c.Elapsed()-start > 4*time.Second || g.Check() != nil {
+		t.Fatal("MUTATION: lease-attempt-retry-room", err, calls, c.Elapsed()-start)
 	}
 }

@@ -53,7 +53,6 @@ func TestLeaseBatchConcurrentCertainty(t *testing.T) {
 		if len(entered) != 4 {
 			t.Fatal("MUTATION: lease-batch-parallel", len(entered))
 		}
-		time.Sleep(100 * time.Millisecond)
 		for range 4 {
 			release <- struct{}{}
 		}
@@ -61,12 +60,6 @@ func TestLeaseBatchConcurrentCertainty(t *testing.T) {
 		reply := <-done
 		var out operator.HostReadBatchOutput
 		require.NoError(t, json.Unmarshal(reply.Payload, &out))
-		require.Len(t, out.SentAfterNS, 4)
-		for _, offset := range out.SentAfterNS {
-			if offset != 0 {
-				t.Fatal("MUTATION: lease-slot-timestamp", out.SentAfterNS)
-			}
-		}
 		want := []operator.Certainty{operator.Succeeded, operator.Failed, operator.Unknown, operator.Succeeded}
 		for i, child := range out.Replies {
 			if child.ID != Slots[i] || child.Transport != want[i] {

@@ -522,13 +522,9 @@
     "lease-observation-age-stripped",
     "lease-observation-source-leak",
     "lease-observation-unbounded",
-    "lease-slot-uses-batch-send",
+    "lease-batch-uses-reply-time",
     "lease-batch-serialized",
-    "lease-child-unknown-erased",
-    "lease-slot-stamped-after-read",
-    "lease-batch-extra-timing",
-    "lease-batch-negative-timing",
-    "lease-batch-future-timing"
+    "lease-child-unknown-erased"
   ],
   "killed": [
     {
@@ -4381,8 +4377,8 @@
     },
     {
       "id": "lease-attempt-no-retry-room",
-      "test": "TestLeaseSlowAdapter/batch=true/retry",
-      "package": "./internal/operatorrehearsal",
+      "test": "TestLeaseAttemptRetryRoom",
+      "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""
     },
@@ -4471,7 +4467,7 @@
       "guardFingerprint": ""
     },
     {
-      "id": "lease-slot-uses-batch-send",
+      "id": "lease-batch-uses-reply-time",
       "test": "TestLeaseSlotExpiry",
       "package": "./internal/operatorgates",
       "evidence": "killed",
@@ -4488,34 +4484,6 @@
       "id": "lease-child-unknown-erased",
       "test": "TestLeaseBatchConcurrentCertainty",
       "package": "./internal/operatorrehearsal",
-      "evidence": "killed",
-      "guardFingerprint": ""
-    },
-    {
-      "id": "lease-slot-stamped-after-read",
-      "test": "TestLeaseBatchConcurrentCertainty",
-      "package": "./internal/operatorrehearsal",
-      "evidence": "killed",
-      "guardFingerprint": ""
-    },
-    {
-      "id": "lease-batch-extra-timing",
-      "test": "TestLeaseBatchTimingMalformed",
-      "package": "./internal/operatorgates",
-      "evidence": "killed",
-      "guardFingerprint": ""
-    },
-    {
-      "id": "lease-batch-negative-timing",
-      "test": "TestLeaseBatchTimingMalformed",
-      "package": "./internal/operatorgates",
-      "evidence": "killed",
-      "guardFingerprint": ""
-    },
-    {
-      "id": "lease-batch-future-timing",
-      "test": "TestLeaseBatchTimingMalformed",
-      "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": ""
     }

@@ -28,9 +28,6 @@ func TestBatchedProofFailureAndUncertainty(t *testing.T) {
 					t.Fatal(err)
 				}
 				out := operator.HostReadBatchOutput{}
-				if req.Operation == operator.HostLeaseReadBatch {
-					out.SentAfterNS = make([]int64, 4)
-				}
 				for _, read := range args.Reads {
 					child := original(operator.Request{Operation: req.Operation, Action: req.Action, Target: read.Target})
 					child.ID = read.Target
@@ -136,9 +133,6 @@ func TestLeaseBatchOuterUncertainty(t *testing.T) {
 			r.Session.capabilities[operator.HostLeaseReadBatch] = true
 			p.respond = func(req operator.Request) operator.Reply {
 				out := operator.HostReadBatchOutput{}
-				if req.Operation == operator.HostLeaseReadBatch {
-					out.SentAfterNS = make([]int64, 4)
-				}
 				for _, slot := range inventory.Slots {
 					child := hostReply(t, []byte(`{"errorBoundNs":0,"rateErrorPpm":0,"measuredUnixNs":"1793930000000000000"}`))
 					child.ID = slot

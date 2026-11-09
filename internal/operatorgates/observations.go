@@ -204,11 +204,6 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 			s.observationFailure("hosts", action, err)
 		}
 	}()
-	var batchSent time.Duration
-	hooks := observationSendHooks(inventory.Slots, sent)
-	if op == operator.HostLeaseReadBatch {
-		hooks = []ExchangeHooks{{Sent: func(at time.Duration) { batchSent = at }}}
-	}
 	var observed error
 	var childFailure *operator.Uncertainty
 	outcome, err := s.Exchange(ctx, p, op, "hosts", action, raw, nil, end, func(reply operator.Reply) operator.Certainty {
@@ -252,21 +247,6 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 				return unknown(inventory.Slots[i], child, "truncated-output")
 			}
 		}
-		if op == operator.HostLeaseReadBatch {
-			if len(batch.SentAfterNS) != len(inventory.Slots) {
-				return operator.Unknown
-			}
-			for _, offset := range batch.SentAfterNS {
-				if offset < 0 || time.Duration(offset) > s.clock.Elapsed()-batchSent {
-					return operator.Unknown
-				}
-			}
-			if len(sent) > 0 {
-				for i, slot := range inventory.Slots {
-					sent[0](slot, batchSent+time.Duration(batch.SentAfterNS[i]))
-				}
-			}
-		}
 		for i, child := range batch.Replies {
 			var e error
 			if child.NotSubmitted {
@@ -289,7 +269,7 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 			return operator.Failed
 		}
 		return operator.Succeeded
-	}, hooks...)
+	}, observationSendHooks(inventory.Slots, sent)...)
 	if childFailure != nil {
 		// Exchange has latched the unknown result before diagnostic callbacks.
 		s.noteUnknownHost(childFailure.RequestID, childFailure.Target, action, childFailure.Rule)
