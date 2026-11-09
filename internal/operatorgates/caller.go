@@ -47,6 +47,15 @@ func (r *EvidenceRuntime) Media(ctx context.Context) (*MediaSummary, error) {
 	return r.media(ctx, nil)
 }
 
+// snapshot retains the exact cumulative phase population and missing-evidence
+// latch of a gate judgment. Later gates cannot change that population.
+func (r *EvidenceRuntime) snapshot() *EvidenceRuntime {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return &EvidenceRuntime{RunID: r.RunID, ClockReceiptSHA256: r.ClockReceiptSHA256, Judge: r.Judge, Coverage: r.Coverage,
+		phases: append([]operatorevidence.Phase{}, r.phases...), missing: r.missing}
+}
+
 func (r *EvidenceRuntime) media(ctx context.Context, prepare func(*clocks.CoverageEvidence) *clocks.CoverageEvidence) (*MediaSummary, error) {
 	r.mu.Lock()
 	phases, missing := append([]operatorevidence.Phase{}, r.phases...), r.missing
@@ -70,7 +79,7 @@ func (r *EvidenceRuntime) media(ctx context.Context, prepare func(*clocks.Covera
 const judgeReserve = PoolReserve - 10*time.Second
 
 // finalizePool drains within the original final collection cutoff before the
-// judge receives its input. Phase judgments continue to use snapshots only.
+// judge receives its input. Gate media can then be refreshed with that snapshot.
 func (s *Session) finalizePool(ctx context.Context, end time.Duration, pool *EvidenceRuntime, bounds clocks.Bounds, read ClockCoverageReader, pause func(context.Context, time.Duration) error) (*MediaSummary, *clocks.CoverageEvidence, error) {
 	var coverage *clocks.CoverageEvidence
 	media, err := pool.media(ctx, func(e *clocks.CoverageEvidence) *clocks.CoverageEvidence {

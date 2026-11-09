@@ -69,12 +69,18 @@ func TestFinalDrainQualificationAndSafety(t *testing.T) {
 					coverage = e
 					return m, err
 				},
+				RefreshMedia: func(ctx context.Context, _ operator.Gate) (*MediaSummary, error) {
+					return pool.media(ctx, func(*clocks.CoverageEvidence) *clocks.CoverageEvidence { return coverage })
+				},
 			})
 			require.NotNil(t, out.Pool)
 			switch mode {
 			case "closed":
 				if out.Status != operator.Passed || !coverage.DrainComplete {
 					t.Fatal("MUTATION: postjudge-drain", out)
+				}
+				if out.Procedures[0].Media.Status != operator.Passed {
+					t.Fatal("MUTATION: gate-media-before-drain", out.Procedures[0].Media)
 				}
 			case "known-failure":
 				if out.Status != operator.Failure || out.Pool.Status != operator.Failure {
@@ -86,6 +92,13 @@ func TestFinalDrainQualificationAndSafety(t *testing.T) {
 			default:
 				require.Equal(t, operator.Inconclusive, out.Pool.Status)
 				require.Equal(t, operator.Inconclusive, out.Status)
+				require.Equal(t, operator.Inconclusive, out.Procedures[0].Media.Status)
+			}
+			if mode == "break" {
+				require.NotEmpty(t, coverage.MissingIntervals)
+				for _, media := range []*MediaSummary{out.Procedures[0].Media, out.Pool} {
+					require.Contains(t, media.UndecidedMetrics[0].Causes, "clock-coverage-missing")
+				}
 			}
 			if mode == "open" || mode == "read-error" || mode == "missing-reader" {
 				require.Equal(t, before, out.Pool)

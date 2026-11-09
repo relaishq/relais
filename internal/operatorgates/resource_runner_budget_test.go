@@ -27,7 +27,7 @@ import (
 // case retains one receipt and checks that open-tail drainage happens once,
 // with byte-identical coverage in the final judge input and report.
 func TestResourceRunnerCallerStartBudget(t *testing.T) {
-	for _, mode := range []string{"two-minute-preparation", "two-minute-caller-start", "late-caller-start", "coverage-drain", "coverage-skipped"} {
+	for _, mode := range []string{"two-minute-preparation", "two-minute-caller-start", "late-caller-start", "coverage-drain", "coverage-skipped", "coverage-judge-error"} {
 		t.Run(mode, func(t *testing.T) {
 			coverageMode := strings.HasPrefix(mode, "coverage-")
 			runtime, peer, _ := runtimeFixture(t)
@@ -190,11 +190,19 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			runner.Config.Endpoints.FrontendControlBoundNS = configured.Bounds.FrontendControlBoundNS
 			runner.Config.Endpoints.FrontendWorkerBoundNS = configured.Bounds.FrontendWorkerBoundNS
 			runner.Config.Endpoints.DriftPPM = 100
+			judgeCalls := 0
 			if coverageMode {
 				runner.Judge = mediaJudgeFunc(func(_ context.Context, p operatorevidence.Pool) (operatorevidence.Summary, error) {
+					judgeCalls++
+					if mode == "coverage-judge-error" {
+						if judgeCalls == 1 {
+							return operatorevidence.Summary{}, fmt.Errorf("judge-unavailable")
+						}
+						return operatorevidence.Summary{Status: operator.Passed}, nil
+					}
 					var err error
 					judgedCoverage, err = json.Marshal(p.ClockCoverage)
-					return operatorevidence.Summary{Status: operator.Inconclusive}, err
+					return operatorevidence.Summary{Status: operator.Inconclusive, InconclusiveMetrics: judgeCalls}, err
 				})
 				runner.CoverageRead = func(context.Context, string, string) (string, error) {
 					drainReads++
@@ -208,6 +216,9 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 				t.Fatal("MUTATION: lease-observation-wired", leaseDiagnostics.String())
 			}
 			if mode == "coverage-drain" {
+				if judgeCalls != 3 || result.Procedures[0].Media.InconclusiveMetrics != judgeCalls {
+					t.Fatal("MUTATION: resource-gate-media-refresh", judgeCalls, result.Procedures)
+				}
 				reportCoverage, err := json.Marshal(result.ClockCoverage)
 				if err != nil || drainReads != 40 || result.ClockCoverage == nil || len(result.ClockCoverage.Windows) != 1 || len(result.ClockCoverage.DrainAttempts) != 10 || string(judgedCoverage) != string(reportCoverage) {
 					t.Fatalf("MUTATION: resource-final-drain reads=%d procedures=%+v", drainReads, result.Procedures)
@@ -220,6 +231,9 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 				if json.Unmarshal(judgedCoverage, &input) != nil || len(input.DrainAttempts) != 0 || drainReads == 0 {
 					t.Fatal("MUTATION: coverage-prepared", drainReads, "remaining", s.Budget.Remaining(), "report-drain", len(result.ClockCoverage.DrainAttempts), "windows", len(result.ClockCoverage.Windows), "complete", result.ClockCoverage.DrainComplete)
 				}
+			}
+			if mode == "coverage-judge-error" && (result.Status == operator.Passed || result.Gates[0].Status == operator.Passed || result.Pool.Status != operator.Passed || judgeCalls != 2) {
+				t.Fatal("MUTATION: gate-media-initial-error", judgeCalls, result)
 			}
 			if !prepared {
 				t.Fatal("caller preparation was not exercised")

@@ -555,7 +555,15 @@
     "rollback-empty-new-accepted",
     "rollback-short-prefix-dropped",
     "rollback-short-prefix-expanded",
-    "lease-coverage-as-break"
+    "lease-coverage-as-break",
+    "gate-media-before-drain",
+    "gate-media-refresh-error-hidden",
+    "gate-media-refresh-failure-hidden",
+    "gate-media-prior-failure-hidden",
+    "gate-media-population-missing",
+    "gate-media-population-dropped",
+    "resource-gate-media-refresh-skipped",
+    "gate-media-initial-error-hidden"
   ],
   "killed": [
     {
@@ -4734,6 +4742,54 @@
       "package": "./internal/operatorgates/clocks",
       "evidence": "killed",
       "guardFingerprint": ""
+    },
+    {
+      "id": "gate-media-before-drain",
+      "test": "TestFinalDrainQualificationAndSafety/closed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-refresh-error-hidden",
+      "test": "TestGateMediaRefreshSafety/error",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-refresh-failure-hidden",
+      "test": "TestGateMediaRefreshSafety/refresh-failure",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-prior-failure-hidden",
+      "test": "TestGateMediaRefreshSafety/prior-failure",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-population-missing",
+      "test": "TestEvidenceSnapshotRetainsGatePopulation",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-population-dropped",
+      "test": "TestEvidenceSnapshotRetainsGatePopulation",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "resource-gate-media-refresh-skipped",
+      "test": "TestResourceRunnerCallerStartBudget/coverage-drain",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-initial-error-hidden",
+      "test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
     }
   ],
   "retired": [
