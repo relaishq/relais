@@ -49,7 +49,7 @@ func TestGateMediaRefreshSafety(t *testing.T) {
 						t.Fatal("refresh extended judge deadline")
 					}
 					if mode == "error" {
-						return &MediaSummary{Status: operator.Passed}, fmt.Errorf("judge-unavailable")
+						return &MediaSummary{Status: operator.Passed}, fmt.Errorf("private-judge-output")
 					}
 					if mode == "nil" {
 						return nil, nil
@@ -75,6 +75,34 @@ func TestGateMediaRefreshSafety(t *testing.T) {
 			}
 			if mode == "prior-failure" && out.Procedures[0].Media.Status != operator.Failure {
 				t.Fatal("MUTATION: gate-media-prior-failure", out.Procedures[0].Media)
+			}
+			if mode == "error" && s.Final(out.Gates).Diagnostics[0].Reason != "media-refresh-unavailable" {
+				t.Fatal("MUTATION: gate-media-refresh-error-diagnostic", s.Final(out.Gates).Diagnostics)
+			}
+		})
+	}
+}
+
+func TestGateMediaRefreshLowersPassedGate(t *testing.T) {
+	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-falsified"} {
+		t.Run(cause, func(t *testing.T) {
+			s, _ := coverageFixtureSession(t)
+			s.gates = []operator.Gate{operator.Failover, operator.Load}
+			out := s.RunSequence(context.Background(), SequencePorts{
+				Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
+					return ProcedureResult{Completed: true, Status: operator.Passed, Media: &MediaSummary{Status: operator.Passed}}
+				},
+				Finalize: func(context.Context, time.Duration) (*MediaSummary, error) {
+					return &MediaSummary{Status: operator.Passed}, nil
+				},
+				RefreshMedia: func(context.Context, operator.Gate) (*MediaSummary, error) {
+					return &MediaSummary{Status: operator.Inconclusive, UndecidedMetrics: []operatorevidence.UndecidedMetric{{Metric: "first_content", Causes: []string{cause}}}}, nil
+				},
+			})
+			for i, gate := range out.Gates {
+				if out.Status != operator.Inconclusive || out.Pool.Status != operator.Passed || gate.Status != operator.Inconclusive || out.Procedures[i].Status != operator.Inconclusive || out.Procedures[i].Media.UndecidedMetrics[0].Causes[0] != cause {
+					t.Fatal("MUTATION: gate-media-refresh-passed-status", out)
+				}
 			}
 		})
 	}

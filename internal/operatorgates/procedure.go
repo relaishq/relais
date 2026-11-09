@@ -158,7 +158,8 @@ type ProcessEvidence struct {
 	RelayConnectionInvariants string  `json:"relayConnectionInvariants,omitempty"`
 }
 type ProcedureResult struct {
-	ProcedureReason string `json:"-"`
+	ProcedureReason    string `json:"-"`
+	MediaRefreshReason string `json:"-"`
 	// A procedure deadline alone does not establish the caller stop's outcome.
 	StopDeadlineExpired bool `json:"-"`
 	// Completed records procedure completion independently of strict media qualification.

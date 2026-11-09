@@ -6049,5 +6049,55 @@
     "Test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
     "Marker": "MUTATION: gate-media-initial-error",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "gate-media-refresh-passed-status",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "if media.Status != operator.Passed && out.Gates[i].Status == operator.Passed {",
+    "New": "if false {",
+    "Test": "TestGateMediaRefreshLowersPassedGate/clock-coverage-missing",
+    "Marker": "MUTATION: gate-media-refresh-passed-status",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-pool-input-before-drain",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "finalizePool",
+    "Old": "return coverage",
+    "New": "return e",
+    "Test": "TestResourceRunnerCallerStartBudget/coverage-drain",
+    "Marker": "MUTATION: resource-final-drain",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "gate-media-refresh-error-diagnostic",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "out.Procedures[i].MediaRefreshReason = \"media-refresh-unavailable\"",
+    "New": "out.Procedures[i].MediaRefreshReason = \"\"",
+    "Test": "TestGateMediaRefreshSafety/error",
+    "Marker": "MUTATION: gate-media-refresh-error-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "gate-media-refresh-duration-zero",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordMediaRefresh",
+    "Old": "int64(elapsed)",
+    "New": "int64(0)",
+    "Test": "TestMediaRefreshTimingRecordsDurationAndFixedReason",
+    "Marker": "MUTATION: gate-media-refresh-duration",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "gate-media-refresh-timing-unwired",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Old": "r.Timing.RecordMediaRefresh(gate, time.Since(started), err != nil)",
+    "New": "_ = time.Since(started)",
+    "Test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
+    "Marker": "MUTATION: gate-media-refresh-timing",
+    "Package": "./internal/operatorgates"
   }
 ]

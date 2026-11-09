@@ -155,6 +155,9 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 					continue
 				}
 				media, err := p.RefreshMedia(poolCtx, out.Gates[i].Gate)
+				if err != nil {
+					out.Procedures[i].MediaRefreshReason = "media-refresh-unavailable"
+				}
 				if media != nil && media.Status == operator.Failure {
 					out.Procedures[i].Media = media
 					out.Procedures[i].Status, out.Gates[i].Status = operator.Failure, operator.Failure
@@ -170,6 +173,9 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 						}
 					}
 					out.Procedures[i].Media = media
+					if media.Status != operator.Passed && out.Gates[i].Status == operator.Passed {
+						out.Procedures[i].Status, out.Gates[i].Status = operator.Inconclusive, operator.Inconclusive
+					}
 				}
 			}
 		}

@@ -1002,7 +1002,12 @@ coverage snapshot. Later phases do not enter that gate's population. A failed
 or unavailable judgment cannot become a pass. Final pool preparation drains
 tracking tails before constructing the final judge input, within the original
 pool collection cutoff, leaving 110 seconds of the existing two-minute pool
-budget for the judge.
+budget shared by the pool judgment and every gate refresh. A late refresh
+leaves a gate Inconclusive; lateness never creates Failure. A proved independent
+failure remains Failure. All judgments share the original pool deadline.
+Each refresh writes a `gate-media-refresh` host diagnostic with its gate,
+`durationNs` and the fixed `media-refresh-unavailable` reason on error. The gate
+diagnostic also retains this reason; raw judge error text is never published.
 When less time remains, drain stops at that reserve or is skipped.
 Falsification observed during drainage adds `clock-coverage-falsified` to the final judge input and fails closed.
 A clean closing tail can remove `clock-coverage-missing` qualification;

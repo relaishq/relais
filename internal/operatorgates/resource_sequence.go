@@ -346,7 +346,13 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			result.PoolError = err != nil
 			return summary, err
 		},
-		RefreshMedia: func(ctx context.Context, gate operator.Gate) (*MediaSummary, error) {
+		RefreshMedia: func(ctx context.Context, gate operator.Gate) (media *MediaSummary, err error) {
+			started := time.Now()
+			defer func() {
+				if r.Timing != nil {
+					r.Timing.RecordMediaRefresh(gate, time.Since(started), err != nil)
+				}
+			}()
 			if err := gateMediaErrors[gate]; err != nil {
 				return nil, err
 			}

@@ -563,7 +563,12 @@
     "gate-media-population-missing",
     "gate-media-population-dropped",
     "resource-gate-media-refresh-skipped",
-    "gate-media-initial-error-hidden"
+    "gate-media-initial-error-hidden",
+    "gate-media-refresh-passed-status",
+    "resource-pool-input-before-drain",
+    "gate-media-refresh-error-diagnostic",
+    "gate-media-refresh-duration-zero",
+    "gate-media-refresh-timing-unwired"
   ],
   "killed": [
     {
@@ -4787,6 +4792,36 @@
     },
     {
       "id": "gate-media-initial-error-hidden",
+      "test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-refresh-passed-status",
+      "test": "TestGateMediaRefreshLowersPassedGate/clock-coverage-missing",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "resource-pool-input-before-drain",
+      "test": "TestResourceRunnerCallerStartBudget/coverage-drain",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-refresh-error-diagnostic",
+      "test": "TestGateMediaRefreshSafety/error",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-refresh-duration-zero",
+      "test": "TestMediaRefreshTimingRecordsDurationAndFixedReason",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-media-refresh-timing-unwired",
       "test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
       "package": "./internal/operatorgates",
       "evidence": "killed"

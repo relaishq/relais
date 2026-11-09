@@ -191,6 +191,7 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			runner.Config.Endpoints.FrontendWorkerBoundNS = configured.Bounds.FrontendWorkerBoundNS
 			runner.Config.Endpoints.DriftPPM = 100
 			judgeCalls := 0
+			var poolJudgedCoverage []byte
 			if coverageMode {
 				runner.Judge = mediaJudgeFunc(func(_ context.Context, p operatorevidence.Pool) (operatorevidence.Summary, error) {
 					judgeCalls++
@@ -202,6 +203,9 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 					}
 					var err error
 					judgedCoverage, err = json.Marshal(p.ClockCoverage)
+					if judgeCalls == 2 {
+						poolJudgedCoverage = append([]byte{}, judgedCoverage...)
+					}
 					return operatorevidence.Summary{Status: operator.Inconclusive, InconclusiveMetrics: judgeCalls}, err
 				})
 				runner.CoverageRead = func(context.Context, string, string) (string, error) {
@@ -212,6 +216,33 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			var leaseDiagnostics bytes.Buffer
 			runner.Timing = &TimingRecorder{Writer: &leaseDiagnostics}
 			runner.Run(context.Background(), s, peer)
+			if mode == "coverage-judge-error" && (result.Status == operator.Passed || result.Gates[0].Status == operator.Passed || result.Pool.Status != operator.Passed || judgeCalls != 2) {
+				t.Fatal("MUTATION: gate-media-initial-error", judgeCalls, result)
+			}
+			if coverageMode {
+				refreshes := 0
+				for _, line := range strings.Split(leaseDiagnostics.String(), "\n") {
+					if !strings.Contains(line, `"type":"gate-media-refresh"`) {
+						continue
+					}
+					var row struct {
+						Gate       operator.Gate `json:"gate"`
+						DurationNS *int64        `json:"durationNs"`
+						Reason     string        `json:"reason"`
+					}
+					want := ""
+					if mode == "coverage-judge-error" {
+						want = "media-refresh-unavailable"
+					}
+					if json.Unmarshal([]byte(line), &row) != nil || row.Gate != operator.Rollout || row.DurationNS == nil || *row.DurationNS < 0 || row.Reason != want {
+						t.Fatal("MUTATION: gate-media-refresh-timing", line)
+					}
+					refreshes++
+				}
+				if refreshes != 1 {
+					t.Fatal("MUTATION: gate-media-refresh-timing", refreshes)
+				}
+			}
 			if !strings.Contains(leaseDiagnostics.String(), `"type":"clock-lease-observation"`) {
 				t.Fatal("MUTATION: lease-observation-wired", leaseDiagnostics.String())
 			}
@@ -220,7 +251,7 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 					t.Fatal("MUTATION: resource-gate-media-refresh", judgeCalls, result.Procedures)
 				}
 				reportCoverage, err := json.Marshal(result.ClockCoverage)
-				if err != nil || drainReads != 40 || result.ClockCoverage == nil || len(result.ClockCoverage.Windows) != 1 || len(result.ClockCoverage.DrainAttempts) != 10 || string(judgedCoverage) != string(reportCoverage) {
+				if err != nil || drainReads != 40 || result.ClockCoverage == nil || len(result.ClockCoverage.Windows) != 1 || len(result.ClockCoverage.DrainAttempts) != 10 || string(poolJudgedCoverage) != string(reportCoverage) {
 					t.Fatalf("MUTATION: resource-final-drain reads=%d procedures=%+v", drainReads, result.Procedures)
 				}
 			}
@@ -231,9 +262,6 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 				if json.Unmarshal(judgedCoverage, &input) != nil || len(input.DrainAttempts) != 0 || drainReads == 0 {
 					t.Fatal("MUTATION: coverage-prepared", drainReads, "remaining", s.Budget.Remaining(), "report-drain", len(result.ClockCoverage.DrainAttempts), "windows", len(result.ClockCoverage.Windows), "complete", result.ClockCoverage.DrainComplete)
 				}
-			}
-			if mode == "coverage-judge-error" && (result.Status == operator.Passed || result.Gates[0].Status == operator.Passed || result.Pool.Status != operator.Passed || judgeCalls != 2) {
-				t.Fatal("MUTATION: gate-media-initial-error", judgeCalls, result)
 			}
 			if !prepared {
 				t.Fatal("caller preparation was not exercised")
