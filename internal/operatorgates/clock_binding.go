@@ -104,7 +104,7 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 
 // leaseReadAttempt bounds a whole observation, including send-lock queueing.
 // Four sequential lease helpers measured 1.2–1.57 s including process startup.
-// Two attempts and two 100 ms polls fit inside 4P when P is one second.
+// Two attempts and two 100 ms polls fit inside 10P when P is one second.
 const leaseReadAttempt = 1800 * time.Millisecond
 
 // Reserve a complete serial read: observed warm reads were 300–390 ms,

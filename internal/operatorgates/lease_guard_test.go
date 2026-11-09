@@ -59,7 +59,7 @@ func TestLeaseGuardChecks(t *testing.T) {
 				delete(g.leases, "w2")
 				want = "clock-lease-missing"
 			case "expired":
-				c.advance(2 * time.Second)
+				c.advance(5 * time.Second)
 				want = "clock-lease-expired"
 			case "control":
 				r.Evidence.Clocks["shared"].Lease.ErrorBoundNS = 120000
@@ -113,7 +113,7 @@ func TestLeaseGuardQueuedExpiry(t *testing.T) {
 		done <- err
 	}()
 	<-ready
-	c.advance(2 * time.Second)
+	c.advance(5 * time.Second)
 	<-s.exchange
 	err := <-done
 	if err == nil || p.sent != 0 || len(s.requests) != 0 {
@@ -132,7 +132,7 @@ func TestLeaseGuardArmAndRestore(t *testing.T) {
 			r.Session.clock, r.Session.Budget.clock = c, c
 			g, _ := leaseGuardFixture(t, c)
 			if mode == "arm" {
-				r.BeforeMutation = func(context.Context) error { c.advance(2 * time.Second); return nil }
+				r.BeforeMutation = func(context.Context) error { c.advance(5 * time.Second); return nil }
 			} else {
 				g.invalid = true
 				r.BeforeMutation = func(context.Context) error { return fmt.Errorf("arm must be bypassed") }
@@ -177,7 +177,7 @@ func TestLeaseGuardBoundedRefresh(t *testing.T) {
 	for _, fresh := range []bool{true, false} {
 		c := &leaseTestClock{tick: time.Second}
 		g, r := leaseGuardFixture(t, c)
-		c.advance(2 * time.Second)
+		c.advance(5 * time.Second)
 		start := c.Elapsed()
 		calls := 0
 		g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
@@ -202,8 +202,8 @@ func TestLeaseGuardBoundedRefresh(t *testing.T) {
 			require.NoError(t, err)
 		} else {
 			require.EqualError(t, err, "clock-lease-expired")
-			require.GreaterOrEqual(t, c.Elapsed()-start, 4*time.Second-leaseReadAttempt)
-			require.Less(t, c.Elapsed()-start, 4*time.Second)
+			require.GreaterOrEqual(t, c.Elapsed()-start, 10*time.Second-leaseReadAttempt)
+			require.Less(t, c.Elapsed()-start, 10*time.Second)
 		}
 	}
 }
@@ -307,11 +307,11 @@ func TestLeasePreflightErrors(t *testing.T) {
 }
 
 // The first slow read reuses the expired reference. The second gets a new one.
-// Both complete within 4P only when a full attempt still fits after the poll.
+// Both complete within the four seconds left in the parent deadline.
 func TestLeaseAttemptRetryRoom(t *testing.T) {
 	c := &leaseTestClock{tick: time.Second}
 	g, r := leaseGuardFixture(t, c)
-	c.advance(2 * time.Second)
+	c.advance(5 * time.Second)
 	start := c.Elapsed()
 	calls := 0
 	g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
@@ -331,8 +331,43 @@ func TestLeaseAttemptRetryRoom(t *testing.T) {
 		}
 		return r, nil
 	}
-	err := g.Refresh(context.Background(), time.Minute)
+	err := g.Refresh(context.Background(), start+4*time.Second)
 	if err != nil || calls != 2 || c.Elapsed()-start > 4*time.Second || g.Check() != nil {
 		t.Fatal("MUTATION: lease-attempt-retry-room", err, calls, c.Elapsed()-start)
+	}
+}
+
+func TestLeaseGuardTenPollRefresh(t *testing.T) {
+	for _, parentLimit := range []time.Duration{7 * time.Second, 2 * time.Second} {
+		c := &leaseTestClock{tick: time.Second}
+		g, r := leaseGuardFixture(t, c)
+		c.advance(5 * time.Second)
+		start := c.Elapsed()
+		calls := 0
+		g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
+		g.read = func(context.Context, time.Duration) (LeaseRead, error) {
+			calls++
+			sent := c.Elapsed()
+			c.advance(500 * time.Millisecond)
+			for slot, s := range r.Evidence.Clocks {
+				o := *s.Lease
+				if c.Elapsed()-start >= 4500*time.Millisecond {
+					o.ReferenceUnixNS = "1793930001000000000"
+					o.MeasuredUnixNS = "1793930001100000000"
+				}
+				s.Lease = &o
+				r.Evidence.Clocks[slot] = s
+				r.Sent[slot] = sent
+			}
+			return r, nil
+		}
+		err := g.Refresh(context.Background(), start+parentLimit)
+		if parentLimit > 4*time.Second {
+			if err != nil || calls < 2 || c.Elapsed()-start > parentLimit {
+				t.Fatal("MUTATION: lease-guard-refresh-window", err, calls, c.Elapsed()-start)
+			}
+		} else if err == nil || err.Error() != "clock-lease-expired" || c.Elapsed()-start > parentLimit {
+			t.Fatal("MUTATION: lease-guard-refresh-window", err, c.Elapsed()-start)
+		}
 	}
 }

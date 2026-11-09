@@ -101,7 +101,7 @@ func TestVerifyBoundSnapshotError(t *testing.T) {
 func TestLeaseGuardReturnsKnownExpiry(t *testing.T) {
 	c := &leaseTestClock{tick: time.Second}
 	g, _ := leaseGuardFixture(t, c)
-	c.advance(2 * time.Second)
+	c.advance(5 * time.Second)
 	start := c.Elapsed()
 	calls := 0
 	g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
@@ -168,7 +168,7 @@ func TestProductionWorkerStopRequiresLease(t *testing.T) {
 				r.Leases = nil
 				want = "clock-lease-missing"
 			} else {
-				r.BeforeMutation = func(context.Context) error { c.advance(2 * time.Second); return nil }
+				r.BeforeMutation = func(context.Context) error { c.advance(5 * time.Second); return nil }
 			}
 			_, err := r.Step(context.Background(), "worker-stop", "w1", time.Minute, ProcessExtra{Worker: "w1"})
 			if err == nil || err.Error() != want || r.Session.Latched() {
@@ -195,7 +195,7 @@ func TestBoundClockRefusalDiagnostic(t *testing.T) {
 			case "clock-lease-missing":
 				r.Leases = nil
 			case "clock-lease-expired":
-				c.advance(2 * time.Second)
+				c.advance(5 * time.Second)
 				g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
 			case "clock-lease-bound":
 				read.Evidence.Clocks["shared"].Lease.ErrorBoundNS = 200000

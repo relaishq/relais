@@ -1122,6 +1122,17 @@ are `clock-lease-missing`, `clock-lease-expired`, `clock-lease-bound` and
 `clock-config-differ`. Unleased rollback drain moves remain restoration, but their
 evidence does not qualify. The recorder conservatively merges each slot’s
 unleased rollback spans; distant spans also exclude the interval between them.
+A reference lease expires after five poll periods (5P), including host reference
+age and gate transport age. Its measured error growth still ages through the
+entire interval. Rereading the same reference may shorten its expiry, never renew it.
+The refresh window is 10P, twice validity: at a one-second poll this accommodates
+the observed four-second update gap plus two 1.8-second attempts and polling.
+It is always capped by the existing run, pool, collection and caller context
+limits. No outer deadline, selected bound, reserve, ceiling or drift changes.
+The host retries one reference change across its 200 ms dispersion pair, using
+the new report as a baseline; rates never bridge two reference updates. A second
+change or invalid data still refuses. Fixed unavailable reason codes survive
+parsing and public sanitization; arbitrary host text remains `invalid-evidence`.
 `host.lease-read` and `host.lease-read-batch` carry typed cursor inputs;
 the adapter generates the fixed lease reader and rejects scripts or unknown
 arguments. A nonempty probe path must match trusted local per-slot configuration
@@ -1137,14 +1148,14 @@ send times. Every child's certainty is retained; unknown children latch, and a
 reread of the same reference cannot extend its expiry.
 Each whole observation (serial or batch) has a 1.8 s attempt timeout,
 including queue and transport. A retry that cannot fit that timeout within the
-original 4P deadline ends with `clock-lease-expired`; the send lock rechecks the
+original 10P deadline ends with `clock-lease-expired`; the send lock rechecks the
 remaining budget and the attempt context. A single read needs 550 ms after
 queueing (covering measured 300–390 ms warm reads and a 526 ms first-process
 read); a four-host
 batch still reserves 1.6 s after queueing. The wire deadline is capped to the attempt deadline. Serial
 children consume the same attempt rather than each reserving another whole
 attempt. An unsent queued timeout is definite. Submitted read uncertainty still
-latches. Two 1.8 s attempts and two 100 ms polls fit inside 4P for a 1 s poll;
+latches. Two 1.8 s attempts and two 100 ms polls fit inside 10P for a 1 s poll;
 no run, collection or refresh deadline grows. A container-free adapter/session
 benchmark measured warm four-host reads at 1.20–1.32 s and first reads at
 1.48–1.57 s; these are local measurements, not runner timing guarantees.

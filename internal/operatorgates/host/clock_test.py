@@ -44,13 +44,36 @@ class LeaseTests(unittest.TestCase):
         self.assertEqual(o['pollSeconds'], '1')
         self.assertEqual(o['residualPpm'], '-0.200')
 
-    def test_update_leap_regression_and_read_failures_are_unavailable(self):
-        for second in [self.tracking(reference='1792886401.000000000'),
-                       self.tracking('0.000001000'), self.tracking().replace('Normal', 'Insert second'),
-                       self.tracking('NaN'), 'malformed']:
-            self.assertEqual(self.collect(second=second), dict(available=False, reason='unavailable'))
+    def test_invalid_data_and_read_failures_remain_unavailable(self):
+        for second, reason in [(self.tracking('0.000001000'), 'dispersion-invalid'),
+                               (self.tracking().replace('Normal', 'Insert second'), 'tracking-invalid'),
+                               (self.tracking('NaN'), 'tracking-invalid'), ('malformed', 'tracking-invalid'),
+                               (self.tracking().replace('CB00710F', 'CB007110'), 'source-changed')]:
+            self.assertEqual(self.collect(second=second), dict(available=False, reason=reason))
         with patch.object(clock.subprocess, 'run', side_effect=OSError('private-message')):
-            self.assertEqual(clock.lease_evidence(), dict(available=False, reason='unavailable'))
+            self.assertEqual(clock.lease_evidence(), dict(available=False, reason='read-failed'))
+
+    def test_reference_update_rebases_growth_pair(self):
+        reports = [self.tracking(), self.tracking('0.000001000', '1792886401.000000000'),
+                   self.tracking('0.000001200', '1792886401.000000000'), '^,*,test-source,2,0,377,0,0,0,0\n']
+        with patch.object(clock.subprocess, 'run', side_effect=[types.SimpleNamespace(stdout=s) for s in reports]), \
+             patch.object(clock.time, 'monotonic_ns', side_effect=[0, 10000000, 210000000, 230000000, 430000000, 450000000]), \
+             patch.object(clock.time, 'time_ns', return_value=1792886402000000000), patch.object(clock.time, 'sleep'):
+            o = clock.lease_evidence()
+        self.assertTrue(o['available'], 'MUTATION: lease-reference-race')
+        self.assertEqual(o['dispersionStartSeconds'], '0.000001000', 'MUTATION: lease-reference-race')
+        self.assertEqual(o['dispersionEndSeconds'], '0.000001200')
+        self.assertEqual(o['intervalNs'], 200000000)
+        self.assertEqual(o['hostElapsedNs'], 450000000)
+        self.assertEqual(o['referenceAgeNs'], 1000000000)
+
+    def test_continuous_reference_changes_are_bounded(self):
+        reports = [self.tracking(reference=f'179288640{i}.000000000') for i in range(3)]
+        with patch.object(clock.subprocess, 'run', side_effect=[types.SimpleNamespace(stdout=s) for s in reports]) as read, \
+             patch.object(clock.time, 'monotonic_ns', side_effect=[0, 10000000, 210000000, 230000000, 430000000]), \
+             patch.object(clock.time, 'time_ns', return_value=1792886403000000000), patch.object(clock.time, 'sleep'):
+            self.assertEqual(clock.lease_evidence(), dict(available=False, reason='reference-changing'), 'MUTATION: lease-reference-bounded')
+        self.assertEqual(read.call_count, 3)
 
     def test_runtime_poll_handles_refclocks_without_dpoll(self):
         self.assertEqual(self.collect(sources='#,*,test-refclock,0,-1,377,0,0,0,0\n')['pollSeconds'], '0.5')
@@ -422,6 +445,38 @@ class ProbeTests(unittest.TestCase):
             f.write(self.line(2))
         self.assertEqual(self.read(gap['cursor'])['probeLog']['lines'].encode(), self.line(2))
         self.assertNotIn('probeLog', self.read(path=''))
+
+    def test_lease_reserved_before_probe_prefix(self):
+        import copy
+        import random
+        import string
+        rng = random.Random(31)
+        self.sample['tracking'] = ''.join(rng.choices(string.ascii_letters + string.digits, k=16000))
+        lines = []
+        for i in range(900):
+            base = 1793930000000000000 + i * 10**9
+            a, b, processing = rng.randrange(10**8), rng.randrange(10**8), rng.randrange(10**7)
+            lines.append(self.line(i, target=i % 3, stamps=[base, base+a, base+a+processing, base+a+processing+b]))
+        self.path.write_bytes(b''.join(lines))
+        lease = LeaseTests().collect()
+        cursor, seen = None, ''
+        for _ in range(20):
+            with patch.object(clock, 'clock_evidence', return_value=copy.deepcopy(self.sample)), \
+                 patch.object(clock, 'tracking_evidence', return_value=copy.deepcopy(self.timeline)), \
+                 patch.object(clock, 'lease_evidence', return_value=lease):
+                o = clock.read_clock(None, 0, str(self.path), cursor, lease=True)
+            self.assertIn('lease', o, 'MUTATION: lease-wire-reservation')
+            self.assertEqual(o.pop('lease'), lease)
+            raw = clock.json.dumps(o).encode()
+            self.assertLessEqual(len(clock.base64.b64encode(clock.gzip.compress(raw))), clock.WIRE_LIMIT)
+            probes = o.pop('probeLog')
+            self.assertEqual(o, self.baseline())
+            seen += probes['lines']
+            cursor = probes['cursor']
+            self.assertEqual(sum(probes['lossCounts'].values()), 0)
+            if cursor['position'] == self.path.stat().st_size:
+                break
+        self.assertEqual(seen.encode(), b''.join(lines))
 
     def test_combined_wire_pressure_defers_a_prefix_without_loss(self):
         import random

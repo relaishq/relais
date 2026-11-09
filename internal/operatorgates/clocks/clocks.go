@@ -64,12 +64,7 @@ func PublicSample(s Sample) Sample {
 	s.Tracking = ""
 	s.RecordedLease = nil
 	if s.Lease != nil {
-		o := *s.Lease
-		if value, err := RecordLease(o, o.HostElapsedNS); err == nil {
-			s.Lease, s.RecordedLease = &o, &value
-		} else {
-			s.Lease, s.RecordedLease = &LeaseObservation{Reason: "invalid-evidence"}, nil
-		}
+		s.Lease, s.RecordedLease = normalizeLease(*s.Lease)
 	}
 	if s.TrackingLog == nil {
 		return s
@@ -145,9 +140,7 @@ func Parse(data []byte) (s Sample, err error) {
 		s.Lease = &LeaseObservation{Reason: "invalid-evidence"}
 		var o LeaseObservation
 		if observe.Decode(lease, &o, nil) == nil {
-			if value, e := RecordLease(o, o.HostElapsedNS); e == nil {
-				s.Lease, s.RecordedLease = &o, &value
-			}
+			s.Lease, s.RecordedLease = normalizeLease(o)
 		}
 	}
 	s.ProbeLog = probe

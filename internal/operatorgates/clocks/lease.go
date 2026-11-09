@@ -29,6 +29,10 @@ type LeaseObservation struct {
 	HostElapsedNS          int64  `json:"hostElapsedNs"`
 }
 
+// LeaseValidityPolls bounds a reference update; refresh remains twice that span.
+const LeaseValidityPolls int64 = 5
+const LeaseRefreshPolls int64 = 2 * LeaseValidityPolls
+
 type RecordedLease = observe.RecordedLease
 
 var rationalPattern = regexp.MustCompile(`^[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$|^[0-9]+/[1-9][0-9]*$`)
@@ -96,7 +100,7 @@ func RecordLease(o LeaseObservation, ageNS int64) (RecordedLease, error) {
 	if err != nil {
 		return out, err
 	}
-	remaining := new(big.Rat).Mul(poll, big.NewRat(2e9, 1))
+	remaining := new(big.Rat).Mul(poll, big.NewRat(LeaseValidityPolls*1e9, 1))
 	remaining.Sub(remaining, big.NewRat(o.ReferenceAgeNS, 1))
 	remaining.Sub(remaining, big.NewRat(ageNS, 1))
 	// Round the remaining lifetime inward, so an imprecise poll never extends it.
@@ -107,4 +111,18 @@ func RecordLease(o LeaseObservation, ageNS int64) (RecordedLease, error) {
 	out.RemainingNS = max(0, n.Int64())
 	out.Expired = remaining.Sign() <= 0
 	return out, nil
+}
+
+// normalizeLease preserves only fixed unavailable reasons, never host text.
+// Unavailable evidence still fails RecordLease and cannot authorize a fault.
+func normalizeLease(o LeaseObservation) (*LeaseObservation, *RecordedLease) {
+	if !o.Available {
+		switch o.Reason {
+		case "unavailable", "source-changed", "reference-changing", "tracking-invalid", "poll-invalid", "dispersion-invalid", "read-failed":
+			return &LeaseObservation{Reason: o.Reason}, nil
+		}
+	} else if value, err := RecordLease(o, o.HostElapsedNS); err == nil {
+		return &o, &value
+	}
+	return &LeaseObservation{Reason: "invalid-evidence"}, nil
 }

@@ -524,7 +524,15 @@
     "lease-observation-unbounded",
     "lease-batch-uses-reply-time",
     "lease-batch-serialized",
-    "lease-child-unknown-erased"
+    "lease-child-unknown-erased",
+    "lease-back-to-two-polls",
+    "lease-refresh-window-not-grown",
+    "lease-unavailable-reason-erased",
+    "lease-unavailable-label-exposed",
+    "lease-reference-race-not-retried",
+    "lease-growth-not-rebased",
+    "lease-source-change-accepted",
+    "lease-probes-evict-lease"
   ],
   "killed": [
     {
@@ -4484,6 +4492,62 @@
       "id": "lease-child-unknown-erased",
       "test": "TestLeaseBatchConcurrentCertainty",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-back-to-two-polls",
+      "test": "TestLeaseFivePollValidity",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-refresh-window-not-grown",
+      "test": "TestLeaseRefreshTenPollWindow",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-unavailable-reason-erased",
+      "test": "TestLeaseUnavailableReasonPreserved",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-unavailable-label-exposed",
+      "test": "TestLeaseUnavailableReasonSanitized",
+      "package": "./internal/operatorgates/clocks",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-reference-race-not-retried",
+      "test": "TestPythonGuards/lease-reference-race-not-retried",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-growth-not-rebased",
+      "test": "TestPythonGuards/lease-growth-not-rebased",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-source-change-accepted",
+      "test": "TestPythonGuards/lease-source-change-accepted",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "lease-probes-evict-lease",
+      "test": "TestPythonGuards/lease-probes-evict-lease",
+      "package": "./internal/operatorgates/host",
       "evidence": "killed",
       "guardFingerprint": ""
     }

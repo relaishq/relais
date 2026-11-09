@@ -18,7 +18,7 @@ func LeaseRefreshBudget(o LeaseObservation) (time.Duration, error) {
 	if err != nil || p.Sign() <= 0 {
 		return 0, &BindingError{"clock-lease-missing"}
 	}
-	p.Mul(p, big.NewRat(4e9, 1))
+	p.Mul(p, big.NewRat(LeaseRefreshPolls*1e9, 1))
 	n := new(big.Int).Quo(p.Num(), p.Denom())
 	if !n.IsInt64() || n.Sign() <= 0 {
 		return 0, &BindingError{"clock-lease-missing"}
@@ -31,12 +31,12 @@ func (l Lease) Observe(o LeaseObservation, sent, received time.Duration) (Lease,
 	if err != nil || sent < 0 {
 		return Lease{}, &BindingError{"clock-lease-missing"}
 	}
-	// Derive update+2P from the original request, never receipt or reread time.
+	// Derive update+5P from the original request, never receipt or reread time.
 	p, err := exact(o.PollSeconds)
 	if err != nil {
 		return Lease{}, &BindingError{"clock-lease-missing"}
 	}
-	p.Mul(p, big.NewRat(2e9, 1))
+	p.Mul(p, big.NewRat(LeaseValidityPolls*1e9, 1))
 	p.Sub(p, big.NewRat(o.ReferenceAgeNS, 1))
 	n := new(big.Int).Quo(p.Num(), p.Denom())
 	if !n.IsInt64() || n.Int64() > int64(^uint64(0)>>1)-int64(sent) {
@@ -66,7 +66,7 @@ func (l Lease) At(now time.Duration) (RecordedLease, error) {
 
 // RefreshLease is for recorded admission evidence. It preserves the selector's
 // host-only aging rule; live gates use Lease.At with request-send transport age.
-// Once expired, only a newer reference update qualifies. The original 4P
+// Once expired, only a newer reference update qualifies. The original 10P
 // deadline includes every retry/read and is never reset by another stale read.
 func RefreshLease(ctx context.Context, first LeaseObservation, now func() time.Time, pause func(context.Context, time.Duration) error, read func(context.Context) (LeaseObservation, error)) (LeaseObservation, error) {
 	v, err := RecordLease(first, first.HostElapsedNS)

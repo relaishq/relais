@@ -159,7 +159,7 @@ func TestActivatedFaultGuard(t *testing.T) {
 	g, _ := leaseGuardFixture(t, c)
 	r.Session.clockBinding = &observe.ClockBinding{}
 	r.Leases = g
-	r.BeforeMutation = func(context.Context) error { c.advance(2 * time.Second); return nil }
+	r.BeforeMutation = func(context.Context) error { c.advance(5 * time.Second); return nil }
 	_, err := r.Step(context.Background(), "freeze", "shared", time.Minute, ProcessExtra{})
 	if err == nil || r.Session.Latched() {
 		t.Fatal("MUTATION: fault-bypass", err)

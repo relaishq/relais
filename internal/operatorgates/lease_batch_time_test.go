@@ -42,7 +42,7 @@ func TestLeaseSlotExpiry(t *testing.T) {
 		for _, slot := range inventory.Slots {
 			v, err := g.leases[slot].At(c.Elapsed())
 			require.NoError(t, err)
-			wantExpiry := time.Second + 1900*time.Millisecond
+			wantExpiry := time.Second + 4900*time.Millisecond
 			if time.Duration(v.RemainingNS)+c.Elapsed() != wantExpiry {
 				t.Fatal("MUTATION: lease-batch-send", slot, delay, v.RemainingNS, wantExpiry)
 			}

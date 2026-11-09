@@ -66,7 +66,7 @@ func TestLeaseTransportRefresh(t *testing.T) {
 					if mode == "refuse" {
 						return CommandResult{Code: code(3)}
 					}
-					o := &clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1793930002100000000", ReferenceUnixNS: "1793930000000000000", ReferenceAgeNS: 2100000000, PollSeconds: "1", ResidualPPM: "0", SkewPPM: "0", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 20000000, HostElapsedNS: 20000000}
+					o := &clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1793930005100000000", ReferenceUnixNS: "1793930000000000000", ReferenceAgeNS: 5100000000, PollSeconds: "1", ResidualPPM: "0", SkewPPM: "0", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 20000000, HostElapsedNS: 20000000}
 					if calls > 4 {
 						o.ReferenceUnixNS = "1793930003000000000"
 						o.MeasuredUnixNS = "1793930003100000000"
@@ -96,12 +96,12 @@ func TestLeaseTransportRefresh(t *testing.T) {
 				require.Equal(t, 8, calls)
 				require.NoError(t, guard.Check())
 				require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")
-				clock.Advance(2 * time.Second)
+				clock.Advance(5 * time.Second)
 				// The same reference cannot renew the expiry, even when the host reports a young age.
 				start := clock.Elapsed()
 				require.EqualError(t, guard.Refresh(context.Background(), time.Minute), "clock-lease-expired")
-				require.LessOrEqual(t, clock.Elapsed()-start, 4*time.Second)
-				require.GreaterOrEqual(t, clock.Elapsed()-start, 2*time.Second)
+				require.LessOrEqual(t, clock.Elapsed()-start, 10*time.Second)
+				require.GreaterOrEqual(t, clock.Elapsed()-start, 8*time.Second)
 				mode = "refuse"
 				require.Error(t, guard.Refresh(context.Background(), time.Minute))
 				require.False(t, session.Latched(), "MUTATION: lease-read-refusal-latched")

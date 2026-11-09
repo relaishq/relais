@@ -5659,5 +5659,85 @@
     "Test": "TestLeaseBatchConcurrentCertainty",
     "Marker": "MUTATION: lease-child-certainty",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-back-to-two-polls",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "",
+    "Old": "const LeaseValidityPolls int64 = 5",
+    "New": "const LeaseValidityPolls int64 = 2",
+    "Test": "TestLeaseFivePollValidity",
+    "Marker": "MUTATION: lease-five-polls",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-refresh-window-not-grown",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "",
+    "Old": "const LeaseRefreshPolls int64 = 2 * LeaseValidityPolls",
+    "New": "const LeaseRefreshPolls int64 = 4",
+    "Test": "TestLeaseRefreshTenPollWindow",
+    "Marker": "MUTATION: lease-ten-poll-refresh",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-unavailable-reason-erased",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "normalizeLease",
+    "Old": "return &LeaseObservation{Reason: o.Reason}, nil",
+    "New": "return &LeaseObservation{Reason: \"invalid-evidence\"}, nil",
+    "Test": "TestLeaseUnavailableReasonPreserved",
+    "Marker": "MUTATION: lease-unavailable-reason",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-unavailable-label-exposed",
+    "File": "internal/operatorgates/clocks/lease.go",
+    "Function": "normalizeLease",
+    "Old": "return &LeaseObservation{Reason: \"invalid-evidence\"}, nil",
+    "New": "return &LeaseObservation{Reason: o.Reason}, nil",
+    "Test": "TestLeaseUnavailableReasonSanitized",
+    "Marker": "MUTATION: lease-reason-sanitized",
+    "Package": "./internal/operatorgates/clocks"
+  },
+  {
+    "ID": "lease-reference-race-not-retried",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "for attempt in range(2):",
+    "New": "for attempt in range(1):",
+    "Test": "TestPythonGuards/lease-reference-race-not-retried",
+    "Marker": "MUTATION: python-guard lease-reference-race-not-retried",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.LeaseTests.test_reference_update_rebases_growth_pair"
+  },
+  {
+    "ID": "lease-growth-not-rebased",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "first, first_done = second, time.monotonic_ns()",
+    "New": "first_done = time.monotonic_ns()",
+    "Test": "TestPythonGuards/lease-growth-not-rebased",
+    "Marker": "MUTATION: python-guard lease-growth-not-rebased",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.LeaseTests.test_reference_update_rebases_growth_pair"
+  },
+  {
+    "ID": "lease-source-change-accepted",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "if first[0] != second[0]:",
+    "New": "if False:",
+    "Test": "TestPythonGuards/lease-source-change-accepted",
+    "Marker": "MUTATION: python-guard lease-source-change-accepted",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.LeaseTests.test_invalid_data_and_read_failures_remain_unavailable"
+  },
+  {
+    "ID": "lease-probes-evict-lease",
+    "File": "internal/operatorgates/host/clock.py",
+    "Old": "    if lease:\n        # Reserve the lease before the loss-free probe prefix consumes wire room.\n        # Never evict baseline tracking rows to fit this evidence.\n        extra = lease_evidence()\n        candidate = dict(result, lease=extra)\n        raw = json.dumps(candidate).encode()\n        if len(raw) <= 256000 and len(base64.b64encode(gzip.compress(raw))) <= WIRE_LIMIT:\n            result = candidate\n    if probe_file:\n        result = add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)\n",
+    "New": "    if probe_file:\n        result = add_probe_evidence(result, probe_file, probe_cursor, run_start_unix_ms)\n    if lease:\n        # Reserve the lease before the loss-free probe prefix consumes wire room.\n        # Never evict baseline tracking rows to fit this evidence.\n        extra = lease_evidence()\n        candidate = dict(result, lease=extra)\n        raw = json.dumps(candidate).encode()\n        if len(raw) <= 256000 and len(base64.b64encode(gzip.compress(raw))) <= WIRE_LIMIT:\n            result = candidate\n",
+    "Test": "TestPythonGuards/lease-probes-evict-lease",
+    "Marker": "MUTATION: python-guard lease-probes-evict-lease",
+    "Package": "./internal/operatorgates/host",
+    "PythonTest": "clock_test.ProbeTests.test_lease_reserved_before_probe_prefix"
   }
 ]

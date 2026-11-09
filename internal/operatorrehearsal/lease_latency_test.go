@@ -84,8 +84,8 @@ func TestLeaseSlowAdapter(t *testing.T) {
 						}
 						o := bindingtest.Observation(clock.Wall())
 						if retry && n <= 4 {
-							o.ReferenceAgeNS = int64(2100 * time.Millisecond)
-							o.ReferenceUnixNS = strconv.FormatInt(clock.Wall().Add(-2100*time.Millisecond).UnixNano(), 10)
+							o.ReferenceAgeNS = int64(5100 * time.Millisecond)
+							o.ReferenceUnixNS = strconv.FormatInt(clock.Wall().Add(-5100*time.Millisecond).UnixNano(), 10)
 						}
 						sample := clocks.Sample{MeasuredUnixNS: o.MeasuredUnixNS, Lease: &o, TrackingLog: &clocks.TrackingLog{ReadComplete: true}}
 						return CommandResult{Code: code(0), Stdout: []byte(bindingtest.Pack(sample))}

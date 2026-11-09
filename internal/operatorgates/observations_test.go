@@ -352,7 +352,7 @@ func TestFreshInventoryReadsAllHostsAndChecksDeployment(t *testing.T) {
 func TestBoundLeaseCacheAndRefresh(t *testing.T) {
 	r, p, _ := runtimeFixture(t)
 	c := r.Session.clock.(*FakeClock)
-	for i, d := range []time.Duration{0, time.Second, 2 * time.Second} {
+	for i, d := range []time.Duration{0, time.Second, 5 * time.Second} {
 		c.Advance(d)
 		if err := r.VerifyClocks(context.Background(), c.Elapsed()+time.Minute); err != nil {
 			t.Fatal("MUTATION: clock-cache", err)
