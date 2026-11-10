@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/operator"
+	"github.com/relaishq/relais/pkg/relay"
 )
 
 // trialCluster is a small control plane for whole trial loops. Every step costs
@@ -26,6 +29,7 @@ type trialCluster struct {
 	kills     int
 	hungUp    bool
 	wide      map[int]bool // 1-based kill numbers with an excluded bracket
+	relay     int          // relay instance generation
 }
 
 func newTrialCluster(t *testing.T) *trialCluster {
@@ -33,6 +37,7 @@ func newTrialCluster(t *testing.T) *trialCluster {
 	g, clock := testProcedure(t)
 	c := &trialCluster{g: g, clock: clock, call: controlplane.CallStatus{ID: "original", Owner: "w1", Epoch: 1}, dead: map[string]bool{}, draining: map[string]bool{}}
 	g.p.Step = c.step
+	g.p.Inventory = func(context.Context, string, time.Duration) error { return nil }
 	g.p.Media = func(context.Context) (*MediaSummary, error) {
 		c.hungUp = true // The caller's media ends before the final status read.
 		return &MediaSummary{Status: operator.Passed}, nil
@@ -61,6 +66,7 @@ func (c *trialCluster) step(_ context.Context, op, _ string, _ time.Duration, ex
 		r.Move = controlplane.MoveResult{ID: c.call.ID, From: from, To: extra.Worker, Kind: "move", Start: c.clock.Wall(), End: c.clock.Wall()}
 	case "drain":
 		c.draining[extra.Worker] = true
+		r.Drain.Moves = []controlplane.MoveResult{}
 		if c.call.Owner == extra.Worker {
 			m := controlplane.MoveResult{ID: c.call.ID, From: extra.Worker, To: other(extra.Worker), Kind: "move", Start: c.clock.Wall(), End: c.clock.Wall()}
 			r.Drain.Moves = []controlplane.MoveResult{m}
@@ -84,7 +90,12 @@ func (c *trialCluster) step(_ context.Context, op, _ string, _ time.Duration, ex
 	case "control-start":
 		ready := int64(1)
 		r.ReadyMS = &ready
-	case "control-stop", "replace", "worker-empty":
+	case "relay-stop":
+		c.relay++
+	case "relay-inspect":
+		r.Inspection.Active = fmt.Sprint("relay-", c.relay)
+		r.Inspection.Status = relay.RelayStatus{Instance: r.Inspection.Active, Public: netip.MustParseAddrPort("192.0.2.9:3478"), Private: netip.MustParseAddrPort("10.0.0.9:3478"), Continuity: &relay.ContinuityStatus{Epoch: uint64(c.relay + 1)}, Stats: relay.Stats{Workers: 2, RoutesRestored: 1, WorkerPackets: 1}}
+	case "control-stop", "replace", "worker-empty", "freeze", "unfreeze", "signal-stop", "signal-start", "relay-stage", "relay-replenish":
 	}
 	return r, nil
 }
@@ -230,6 +241,66 @@ func TestExcludedGateOwnedKillMadeUpByTrials(t *testing.T) {
 			moves, takeovers := receiptKinds(c.g.p.Broker)
 			if r.Status != operator.Passed || r.Reason != "" || moves != 7 || takeovers != tc.takeovers || r.Process.KillReplacements != tc.replaced {
 				t.Fatalf("MUTATION: gate-owned-kill-not-replaced: %+v moves=%d takeovers=%d", r, moves, takeovers)
+			}
+		})
+	}
+}
+
+// Characterization: a whole upgrade-rollback runs 6 moves and 3 takeovers and
+// passes on the fake cluster.
+func TestReleaseTrialPopulation(t *testing.T) {
+	c := newTrialCluster(t)
+	r := runReleaseGate(context.Background(), c.g)
+	moves, takeovers := receiptKinds(c.g.p.Broker)
+	if r.Status != operator.Inconclusive || !r.AwaitingPool || r.Reason != "" || moves != 6 || takeovers != 3 {
+		t.Fatalf("release trial population changed: %+v moves=%d takeovers=%d ops=%v", r, moves, takeovers, strings.Join(c.ops, " "))
+	}
+}
+
+// Upgrade-rollback defers replacements until both release phases and their
+// trials are done, so a replacement owed in stable-to cannot take the time the
+// rollback still needs.
+func TestReleaseReplacementWaitsForRollback(t *testing.T) {
+	media := func(c *trialCluster) {
+		start := c.clock.Now.Add(150 * time.Second).UnixMilli() // inside the 190 s warmup
+		c.g.p.Broker.(*testGateBroker).reg.MediaStartedAt = &start
+	}
+	probe := newTrialCluster(t)
+	media(probe)
+	var finished time.Duration
+	probe.g.p.Media = func(context.Context) (*MediaSummary, error) {
+		finished = probe.clock.Elapsed()
+		return &MediaSummary{Status: operator.Passed}, nil
+	}
+	if r := runReleaseGate(context.Background(), probe.g); !r.AwaitingPool {
+		t.Fatal("probe release failed", r)
+	}
+	cycle := probe.g.takeoverCycle
+	t.Logf("release finished at %s; longest takeover cycle %s", finished, cycle)
+	for _, tc := range []struct {
+		name     string
+		end      time.Duration
+		kills    int
+		replaced int
+		skipped  string
+	}{
+		{"short", finished + 30*time.Second, 3, 0, "replacement-time"},
+		{"ample", finished + cycle + ConsentWindow + 30*time.Second, 4, 1, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTrialCluster(t)
+			media(c)
+			c.wide = map[int]bool{1: true} // the first stable-to takeover
+			c.g.end = tc.end
+			r := runReleaseGate(context.Background(), c.g)
+			if !r.AwaitingPool || r.Reason != "" {
+				t.Fatalf("MUTATION: release-replacement-deferred: %+v", r)
+			}
+			assertReplacements(t, c, "release-replacement-deferred", tc.kills, tc.kills, 1, tc.replaced, tc.skipped)
+			events := c.g.p.Broker.Events()
+			last := events[len(events)-1].Identity.OperationID
+			if tc.replaced > 0 && (last != "stable-replacement-takeover-0" || events[len(events)-2].Identity.OperationID != "stable-from-takeover-0") {
+				t.Fatal("MUTATION: release-replacement-deferred: replacement ran before the rollback trials", last)
 			}
 		})
 	}

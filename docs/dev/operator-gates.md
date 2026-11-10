@@ -974,7 +974,9 @@ The enforced causes are:
   exceeds the worker bound.
 - `clock-coverage-kill-excluded`: a well-formed bracket that the gate recorded as
   wider than the selected worker bound (`leaseExcluded`). Only this gate-recorded
-  case gets the cause; see "Wide kill brackets" below.
+  case gets the cause; see "Wide kill brackets" below. It waives only the
+  bracket's own half-width check. The worker, frontend and control timelines of
+  that takeover are still checked, and any of their causes is added beside it.
 
 - `clock-coverage-falsified`: any falsified probe record, or a positive cumulative
   falsification count, removes clock trust from every window judged from then on
@@ -1237,7 +1239,8 @@ The excluded takeover stays in its phase. Each phase verdict still judges it, so
 a lost call or failed window on it fails the run. Before the pooled judgment, the
 judge overlay drops each takeover whose only clock cause is
 `clock-coverage-kill-excluded`, with its caller moves. Any other cause, or
-falsification, keeps the takeover in the pool as undecided. The pool reports
+falsification, keeps the takeover in the pool as undecided. Final drainage also
+waits for an excluded takeover's tracking tails. The pool reports
 `excludedKills` separately from generator `excludedEvents`. Its `eventCount`
 omits dropped kills, while each phase diagnostic keeps them, and undecided rows
 keep their original phase and event indexes. The pool minimum of 20 moves and
@@ -1246,7 +1249,10 @@ keep their original phase and event indexes. The pool minimum of 20 moves and
 The gate owes one replacement takeover for each excluded armed takeover: a trial
 kill, or control restart's `restart-takeover`. The unarmed degraded-restart kill
 owes none. After its regular takeovers, the trial loop runs each owed replacement
-when both conditions hold:
+when both conditions hold. Upgrade-rollback defers every owed replacement until
+both release phases and their trials are done, so a replacement owed in
+stable-to never takes time the rollback needs; it then runs as
+`stable-replacement-takeover-N` under the same conditions:
 
 - the run has used fewer than two replacements (`MaxKillReplacements`), counted
   across every gate of the run; and

@@ -110,7 +110,7 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 		count := batch.count
 		for i := 0; ; i++ {
 			if i == count {
-				if batch.kind != "takeover" || !g.replacement() {
+				if batch.kind != "takeover" || g.deferReplacements || !g.replacement() {
 					break
 				}
 				count++

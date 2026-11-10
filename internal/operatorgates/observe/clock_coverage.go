@@ -85,6 +85,8 @@ type coverageSpan struct {
 	slot              string
 	a, b, bound, half int64
 	signal            bool
+	// excluded waives only the gate-recorded bracket's half-width check.
+	excluded bool
 }
 
 func CoverageNS(s string) (int64, bool) {
@@ -137,12 +139,14 @@ func coverageSpans(w CoverageWindow, control string, cb, wb int64, brackets []Co
 	if !x || !y || after < before || before+(after-before)/2 != a {
 		return nil, "clock-coverage-kill-bracket"
 	}
+	spans := []coverageSpan{{slot: w.Worker, a: before, b: after, bound: wb, half: (after - before + 1) / 2, signal: true, excluded: found.LeaseExcluded}, {slot: control, a: b, b: b, bound: cb}}
 	// The gate recorded this well-formed bracket as wider than its selected
-	// worker bound. The pooled judge excludes the takeover instead of deciding it.
+	// worker bound. Its timelines are still checked; any other cause keeps the
+	// takeover undecided instead of excluded.
 	if found.LeaseExcluded {
-		return nil, "clock-coverage-kill-excluded"
+		return spans, "clock-coverage-kill-excluded"
 	}
-	return []coverageSpan{{slot: w.Worker, a: before, b: after, bound: wb, half: (after - before + 1) / 2, signal: true}, {slot: control, a: b, b: b, bound: cb}}, ""
+	return spans, ""
 }
 
 // coverageError takes the maximum retrospective envelope over every intersecting
@@ -292,7 +296,7 @@ func evaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, cont
 			if h > math.MaxInt64-f || reserve < 0 || reserve > s.bound || h+f > s.bound-reserve {
 				add("clock-coverage-bound")
 			}
-			if s.signal && (h > math.MaxInt64-f || s.half > s.bound || h+f > s.bound-s.half) {
+			if s.signal && !s.excluded && (h > math.MaxInt64-f || s.half > s.bound || h+f > s.bound-s.half) {
 				add("clock-coverage-kill-bracket")
 			}
 		}
@@ -323,8 +327,8 @@ func CoverageTailReady(timelines map[string]CoverageTimeline, frontend, control 
 	} // Inventory cannot be repaired by a tracking read.
 	required := map[string]int64{}
 	for _, w := range windows {
-		spans, why := coverageSpans(w, control, cb, wb, brackets, false)
-		if why != "" {
+		spans, _ := coverageSpans(w, control, cb, wb, brackets, false)
+		if len(spans) == 0 {
 			continue
 		} // Missing receipts/brackets cannot be repaired by draining.
 		for _, s := range spans {

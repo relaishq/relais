@@ -6355,7 +6355,7 @@
     "ID": "replacement-not-scheduled",
     "File": "internal/operatorgates/trials.go",
     "Function": "trials",
-    "Old": "if batch.kind != \"takeover\" || !g.replacement() {",
+    "Old": "if batch.kind != \"takeover\" || g.deferReplacements || !g.replacement() {",
     "New": "if true {",
     "Test": "TestExcludedKillSchedulesReplacement",
     "Marker": "MUTATION: replacement-not-scheduled",
@@ -6440,5 +6440,55 @@
     "Test": "TestRehearsalExcludedKillCounts/short-pool",
     "Marker": "MUTATION: excluded-kill-event-count",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "excluded-bracket-skips-timelines",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageSpans",
+    "Old": "return spans, \"clock-coverage-kill-excluded\"",
+    "New": "return nil, \"clock-coverage-kill-excluded\"",
+    "Test": "TestClockCoverageKillExcludedKeepsTimelineChecks/worker-step",
+    "Marker": "MUTATION: excluded-bracket-skips-timelines",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "excluded-bracket-skips-timelines-judge",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageSpans",
+    "Old": "return spans, \"clock-coverage-kill-excluded\"",
+    "New": "return nil, \"clock-coverage-kill-excluded\"",
+    "Test": "TestExcludedKillTimelineCauseIsNotDropped/worker-step",
+    "Marker": "MUTATION: excluded-bracket-skips-timelines",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-bracket-width-not-waived",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "if s.signal && !s.excluded && (",
+    "New": "if s.signal && (",
+    "Test": "TestClockCoverageKillExcludedKeepsTimelineChecks/clean",
+    "Marker": "MUTATION: excluded-bracket-skips-timelines",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "excluded-tail-skipped",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "CoverageTailReady",
+    "Old": "if len(spans) == 0 {",
+    "New": "if len(spans) == 0 || spans[0].excluded {",
+    "Test": "TestCoverageTailWaitsForExcludedKill",
+    "Marker": "MUTATION: excluded-tail-skipped",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "release-replacement-not-deferred",
+    "File": "internal/operatorgates/release.go",
+    "Function": "release",
+    "Old": "g.deferReplacements = true",
+    "New": "g.deferReplacements = false",
+    "Test": "TestReleaseReplacementWaitsForRollback/short",
+    "Marker": "MUTATION: release-replacement-deferred",
+    "Package": "./internal/operatorgates"
   }
 ]

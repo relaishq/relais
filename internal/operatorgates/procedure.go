@@ -204,6 +204,8 @@ type procedure struct {
 	// takeoverCycle is the longest measured trial takeover in this gate.
 	owed          int
 	takeoverCycle time.Duration
+	// deferReplacements holds owed replacements until the caller schedules them.
+	deferReplacements bool
 }
 
 func newProcedure(c *ProcessConfig, p ProcedurePorts, end time.Duration) *procedure {

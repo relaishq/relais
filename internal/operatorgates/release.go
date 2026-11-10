@@ -240,6 +240,9 @@ func (g *procedure) release(ctx context.Context) error {
 		return err
 	}
 	g.c.Mixed = true
+	// Replacements wait for both release phases: a replacement owed in stable-to
+	// must not take time the rollback still needs.
+	g.deferReplacements = true
 	for _, target := range []string{"to", "from"} {
 		g.c.Target = target
 		g.c.Operation = "upgrade"
@@ -302,5 +305,6 @@ func (g *procedure) release(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	g.deferReplacements = false
+	return g.trials(ctx, TrialTarget{}, "stable-replacement")
 }

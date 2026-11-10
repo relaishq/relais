@@ -136,6 +136,61 @@ func TestClockCoverageKillExcluded(t *testing.T) {
 		})
 	}
 }
+
+// An excluded bracket waives only its own width. Every timeline check of the
+// takeover still runs, so an independent clock cause keeps the event undecided.
+func TestClockCoverageKillExcludedKeepsTimelineChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(map[string]CoverageTimeline)
+		want   []string
+	}{
+		{"clean", func(map[string]CoverageTimeline) {}, []string{"clock-coverage-kill-excluded"}},
+		{"worker-step", func(m map[string]CoverageTimeline) {
+			r := m["w1"]
+			r.Breaks = []CoverageBreak{{FromUnixSeconds: coverageBase + 10, UnixSeconds: coverageBase + 10, Kind: "clock-step"}}
+			m["w1"] = r
+		}, []string{"clock-coverage-break", "clock-coverage-kill-excluded"}},
+		{"worker-missing", func(m map[string]CoverageTimeline) {
+			r := m["w1"]
+			r.Rows = r.Rows[:5]
+			m["w1"] = r
+		}, []string{"clock-coverage-kill-excluded", "clock-coverage-missing"}},
+		{"control-bound", func(m map[string]CoverageTimeline) { m["shared"].Rows[20].MaxErrorSeconds = .0011 }, []string{"clock-coverage-bound", "clock-coverage-kill-excluded"}},
+		{"frontend-bound", func(m map[string]CoverageTimeline) { m["relay"].Rows[20].MaxErrorSeconds = .0011 }, []string{"clock-coverage-bound", "clock-coverage-kill-excluded"}},
+		{"worker-bound", func(m map[string]CoverageTimeline) { m["w1"].Rows[10].MaxErrorSeconds = .0021 }, []string{"clock-coverage-bound", "clock-coverage-kill-excluded"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, w := coverageFixture()
+			// 5 ms wide: its 2.5 ms half-width alone exceeds the 3 ms worker bound
+			// less the 2 ms clock error, which only the excluded bracket waives.
+			before := coverageBase*coverageSecond + 10250000000
+			mid := before + 2500000
+			w[0].Kind, w[0].StartUnixNS = "takeover", fmt.Sprint(mid)
+			b := []CoverageBracket{{LeaseExcluded: true, Worker: "w1", BeforeUnixNS: fmt.Sprint(before), AfterUnixNS: fmt.Sprint(before + 5000000), MidpointUnixNS: fmt.Sprint(mid)}}
+			tc.change(m)
+			got := EvaluateClockCoverage(m, "relay", "shared", 2000000, 3000000, w, b)
+			if !reflect.DeepEqual(got[0].Causes, tc.want) {
+				t.Fatal("MUTATION: excluded-bracket-skips-timelines", tc.name, got[0].Causes, tc.want)
+			}
+		})
+	}
+}
+
+// Drainage waits for an excluded takeover's tail, as its timelines are judged.
+func TestCoverageTailWaitsForExcludedKill(t *testing.T) {
+	m, w := coverageFixture()
+	before := coverageBase*coverageSecond + 10250000000
+	mid := before + 2500000
+	w[0].Kind, w[0].StartUnixNS = "takeover", fmt.Sprint(mid)
+	b := []CoverageBracket{{LeaseExcluded: true, Worker: "w1", BeforeUnixNS: fmt.Sprint(before), AfterUnixNS: fmt.Sprint(before + 5000000), MidpointUnixNS: fmt.Sprint(mid)}}
+	r := m["shared"]
+	r.Rows = r.Rows[:21] // control's tail ends before the window's end plus margin
+	m["shared"] = r
+	if CoverageTailReady(m, "relay", "shared", 2000000, 3000000, w, b) {
+		t.Fatal("MUTATION: excluded-tail-skipped")
+	}
+}
 func TestClockCoverageRelocationAndDeterminism(t *testing.T) {
 	m, w := coverageFixture()
 	m["relay"].Rows[15].MaxErrorSeconds = 1

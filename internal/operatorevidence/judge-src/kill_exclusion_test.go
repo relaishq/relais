@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/callharness"
 )
@@ -183,5 +186,85 @@ func TestExcludedKillNeedsSoleCause(t *testing.T) {
 	input.ClockCoverage.Falsified = true
 	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" || got.ExcludedKills != 0 {
 		t.Fatalf("falsified coverage excluded a kill: %+v", got)
+	}
+}
+
+// Real timelines and brackets: phase 1 event 5 has a well-formed 6 ms bracket the
+// gate marked wide. Only a clean takeover may leave the pool.
+func TestExcludedKillTimelineCauseIsNotDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(e *clocks.CoverageEvidence, n int64)
+	}{
+		{"clean", nil},
+		{"worker-step", func(e *clocks.CoverageEvidence, n int64) {
+			w := e.Attempts[0].Clocks["w1"]
+			w.Breaks = []observe.CoverageBreak{{FromUnixSeconds: n / 1e9, UnixSeconds: n / 1e9, Kind: "clock-step"}}
+			e.Attempts[0].Clocks["w1"] = w
+		}},
+		{"worker-missing", func(e *clocks.CoverageEvidence, n int64) {
+			// Lost tracking log lines are missing coverage, not a clock break.
+			w := e.Attempts[0].Clocks["w1"]
+			w.Breaks = []observe.CoverageBreak{{FromUnixSeconds: n / 1e9, UnixSeconds: n / 1e9, Kind: "log-loss"}}
+			e.Attempts[0].Clocks["w1"] = w
+		}},
+		{"control-bound", func(e *clocks.CoverageEvidence, n int64) {
+			for i, r := range e.Attempts[0].Clocks["shared"].Rows {
+				if r.UnixSeconds == n/1e9 {
+					e.Attempts[0].Clocks["shared"].Rows[i].MaxErrorSeconds = .002
+				}
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := replacementPoolSample()
+			input.PreCoverageEvidence = false
+			raw, _ := json.Marshal(input)
+			var pool operatorevidence.Pool
+			if err := json.Unmarshal(raw, &pool); err != nil {
+				t.Fatal(err)
+			}
+			windows := operatorevidence.CoverageWindows(pool)
+			e := &clocks.CoverageEvidence{Version: 2, FrontendSlot: "relay", ControlSlot: "shared", Bounds: clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, Windows: windows}
+			start, _ := observe.CoverageNS(windows[0].StartUnixNS)
+			timelines := map[string]observe.CoverageTimeline{}
+			for _, slot := range []string{"relay", "shared", "w1", "w2"} {
+				timeline := observe.CoverageTimeline{ReadComplete: true}
+				for sec := start/1e9 - 5; sec <= start/1e9+100; sec++ {
+					timeline.Rows = append(timeline.Rows, observe.CoverageRow{UnixSeconds: sec, MaxErrorSeconds: .0001, LeapStatus: "N"})
+				}
+				timelines[slot] = timeline
+			}
+			e.Attempts = []clocks.CoverageAttempt{{Version: 2, Clocks: timelines}}
+			var excluded int64
+			for _, w := range windows {
+				n, _ := observe.CoverageNS(w.StartUnixNS)
+				b := observe.CoverageBracket{Worker: w.Worker, MidpointUnixNS: w.StartUnixNS, BeforeUnixNS: clocks.TimestampNS(n - 1), AfterUnixNS: clocks.TimestampNS(n + 1)}
+				if w.Kind != "takeover" {
+					continue
+				}
+				if w.Phase == 1 && w.Event == 5 {
+					excluded = n
+					b.LeaseExcluded, b.BeforeUnixNS, b.AfterUnixNS = true, clocks.TimestampNS(n-3000000), clocks.TimestampNS(n+3000000)
+				}
+				e.KillBrackets = append(e.KillBrackets, b)
+			}
+			if tc.change != nil {
+				tc.change(e, excluded)
+			}
+			q := e.Qualification()
+			input.ClockCoverage = &q
+			causes := q.WindowCauses(1, 5, false)
+			got := pooledPreviewMedia(&input)
+			if tc.name == "clean" {
+				if !slices.Equal(causes, []string{"clock-coverage-kill-excluded"}) || got.Status != "passed" || got.ExcludedKills != 1 {
+					t.Fatalf("clean excluded kill: causes=%v %+v", causes, got)
+				}
+				return
+			}
+			if len(causes) < 2 || !slices.Contains(causes, "clock-coverage-kill-excluded") || got.ExcludedKills != 0 || got.Status == "passed" || got.EventCount != 31 {
+				t.Fatalf("MUTATION: excluded-bracket-skips-timelines: causes=%v %+v", causes, got)
+			}
+		})
 	}
 }
