@@ -11,7 +11,7 @@ func diagnosticCode(reason string) string {
 	switch reason {
 	case "", "missing-live-call", "missing-live-inventory", "restore-unsettled", "restore-unconfirmed",
 		"known-call-loss", "compatibility-refused", "known-relay-failure", "relay-self-fence", "relay-continuity-failed",
-		"procedure-incomplete", "media-unavailable", "media-undecided",
+		"procedure-incomplete", "media-unavailable", "media-undecided", "media-refresh-unavailable",
 		"pooled-qualification-unavailable", "pooled-qualification-undecided", "procedure-unqualified":
 		return reason
 	default:
@@ -72,6 +72,9 @@ func (s *Session) retainGateDiagnostics(result *SequenceResult, stopped map[oper
 			}
 		}
 		gateReason := g.Reason
+		if gateReason == "" {
+			gateReason = p.MediaRefreshReason
+		}
 		if g.Status == operator.Inconclusive && gateReason == "" {
 			switch {
 			case !p.Completed:

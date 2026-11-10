@@ -9,6 +9,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 // TimingRecorder writes independent diagnostic JSON Lines. Errors are retained
@@ -98,6 +99,23 @@ func (r *TimingRecorder) RecordLeaseRead(read LeaseRead, received time.Duration)
 		ReceivedNS int64            `json:"receivedNs"`
 		Evidence   clocks.Evidence  `json:"evidence"`
 	}{"clock-lease-observation", r.refreshes, sent, int64(received), clocks.PublicEvidence(read.Evidence)})
+}
+
+// RecordMediaRefresh retains only the gate, duration and a fixed error reason.
+// The sequence calls it once for each retained gate, within the judge budget.
+func (r *TimingRecorder) RecordMediaRefresh(gate operator.Gate, elapsed time.Duration, failed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reason := ""
+	if failed {
+		reason = "media-refresh-unavailable"
+	}
+	r.write(struct {
+		Type       string        `json:"type"`
+		Gate       operator.Gate `json:"gate"`
+		DurationNS int64         `json:"durationNs"`
+		Reason     string        `json:"reason,omitempty"`
+	}{"gate-media-refresh", gate, int64(elapsed), reason})
 }
 
 func (r *TimingRecorder) Finish() {

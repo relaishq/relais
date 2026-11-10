@@ -16,6 +16,9 @@ type SequencePorts struct {
 	Minimum        func(operator.Gate) time.Duration
 	Command        func(context.Context, operator.Gate, time.Duration) ProcedureResult
 	Finalize       func(context.Context, time.Duration) (*MediaSummary, error)
+	// RefreshMedia rejudges each retained gate population with final coverage.
+	// It performs no drainage and shares the original pool judge deadline.
+	RefreshMedia func(context.Context, operator.Gate) (*MediaSummary, error)
 	// FinalizeDiagnostics runs after the pool deadline decision, never before a judge.
 	FinalizeDiagnostics func(context.Context, time.Duration)
 }
@@ -144,6 +147,37 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 		pool, err := p.Finalize(poolCtx, end)
 		if pool != nil && (err == nil && s.clock.Elapsed() < end || pool.Status == operator.Failure) {
 			out.Pool = pool
+		}
+		if p.RefreshMedia != nil {
+			for i := range out.Procedures {
+				prior := out.Procedures[i].Media
+				if prior == nil {
+					continue
+				}
+				media, err := p.RefreshMedia(poolCtx, out.Gates[i].Gate)
+				if err != nil {
+					out.Procedures[i].MediaRefreshReason = "media-refresh-unavailable"
+				}
+				if media != nil && media.Status == operator.Failure {
+					out.Procedures[i].Media = media
+					out.Procedures[i].Status, out.Gates[i].Status = operator.Failure, operator.Failure
+				} else if prior.Status != operator.Failure {
+					if err != nil || media == nil || s.clock.Elapsed() >= end {
+						// An unavailable refresh cannot leave a passing gate behind.
+						retained := *prior
+						retained.Status = operator.Inconclusive
+						media = &retained
+						delete(awaiting, i)
+						if out.Gates[i].Status != operator.Failure {
+							out.Procedures[i].Status, out.Gates[i].Status = operator.Inconclusive, operator.Inconclusive
+						}
+					}
+					out.Procedures[i].Media = media
+					if media.Status != operator.Passed && out.Gates[i].Status == operator.Passed {
+						out.Procedures[i].Status, out.Gates[i].Status = operator.Inconclusive, operator.Inconclusive
+					}
+				}
+			}
 		}
 		// Diagnostic latency cannot turn an already accepted pool into a
 		// deadline failure. This hook has no policy observations or judgments.

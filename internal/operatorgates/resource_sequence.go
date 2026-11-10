@@ -184,6 +184,8 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	var boundary *operatorcaller.Broker
 	var caller *CallerRuntime
 	var current operator.Gate
+	gatePools := map[operator.Gate]*EvidenceRuntime{}
+	gateMediaErrors := map[operator.Gate]error{}
 	next := max(uint64(1), c.CallerIDBase)
 	wall := func(end time.Duration) time.Time { return s.clock.Wall().Add(max(0, end-s.clock.Elapsed())) }
 	procedures := func() ProcedurePorts {
@@ -311,7 +313,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			p := procedures()
 			p.Media = caller.Media
 			p.Duplicates = caller.Duplicates
-			return runResourceCommand(ctx, s.clock, caller, end, p, func(ctx context.Context, p ProcedurePorts, end time.Duration) ProcedureResult {
+			out := runResourceCommand(ctx, s.clock, caller, end, p, func(ctx context.Context, p ProcedurePorts, end time.Duration) ProcedureResult {
 				runtime.commandPorts = &p
 				defer func() { runtime.commandPorts = nil }()
 				var out ProcedureResult
@@ -328,6 +330,11 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 				}
 				return out
 			}, stop)
+			gatePools[gate] = pool.snapshot()
+			if out.Media != nil {
+				gateMediaErrors[gate] = caller.err
+			}
+			return out
 		},
 		Finalize: func(ctx context.Context, end time.Duration) (*MediaSummary, error) {
 			attemptsBefore := len(s.clockDrainAttempts) + s.clockDrainAttemptsOmitted
@@ -338,6 +345,22 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			}
 			result.PoolError = err != nil
 			return summary, err
+		},
+		RefreshMedia: func(ctx context.Context, gate operator.Gate) (media *MediaSummary, err error) {
+			started := time.Now()
+			defer func() {
+				if r.Timing != nil {
+					r.Timing.RecordMediaRefresh(gate, time.Since(started), err != nil)
+				}
+			}()
+			if err := gateMediaErrors[gate]; err != nil {
+				return nil, err
+			}
+			gatePool := gatePools[gate]
+			gatePool.Coverage = func([]observe.CoverageWindow) *clocks.CoverageEvidence {
+				return result.ClockCoverage
+			}
+			return gatePool.Media(ctx)
 		},
 		FinalizeDiagnostics: func(ctx context.Context, end time.Duration) {
 			// Preserve diagnostics on pool decoding failure, when no judge ran.

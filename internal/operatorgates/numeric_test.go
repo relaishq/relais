@@ -24,6 +24,16 @@ type numericFailureWriter struct{}
 
 func (numericFailureWriter) Write([]byte) (int, error) { return 0, errors.New("write-failed") }
 
+func TestMediaRefreshTimingRecordsDurationAndFixedReason(t *testing.T) {
+	var output bytes.Buffer
+	r := &TimingRecorder{Writer: &output}
+	r.RecordMediaRefresh(operator.Load, 250*time.Millisecond, true)
+	want := "{\"type\":\"gate-media-refresh\",\"gate\":\"load\",\"durationNs\":250000000,\"reason\":\"media-refresh-unavailable\"}\n"
+	if output.String() != want || r.Err() != nil {
+		t.Fatal("MUTATION: gate-media-refresh-duration", output.String(), r.Err())
+	}
+}
+
 func TestNumericTimingRecordingCannotChangeJudgeVerdictsOrReasons(t *testing.T) {
 	for _, err := range []error{nil, errors.New("judge-incomplete")} {
 		judge := numericFixtureJudge{err: err}

@@ -996,9 +996,18 @@ check both paths at both pinned releases. The synthetic coverage fixture is
 input, not a reconstruction of measurements missing from an archive.
 
 `EvidenceRuntime.Media` only snapshots retained coverage on each phase judgment;
-it does no host reads or waiting. Final pool preparation drains tracking tails
-before constructing the final judge input, within the original pool collection
-cutoff, leaving 110 seconds of the existing two-minute pool budget for the judge.
+it does no host reads or waiting. After final pool preparation, each gate's
+original cumulative media population is judged again with the same final
+coverage snapshot. Later phases do not enter that gate's population. A failed
+or unavailable judgment cannot become a pass. Final pool preparation drains
+tracking tails before constructing the final judge input, within the original
+pool collection cutoff, leaving 110 seconds of the existing two-minute pool
+budget shared by the pool judgment and every gate refresh. A late refresh
+leaves a gate Inconclusive; lateness never creates Failure. A proved independent
+failure remains Failure. All judgments share the original pool deadline.
+Each refresh writes a `gate-media-refresh` host diagnostic with its gate,
+`durationNs` and the fixed `media-refresh-unavailable` reason on error. The gate
+diagnostic also retains this reason; raw judge error text is never published.
 When less time remains, drain stops at that reserve or is skipped.
 Falsification observed during drainage adds `clock-coverage-falsified` to the final judge input and fails closed.
 A clean closing tail can remove `clock-coverage-missing` qualification;
@@ -1012,6 +1021,14 @@ The rehearsal adapter provides this isolated reader. Without one, an uncovered
 tail stays incomplete; no unsafe transport fallback is used.
 Diagnostic cursors do not acknowledge the policy reader's cursor, so later
 policy reads may repeat rows; duplicate intervals do not narrow the maximum.
+
+For #251's 0.94 ms acceptance, `TestTakeover094msClockBoundary` in
+`pkg/callharness/clock_boundary_acceptance_test.go` checks synthetic first-return
+boundaries on both sides of the kill midpoint. Fixed 2/3 ms bounds leave the
+content classification undecided; receipt-bound 120/170 µs bounds decide the
+correct side. Pair this test with a free rehearsal using selected bounds and
+no `clock-coverage-*` cause. The historical 0.94 ms case remains unproven;
+stored media cannot be judged again with different bounds.
 
 Drain stops when every required slot has a closing row stamped at least
 `ceil(last-required-end + applicable-bound + 1s)` and its latest read consumed
