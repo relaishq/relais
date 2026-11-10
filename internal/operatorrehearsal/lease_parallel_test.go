@@ -23,7 +23,7 @@ func TestLeaseBatchConcurrentCertainty(t *testing.T) {
 		runner := leaseRunner(func(ctx context.Context, c Command) CommandResult {
 			slot := ""
 			for k, v := range ids {
-				if c.Args[6] == v {
+				if c.Args[3] == v {
 					slot = k
 				}
 			}

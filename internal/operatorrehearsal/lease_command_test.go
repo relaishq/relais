@@ -57,23 +57,21 @@ func TestHostReadCommandPriority(t *testing.T) {
 				}
 				require.Equal(t, operator.Succeeded, adapter.Execute(context.Background(), req).Transport)
 				require.Len(t, runner.commands, len(slots))
-				wrapper := `f=$(mktemp) || exit 125; trap 'rm -f "$f"' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(int(budget/time.Second)) + `s nice -n 10 sh "$f"`
+				cleanup := `rm -f "$f"`
+				if lease {
+					cleanup = `status=$?; rm -f "$f"; printf "\nclock-lease-cpu\n" >&2; times >&2; exit "$status"`
+				}
+				wrapper := `f=$(mktemp) || exit 125; trap '` + cleanup + `' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(int(budget/time.Second)) + `s nice -n 10 sh "$f"`
 				seen := map[string]bool{}
 				for _, c := range runner.commands {
 					require.Equal(t, "host-step", c.Label)
 					require.Equal(t, script, c.Input)
-					idIndex, size := 3, 7
-					if lease {
-						idIndex, size = 6, 13
-					}
-					require.Len(t, c.Args, size, "MUTATION: lease-command-priority")
-					id := c.Args[idIndex]
+					require.Equal(t, lease, c.LeaseCPU)
+					require.Len(t, c.Args, 7, "MUTATION: lease-command-priority")
+					id := c.Args[3]
 					require.False(t, seen[id])
 					seen[id] = true
 					want := []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}
-					if lease {
-						want = []string{"nice", "-n", "19", "docker", "exec", "-i", id, "nice", "-n", "19", "sh", "-c", wrapper}
-					}
 					require.Equal(t, want, c.Args, "MUTATION: lease-command-priority")
 				}
 				for _, slot := range slots {

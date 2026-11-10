@@ -31,7 +31,14 @@ WIRE_LIMIT = 23998
 def tracking_row(line):
     c = line.split()
     require(len(c) == 14, 'Invalid tracking log row')
-    at = datetime.datetime.strptime(' '.join(c[:2]), '%Y-%m-%d %H:%M:%S').replace(tzinfo=datetime.timezone.utc)
+    stamp = ' '.join(c[:2])
+    # Chrony's canonical form has a C parser. Keep strptime's original accepted
+    # forms as the fallback without loading its locale machinery on every read.
+    if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2} (?:[01][0-9]|2[0-3]):[0-9]{2}:[0-9]{2}', stamp):
+        at = datetime.datetime.fromisoformat(stamp)
+    else:
+        at = datetime.datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S')
+    at = at.replace(tzinfo=datetime.timezone.utc)
     values = [float(c[i]) for i in (4, 5, 6, 9, 10, 11, 12, 13)]
     require(all(math.isfinite(v) for v in values), 'Invalid tracking log number')
     stratum, combined = int(c[3]), int(c[8])
@@ -373,16 +380,23 @@ def add_probe_evidence(baseline, path, cursor, run_start_unix_ms):
             # Compression is not strictly monotone. A fitting chronological
             # prefix is sufficient; never spend unbounded time finding the max.
             text = ''.join(chunks)
+            def candidate_at(index):
+                end, skip_line, text_end, counts = steps[index]
+                log.seek(max(0, end - 256))
+                next_cursor = dict(file=identity, position=end, anchor=hashlib.sha256(log.read(min(end, 256))).hexdigest(), skipLine=skip_line)
+                return dict(lines=text[:text_end], cursor=next_cursor, lossCounts=counts)
+            # Most refreshes fit in full. Compress once before searching for a
+            # smaller prefix; the same wire checks still guard both paths.
+            complete = candidate_at(len(steps) - 1)
+            if probe_fits(baseline, complete):
+                return dict(baseline, probeLog=complete)
             best = None
             low, high = 0, len(steps) - 1
             for _ in range(13):
                 if low > high:
                     break
                 middle = (low + high) // 2
-                end, skip_line, text_end, counts = steps[middle]
-                log.seek(max(0, end - 256))
-                next_cursor = dict(file=identity, position=end, anchor=hashlib.sha256(log.read(min(end, 256))).hexdigest(), skipLine=skip_line)
-                candidate = dict(lines=text[:text_end], cursor=next_cursor, lossCounts=counts)
+                candidate = candidate_at(middle)
                 if probe_fits(baseline, candidate):
                     best = candidate
                     low = middle + 1
