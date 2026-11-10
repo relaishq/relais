@@ -574,7 +574,16 @@
     "probe-complete-prefix-unbounded",
     "lease-cpu-exit-erased",
     "lease-cpu-evidence-not-stripped",
-    "lease-cpu-reserve-omitted"
+    "lease-cpu-reserve-omitted",
+    "lease-fault-gap-removed",
+    "lease-fault-gap-restart-skipped",
+    "lease-fault-short-headroom-accepted",
+    "lease-fault-send-recheck-skipped",
+    "lease-fault-mapping-margin-omitted",
+    "lease-fault-refresh-deadline-reset",
+    "lease-fault-restoration-delayed",
+    "restoration-read-timing-dropped",
+    "ordinary-fault-diagnostic-dropped"
   ],
   "killed": [
     {
@@ -4866,6 +4875,60 @@
       "id": "lease-cpu-reserve-omitted",
       "test": "TestLeaseCPUCapturePreservesStderrBound/23999",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-gap-removed",
+      "test": "TestOrdinaryPreflightFaultQuietGap/move",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-gap-restart-skipped",
+      "test": "TestFaultQuietReacquiresHeadroom/fresh-reference",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-short-headroom-accepted",
+      "test": "TestFaultQuietReacquiresHeadroom/stale-reference",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-send-recheck-skipped",
+      "test": "TestFaultQuietSendRechecksAndRestorationBypasses/read-after-gap",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-mapping-margin-omitted",
+      "test": "TestCallerQuietGapBoundsMapping",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-refresh-deadline-reset",
+      "test": "TestFaultQuietKeepsOriginalRefreshDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-restoration-delayed",
+      "test": "TestFaultQuietSendRechecksAndRestorationBypasses/rollback-drain",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-read-timing-dropped",
+      "test": "TestRollbackContinuousLeaseCoverage/fresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "ordinary-fault-diagnostic-dropped",
+      "test": "TestOrdinaryFaultAndRestorationTimingDiagnostics",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

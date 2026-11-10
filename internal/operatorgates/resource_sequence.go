@@ -136,6 +136,9 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	if setupErr == nil {
 		guard, setupErr = s.BoundLeaseGuard(peer, pause)
 		s.liveLeaseGuard = guard
+		if setupErr == nil && r.Timing != nil {
+			guard.restorationReadObserved = r.Timing.RecordRestorationLeaseRead
+		}
 	}
 	if setupErr != nil {
 		reason := "precondition-failed"
@@ -274,6 +277,13 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 					}
 				}
 				return err
+			}
+			runtime.FaultQuietGap, err = callerQuietGap(broker.Registration.Burst, callerEnd-now, c.Bounds)
+			if err != nil {
+				return err
+			}
+			if r.Timing != nil {
+				runtime.FaultObserved = r.Timing.RecordFaultQuiet
 			}
 			// Media already runs while inventory and clocks are observed. Preserve
 			// its scheduled start on the elapsed clock instead of restarting the

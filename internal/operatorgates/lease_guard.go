@@ -34,6 +34,10 @@ type LeaseGuard struct {
 	frozenEnd                 int64
 	invalid                   bool
 	historyComplete           bool
+	lastReadDone              time.Duration
+	reading                   bool
+	refreshUntil              time.Duration
+	restorationReadObserved   func(LeaseRead, time.Duration, time.Duration)
 }
 
 func NewLeaseGuard(e clocks.CoverageEvidence, session *Session, read func(context.Context, time.Duration) (LeaseRead, error), pause func(context.Context, time.Duration) error) (*LeaseGuard, error) {
@@ -47,6 +51,7 @@ func NewLeaseGuard(e clocks.CoverageEvidence, session *Session, read func(contex
 func (g *LeaseGuard) accept(r LeaseRead) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	defer func() { g.lastReadDone, g.reading = g.clock.Elapsed(), false }()
 	// Session cursors advance even if acceptance stops before storing every slot.
 	// A later historical proof must not bridge rows lost at that boundary.
 	g.historyComplete = false
@@ -86,6 +91,10 @@ func (g *LeaseGuard) accept(r LeaseRead) error {
 // Check is pure with respect to host I/O, so it can run after arm and while
 // holding the send lock. It must never try to refresh from that lock.
 func (g *LeaseGuard) Check() error {
+	return g.checkAt(g.clock.Elapsed())
+}
+
+func (g *LeaseGuard) checkAt(at time.Duration) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.invalid {
@@ -94,7 +103,7 @@ func (g *LeaseGuard) Check() error {
 	values := map[string]int64{}
 	declared, _ := new(big.Rat).SetString(g.growth)
 	for _, slot := range inventory.Slots {
-		v, err := g.leases[slot].At(g.clock.Elapsed())
+		v, err := g.leases[slot].At(at)
 		if err != nil {
 			return err
 		}
@@ -136,6 +145,7 @@ func (g *LeaseGuard) workerError() (int64, error) {
 func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 	g.refresh.Lock()
 	defer g.refresh.Unlock()
+	g.refreshUntil = 0
 	if err := g.Check(); err == nil {
 		return nil
 	}
@@ -164,6 +174,7 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 		until = min(until, g.clock.Elapsed()+budget)
 	}
 	g.mu.Unlock()
+	g.refreshUntil = until
 	for g.clock.Elapsed() < until && ctx.Err() == nil {
 		if err := g.pause(ctx, min(100*time.Millisecond, until-g.clock.Elapsed())); err != nil {
 			return err
@@ -231,6 +242,9 @@ func (g *LeaseGuard) readAttempt(ctx context.Context, end time.Duration) (LeaseR
 	}
 	bounded, cancel := context.WithTimeout(ctx, leaseReadAttempt)
 	defer cancel()
+	g.mu.Lock()
+	g.reading = true
+	g.mu.Unlock()
 	return g.read(bounded, end)
 }
 
@@ -256,8 +270,12 @@ func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, st
 	if deadline, ok := ctx.Deadline(); ok {
 		end = min(end, g.clock.Elapsed()+time.Until(deadline)-RestoreReserve)
 	}
+	started := g.clock.Elapsed()
 	read, err := g.readAttempt(ctx, end)
 	accepted := g.accept(read)
+	if g.restorationReadObserved != nil {
+		g.restorationReadObserved(read, started, g.clock.Elapsed())
+	}
 	if err != nil {
 		return err
 	}

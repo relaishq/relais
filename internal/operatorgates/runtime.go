@@ -24,8 +24,10 @@ import (
 	"github.com/relaishq/relais/pkg/relay"
 )
 
-// ProcessRuntime renders and classifies the fixed host procedures. Every
-// mutation receives fresh four-host inventory, then clocks, then the fault hook.
+// ProcessRuntime renders and classifies the fixed host procedures. Ordinary
+// mutations receive inventory and clock admission before the fault hook;
+// planned ordinary faults also wait out lease reads. Restoration bypasses
+// clock admission and the gap, retaining post-rollback coverage in place.
 type ProcessRuntime struct {
 	commandPorts   *ProcedurePorts
 	Session        *Session
@@ -37,6 +39,8 @@ type ProcessRuntime struct {
 	ClockObserved  func(clocks.Evidence)
 	ClockSamples   []clocks.Evidence
 	BeforeMutation func(context.Context) error
+	FaultQuietGap  time.Duration
+	FaultObserved  func(FaultQuietTiming)
 }
 
 func ValidateProcessParameters(p ProcessParameters) error {
@@ -199,6 +203,18 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	if err != nil {
 		return StepResult{}, err
 	}
+	// Only ordinary preflight batches are protected. Restoration (including
+	// stable-from rollback trials) and post-operation coverage keep their timing.
+	plannedFault := !restore && (op == "move" || op == "drain" || op == "worker-down")
+	quiet := FaultQuietTiming{Action: op, Slot: slot}
+	if plannedFault {
+		if r.FaultObserved != nil {
+			defer func() { r.FaultObserved(quiet) }()
+		}
+		if err = lease.Guard.prepareFault(ctx, end-operator.HostSubmissionMinimum, r.FaultQuietGap, &quiet); err != nil {
+			return StepResult{}, r.preflightFailure(err, "clocks")
+		}
+	}
 	if !host.IsRead(op) && !restore && r.BeforeMutation != nil {
 		if err = r.BeforeMutation(ctx); err != nil {
 			return StepResult{}, err
@@ -210,6 +226,12 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			return StepResult{}, err
 		}
 		hooks = []ExchangeHooks{{BeforeSend: lease.Guard.Check}}
+		if plannedFault {
+			hooks[0].BeforeSend = func() error {
+				quiet.BeforeSendNS = int64(r.Session.clock.Elapsed())
+				return lease.Guard.checkFaultQuiet(r.FaultQuietGap, &quiet)
+			}
+		}
 	}
 	var observed StepResult
 	var operationErr error

@@ -6160,5 +6160,105 @@
     "Test": "TestLeaseCPUCapturePreservesStderrBound/23999",
     "Marker": "MUTATION: lease-cpu-capture",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-fault-gap-removed",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "if plannedFault {\n\t\tif r.FaultObserved != nil {",
+    "New": "if false {\n\t\tif r.FaultObserved != nil {",
+    "Test": "TestOrdinaryPreflightFaultQuietGap/move",
+    "Marker": "MUTATION: lease-fault-quiet-gap",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-gap-restart-skipped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "accept",
+    "Old": "defer func() { g.lastReadDone, g.reading = g.clock.Elapsed(), false }()",
+    "New": "defer func() { if !g.reading { g.lastReadDone = g.clock.Elapsed() }; g.reading = false }()",
+    "Test": "TestFaultQuietReacquiresHeadroom/fresh-reference",
+    "Marker": "MUTATION: lease-fault-gap-restart",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-short-headroom-accepted",
+    "Test": "TestFaultQuietReacquiresHeadroom/stale-reference",
+    "Marker": "MUTATION: lease-fault-short-headroom",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "err := g.checkAt(ready)",
+        "New": "err := g.Check()"
+      },
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "if err = g.checkFaultQuiet(gap, timing); err == nil {",
+        "New": "if err = nil; err == nil {"
+      }
+    ]
+  },
+  {
+    "ID": "lease-fault-send-recheck-skipped",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "return lease.Guard.checkFaultQuiet(r.FaultQuietGap, &quiet)",
+    "New": "return lease.Guard.Check()",
+    "Test": "TestFaultQuietSendRechecksAndRestorationBypasses/read-after-gap",
+    "Marker": "MUTATION: lease-fault-send-check",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-mapping-margin-omitted",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "callerQuietGap",
+    "Old": "return baseline + width, nil",
+    "New": "return baseline, nil",
+    "Test": "TestCallerQuietGapBoundsMapping",
+    "Marker": "MUTATION: lease-fault-mapping-margin",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-refresh-deadline-reset",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "prepareFault",
+    "Old": "if g.refreshUntil > 0 {",
+    "New": "if false {",
+    "Test": "TestFaultQuietKeepsOriginalRefreshDeadline",
+    "Marker": "MUTATION: lease-fault-refresh-deadline",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-restoration-delayed",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "plannedFault := !restore && (op == \"move\" || op == \"drain\" || op == \"worker-down\")",
+    "New": "plannedFault := (op == \"move\" || op == \"drain\" || op == \"worker-down\")",
+    "Test": "TestFaultQuietSendRechecksAndRestorationBypasses/rollback-drain",
+    "Marker": "MUTATION: lease-fault-restore-gap",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-read-timing-dropped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "if g.restorationReadObserved != nil {",
+    "New": "if false {",
+    "Test": "TestRollbackContinuousLeaseCoverage/fresh",
+    "Marker": "MUTATION: restoration-read-timing",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "ordinary-fault-diagnostic-dropped",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordFaultQuiet",
+    "Old": "r.mu.Lock()",
+    "New": "if r.Writer != nil { return }; r.mu.Lock()",
+    "Test": "TestOrdinaryFaultAndRestorationTimingDiagnostics",
+    "Marker": "MUTATION: ordinary-fault-diagnostic",
+    "Package": "./internal/operatorgates"
   }
 ]

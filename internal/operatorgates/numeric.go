@@ -101,6 +101,34 @@ func (r *TimingRecorder) RecordLeaseRead(read LeaseRead, received time.Duration)
 	}{"clock-lease-observation", r.refreshes, sent, int64(received), clocks.PublicEvidence(read.Evidence)})
 }
 
+func (r *TimingRecorder) RecordFaultQuiet(timing FaultQuietTiming) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.write(struct {
+		Type string `json:"type"`
+		FaultQuietTiming
+	}{"clock-fault-quiet", timing})
+}
+
+// Restoration stays exempt from the quiet gap. Include the whole attempt and
+// its send anchors so its overlap can be scored separately without host text.
+func (r *TimingRecorder) RecordRestorationLeaseRead(read LeaseRead, started, completed time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sent := map[string]int64{}
+	for _, slot := range []string{"relay", "shared", "w1", "w2"} {
+		if at, ok := read.Sent[slot]; ok {
+			sent[slot] = int64(at)
+		}
+	}
+	r.write(struct {
+		Type        string           `json:"type"`
+		StartedNS   int64            `json:"startedNs"`
+		CompletedNS int64            `json:"completedNs"`
+		SentNS      map[string]int64 `json:"sentNs"`
+	}{"clock-restoration-lease-read", int64(started), int64(completed), sent})
+}
+
 // RecordMediaRefresh retains only the gate, duration and a fixed error reason.
 // The sequence calls it once for each retained gate, within the judge budget.
 func (r *TimingRecorder) RecordMediaRefresh(gate operator.Gate, elapsed time.Duration, failed bool) {

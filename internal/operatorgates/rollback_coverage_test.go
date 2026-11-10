@@ -42,6 +42,15 @@ func TestRollbackContinuousLeaseCoverage(t *testing.T) {
 			c.Advance(200 * time.Second)
 			start, finish := c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond)
 			calls := 0
+			observedReads := 0
+			g.restorationReadObserved = func(read LeaseRead, started, completed time.Duration) {
+				observedReads++
+				require.LessOrEqual(t, started, completed, "MUTATION: restoration-read-timing")
+				require.Equal(t, c.Elapsed(), completed, "MUTATION: restoration-read-timing")
+				if mode != "unknown" && calls > 0 {
+					require.Len(t, read.Sent, 4, "MUTATION: restoration-read-timing")
+				}
+			}
 			g.read = func(context.Context, time.Duration) (LeaseRead, error) {
 				calls++
 				if mode == "unknown" {
@@ -151,6 +160,9 @@ func TestRollbackContinuousLeaseCoverage(t *testing.T) {
 			}
 			if wantReads != calls {
 				t.Fatal("MUTATION: rollback-read-budget", mode, calls, wantReads)
+			}
+			if calls > 0 {
+				require.Equal(t, calls, observedReads, "MUTATION: restoration-read-timing")
 			}
 			if mode == "restore-budget" {
 				_, err = r.StepWithLeases(context.Background(), "worker-start", "w1", end, ProcessExtra{Worker: "w1"}, LeaseStep{Guard: g})
