@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -112,6 +113,16 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 	wait = requestWait
 	if len(hooks) > 0 && hooks[0].Sent != nil {
 		hooks[0].Sent(s.clock.Elapsed())
+	}
+	if hostReadBatch(op) || op == operator.HostLeaseRead || op == operator.HostExecute && (host.IsRead(action) || !effectful(op, action)) {
+		labels := (operator.Uncertainty{Kind: string(op), Target: target, Action: action}).Public()
+		timing := HostReadTiming{Operation: operator.Operation(labels.Kind), Target: labels.Target, Action: labels.Action, StartedNS: int64(s.clock.Elapsed()), StartedAt: s.clock.Wall()}
+		defer func() {
+			timing.CompletedNS, timing.CompletedAt = int64(s.completeHostRead()), s.clock.Wall()
+			if s.hostReadObserved != nil {
+				s.hostReadObserved(timing)
+			}
+		}()
 	}
 	if err = p.Send(wait, operator.Frame{Type: "request", Session: s.ID, Request: &req}); err != nil {
 		s.noteUnknownRequest(req.ID, transportRule(err, "send-failed"))

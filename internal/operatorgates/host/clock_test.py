@@ -98,6 +98,28 @@ class LeaseTests(unittest.TestCase):
 
 
 class TrackingTests(unittest.TestCase):
+    def test_canonical_timestamp_avoids_loading_strptime(self):
+        with patch.object(clock.datetime, 'datetime', wraps=clock.datetime.datetime) as date:
+            clock.tracking_row(self.row(0))
+        self.assertEqual(date.strptime.call_count, 0, 'MUTATION: tracking-timestamp-cost')
+
+    def test_timestamp_conversion_matches_original_parser(self):
+        # Canonical chrony timestamps and the existing noncanonical fallback.
+        for stamp in ('2026-10-25 00:00:00', '2000-02-29 23:59:59',
+                      '1970-01-01 00:00:00', '2026-1-2 3:4:5',
+                      '2025-02-29 00:00:00', '2026-13-01 00:00:00',
+                      '2026-10-25 24:00:00', '2026-10-25 00:00:60',
+                      '2026-10-25T00:00:00', '2026-10-25 00:00:00.1'):
+            with self.subTest(stamp=stamp):
+                line = stamp + ' GPS 2 -3.541 0.075 1e-6 N 2 2.940e-7 -2.084e-6 1.534e-6 3.472e-6 9e-6'
+                try:
+                    expected = int(clock.datetime.datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S').replace(tzinfo=clock.datetime.timezone.utc).timestamp())
+                except ValueError:
+                    with self.assertRaises(ValueError):
+                        clock.tracking_row(line)
+                else:
+                    self.assertEqual(clock.tracking_row(line)['unixSeconds'], expected)
+
     def setUp(self):
         import pathlib
         import tempfile
@@ -368,6 +390,39 @@ class TrackingTests(unittest.TestCase):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_complete_prefix_still_checks_wire_budget(self):
+        import random
+        import string
+        self.sample['tracking'] = ''.join(random.Random(31).choices(string.ascii_letters + string.digits, k=22000))
+        self.path.write_bytes(b''.join(self.line(i) for i in range(768)))
+        result = self.read()
+        raw = clock.json.dumps(result).encode()
+        self.assertLessEqual(len(clock.base64.b64encode(clock.gzip.compress(raw))), clock.WIRE_LIMIT,
+                             'MUTATION: probe-complete-wire-budget')
+        probes = result.pop('probeLog')
+        self.assertEqual(result, self.baseline())
+        self.assertLess(probes['cursor']['position'], self.path.stat().st_size)
+        self.assertEqual(probes['lines'].encode(), self.path.read_bytes()[:probes['cursor']['position']])
+
+    def test_fitting_probe_window_needs_one_compression(self):
+        self.path.write_bytes(b''.join(self.line(i) for i in range(768)))
+        with patch.object(clock.gzip, 'compress', wraps=clock.gzip.compress) as compress:
+            result = clock.add_probe_evidence(self.sample, str(self.path), None, 0)
+        self.assertEqual(len(result['probeLog']['lines']), 768*84)
+        self.assertEqual(compress.call_count, 1, 'MUTATION: probe-prefix-cost')
+
+    def test_complete_probe_prefix_preserves_every_field(self):
+        self.path.write_bytes(self.line() * 96)
+        baseline = dict(errorBoundNs=7, rateErrorPpm=0.5, measuredUnixNs='1792886401000000000',
+                        lease=dict(available=False, reason='read-failed'))
+        result = clock.add_probe_evidence(baseline, str(self.path), None, 0)
+        info = self.path.stat()
+        expected = dict(baseline, probeLog=dict(lines=(self.line()*96).decode(),
+                        cursor=dict(file=f'{info.st_dev}:{info.st_ino}', position=info.st_size,
+                                    anchor=clock.hashlib.sha256(self.path.read_bytes()[-256:]).hexdigest(), skipLine=False),
+                        lossCounts=dict(readFailures=0, malformedLines=0, cursorGaps=0, capacityEvents=0, omittedRecords=0)))
+        self.assertEqual(result, expected)
+
     def setUp(self):
         import pathlib
         import tempfile

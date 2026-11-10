@@ -234,11 +234,13 @@ func (t *Topology) Redact(text string) string {
 
 func (a *Adapter) executeHost(bounded context.Context, req operator.Request) (reply operator.Reply) {
 	started := time.Now()
+	lease := req.Operation == operator.HostLeaseRead || req.Operation == operator.HostLeaseReadBatch
+	cpu := "cpu=unavailable"
 	defer func() {
-		if (req.Operation == operator.HostLeaseRead || req.Operation == operator.HostLeaseReadBatch) && a.Diagnostics != nil {
+		if lease && a.Diagnostics != nil {
 			a.mu.Lock()
 			defer a.mu.Unlock()
-			_, _ = fmt.Fprintf(a.Diagnostics, "clock-lease-exec slot=%s durationMs=%d certainty=%s\n", req.Target, time.Since(started).Milliseconds(), reply.Transport)
+			_, _ = fmt.Fprintf(a.Diagnostics, "clock-lease-exec slot=%s durationMs=%d certainty=%s %s\n", req.Target, time.Since(started).Milliseconds(), reply.Transport, cpu)
 		}
 	}()
 	if a.Topology == nil {
@@ -266,9 +268,16 @@ func (a *Adapter) executeHost(bounded context.Context, req operator.Request) (re
 	}
 	// timeout also lives inside the container: killing the docker client alone
 	// would not stop the submitted command. Its outcome still remains unknown.
-	wrapper := `f=$(mktemp) || exit 125; trap 'rm -f "$f"' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(seconds) + `s nice -n 10 sh "$f"`
-	command := Command{Label: "host-step", Args: []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}, Input: req.Script}
+	cleanup := `rm -f "$f"`
+	if lease {
+		cleanup = `status=$?; rm -f "$f"; printf "\nclock-lease-cpu\n" >&2; times >&2; exit "$status"`
+	}
+	wrapper := `f=$(mktemp) || exit 125; trap '` + cleanup + `' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(seconds) + `s nice -n 10 sh "$f"`
+	command := Command{Label: "host-step", Args: []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}, Input: req.Script, LeaseCPU: lease}
 	result := a.Runner.Run(bounded, command)
+	if lease {
+		result.Stderr, cpu = splitLeaseCPU(result.Stderr)
+	}
 	reply = a.classify(req.ID, result)
 	if reply.Transport != operator.Succeeded || hostObservationFailed(req.Action, result.Stdout) {
 		a.printFailure(result)

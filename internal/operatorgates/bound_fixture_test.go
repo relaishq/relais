@@ -69,6 +69,8 @@ func testRuntimeLeases(t *testing.T, r *ProcessRuntime) {
 	})
 	require.NoError(t, err)
 	r.Leases = g
+	// Synthetic callers use exact mapping plus the selected host interval.
+	r.FaultQuietGap = time.Second + 2*time.Duration(max(g.bounds.FrontendControlBoundNS, g.bounds.FrontendWorkerBoundNS))
 }
 
 func testStoreLease(t *testing.T, s *Session) {

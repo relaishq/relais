@@ -568,7 +568,30 @@
     "resource-pool-input-before-drain",
     "gate-media-refresh-error-diagnostic",
     "gate-media-refresh-duration-zero",
-    "gate-media-refresh-timing-unwired"
+    "gate-media-refresh-timing-unwired",
+    "tracking-canonical-parser-slow",
+    "probe-complete-prefix-skipped",
+    "probe-complete-prefix-unbounded",
+    "lease-cpu-exit-erased",
+    "lease-cpu-evidence-not-stripped",
+    "lease-cpu-reserve-omitted",
+    "lease-fault-gap-removed",
+    "lease-fault-gap-restart-skipped",
+    "lease-fault-short-headroom-accepted",
+    "lease-fault-send-recheck-skipped",
+    "lease-fault-mapping-margin-omitted",
+    "lease-fault-refresh-deadline-reset",
+    "lease-fault-restoration-delayed",
+    "restoration-read-timing-dropped",
+    "ordinary-fault-diagnostic-dropped",
+    "lease-fault-gap-floor-removed",
+    "lease-fault-reading-check-removed",
+    "lease-fault-probe-min-last",
+    "host-read-batch-gap-untracked",
+    "lease-no-read-completion",
+    "lease-unsent-reacquire-counted",
+    "host-read-diagnostic-dropped",
+    "host-read-private-label"
   ],
   "killed": [
     {
@@ -4823,6 +4846,144 @@
     {
       "id": "gate-media-refresh-timing-unwired",
       "test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "tracking-canonical-parser-slow",
+      "test": "TestPythonGuards/tracking-canonical-parser-slow",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed"
+    },
+    {
+      "id": "probe-complete-prefix-skipped",
+      "test": "TestPythonGuards/probe-complete-prefix-skipped",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed"
+    },
+    {
+      "id": "probe-complete-prefix-unbounded",
+      "test": "TestPythonGuards/probe-complete-prefix-unbounded",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-cpu-exit-erased",
+      "test": "TestLeaseCPUWrapperPreservesExit/3",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-cpu-evidence-not-stripped",
+      "test": "TestLeaseCPUDoesNotChangeEvidence/bytes=23999/exit=0",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-cpu-reserve-omitted",
+      "test": "TestLeaseCPUCapturePreservesStderrBound/23999",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-gap-removed",
+      "test": "TestOrdinaryPreflightFaultQuietGap/move",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-gap-restart-skipped",
+      "test": "TestFaultQuietReacquiresHeadroom/fresh-reference",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-short-headroom-accepted",
+      "test": "TestFaultQuietReacquiresHeadroom/stale-reference",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-send-recheck-skipped",
+      "test": "TestFaultQuietSendRechecksAndRestorationBypasses/read-after-gap",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-mapping-margin-omitted",
+      "test": "TestCallerQuietGapBoundsMapping",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-refresh-deadline-reset",
+      "test": "TestFaultQuietKeepsOriginalRefreshDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-restoration-delayed",
+      "test": "TestFaultQuietSendRechecksAndRestorationBypasses/rollback-drain",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-read-timing-dropped",
+      "test": "TestRollbackContinuousLeaseCoverage/fresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "ordinary-fault-diagnostic-dropped",
+      "test": "TestOrdinaryFaultAndRestorationTimingDiagnostics",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-gap-floor-removed",
+      "test": "TestOrdinaryFaultQuietFloorAndInflightRead/zero-gap",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-reading-check-removed",
+      "test": "TestOrdinaryFaultQuietFloorAndInflightRead/inflight-read",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-probe-min-last",
+      "test": "TestCallerQuietGapUsesTightestProbe",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-batch-gap-untracked",
+      "test": "TestOrdinaryFaultWaitsAfterCachedLeaseInventoryBatch",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-no-read-completion",
+      "test": "TestLeaseAcceptanceWithoutReadPreservesCompletion",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-unsent-reacquire-counted",
+      "test": "TestQuietReacquisitionWithoutSubmission",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-diagnostic-dropped",
+      "test": "TestHostReadCompletionKindsAndDiagnostics/inventory",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-private-label",
+      "test": "TestHostReadDiagnosticRedactsLabels",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

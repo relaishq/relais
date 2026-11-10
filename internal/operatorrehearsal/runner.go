@@ -17,6 +17,9 @@ type Command struct {
 	Label string
 	Args  []string
 	Input []byte
+	// LeaseCPU reserves stderr space for the fixed shell CPU trailer. The adapter
+	// removes it before applying the original evidence output bounds.
+	LeaseCPU bool
 }
 type CommandResult struct {
 	Code           *int
@@ -92,7 +95,11 @@ func (LocalRunner) Run(ctx context.Context, command Command) CommandResult {
 	cmd.Stdin = bytes.NewReader(command.Input)
 	cmd.WaitDelay = time.Second
 	out := boundedOutput{limit: commandOutputLimit(command.Label)}
-	stderr := boundedOutput{limit: commandOutputLimit(command.Label)}
+	stderrLimit := commandOutputLimit(command.Label)
+	if command.LeaseCPU {
+		stderrLimit += leaseCPUOutputReserve
+	}
+	stderr := boundedOutput{limit: stderrLimit}
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	err := cmd.Run()
 	result := CommandResult{Stdout: out.data, Stderr: stderr.data, Truncated: out.truncated || stderr.truncated}

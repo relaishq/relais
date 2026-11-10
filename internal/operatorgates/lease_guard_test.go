@@ -26,7 +26,7 @@ func (c *leaseTestClock) Elapsed() time.Duration  { c.mu.Lock(); defer c.mu.Unlo
 func (c *leaseTestClock) Wall() time.Time         { return time.UnixMilli(1000000).Add(c.Elapsed()) }
 func (c *leaseTestClock) advance(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.tick += d }
 
-func leaseGuardFixture(t *testing.T, c Clock) (*LeaseGuard, LeaseRead) {
+func leaseGuardFixture(t *testing.T, c Clock, sessions ...*Session) (*LeaseGuard, LeaseRead) {
 	t.Helper()
 	raw, err := os.ReadFile("clocks/testdata/bound-receipt.json")
 	require.NoError(t, err)
@@ -41,10 +41,23 @@ func leaseGuardFixture(t *testing.T, c Clock) (*LeaseGuard, LeaseRead) {
 		r.Sent[slot] = c.Elapsed() - 50*time.Millisecond
 	}
 	session, _ := fixtureSession(t)
+	if len(sessions) > 0 {
+		session = sessions[0]
+	}
 	session.clock, session.Budget.clock = c, c
-	g, err := NewLeaseGuard(e, session, func(context.Context, time.Duration) (LeaseRead, error) { return r, nil }, func(context.Context, time.Duration) error { return nil })
+	g, err := NewLeaseGuard(e, session, func(context.Context, time.Duration) (LeaseRead, error) { return r, nil }, func(_ context.Context, d time.Duration) error {
+		switch clock := c.(type) {
+		case *leaseTestClock:
+			clock.advance(d)
+		case *FakeClock:
+			clock.Advance(d)
+		}
+		return nil
+	})
 	require.NoError(t, err)
-	require.NoError(t, g.accept(r))
+	read, err := g.readAttempt(context.Background(), c.Elapsed()+time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, g.accept(read))
 	return g, r
 }
 
@@ -274,7 +287,9 @@ func TestLeaseReplyAging(t *testing.T) {
 				return respond(req)
 			}
 			c.advance(delay)
-			return hostReply(t, []byte(`{"kind":"ok","started":"2026-11-06T01:53:20Z","ended":"2026-11-06T01:53:20.001Z","data":{"completed":true,"signalBeforeUnixNs":"1793930000000000000","signalAfterUnixNs":"1793930000000107600"}}`))
+			// Leave room for the new pre-dispatch gap, while the additional
+			// 1.5s reply delay still crosses the unchanged signal bound.
+			return hostReply(t, []byte(`{"kind":"ok","started":"2026-11-06T01:53:20Z","ended":"2026-11-06T01:53:20.001Z","data":{"completed":true,"signalBeforeUnixNs":"1793930000000000000","signalAfterUnixNs":"1793930000000107000"}}`))
 		}
 		_, err := r.StepWithLeases(context.Background(), "worker-down", "w1", time.Minute, ProcessExtra{Worker: "w1"}, LeaseStep{Guard: g})
 		if err != nil || r.Session.Latched() || len(r.Session.clockBrackets) != 1 || r.Session.clockBrackets[0].LeaseExcluded != (delay != 0) {
