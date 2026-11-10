@@ -123,6 +123,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	result := ResourceResult{CallerStopped: map[operator.Gate]bool{}}
 	if r.Timing != nil {
 		s.leaseReadObserved = r.Timing.RecordLeaseRead
+		s.hostReadObserved = r.Timing.RecordHostRead
 	}
 	pause := r.Sleep
 	if pause == nil {

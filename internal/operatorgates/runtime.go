@@ -26,7 +26,7 @@ import (
 
 // ProcessRuntime renders and classifies the fixed host procedures. Ordinary
 // mutations receive inventory and clock admission before the fault hook;
-// planned ordinary faults also wait out lease reads. Restoration bypasses
+// planned ordinary faults also wait out all host reads. Restoration bypasses
 // clock admission and the gap, retaining post-rollback coverage in place.
 type ProcessRuntime struct {
 	commandPorts   *ProcedurePorts
@@ -203,7 +203,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	if err != nil {
 		return StepResult{}, err
 	}
-	// Only ordinary preflight batches are protected. Restoration (including
+	// All ordinary preflight host reads are protected. Restoration (including
 	// stable-from rollback trials) and post-operation coverage keep their timing.
 	plannedFault := !restore && (op == "move" || op == "drain" || op == "worker-down")
 	quiet := FaultQuietTiming{Action: op, Slot: slot}

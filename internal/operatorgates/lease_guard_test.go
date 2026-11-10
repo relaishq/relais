@@ -26,7 +26,7 @@ func (c *leaseTestClock) Elapsed() time.Duration  { c.mu.Lock(); defer c.mu.Unlo
 func (c *leaseTestClock) Wall() time.Time         { return time.UnixMilli(1000000).Add(c.Elapsed()) }
 func (c *leaseTestClock) advance(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.tick += d }
 
-func leaseGuardFixture(t *testing.T, c Clock) (*LeaseGuard, LeaseRead) {
+func leaseGuardFixture(t *testing.T, c Clock, sessions ...*Session) (*LeaseGuard, LeaseRead) {
 	t.Helper()
 	raw, err := os.ReadFile("clocks/testdata/bound-receipt.json")
 	require.NoError(t, err)
@@ -41,6 +41,9 @@ func leaseGuardFixture(t *testing.T, c Clock) (*LeaseGuard, LeaseRead) {
 		r.Sent[slot] = c.Elapsed() - 50*time.Millisecond
 	}
 	session, _ := fixtureSession(t)
+	if len(sessions) > 0 {
+		session = sessions[0]
+	}
 	session.clock, session.Budget.clock = c, c
 	g, err := NewLeaseGuard(e, session, func(context.Context, time.Duration) (LeaseRead, error) { return r, nil }, func(_ context.Context, d time.Duration) error {
 		switch clock := c.(type) {
@@ -52,7 +55,9 @@ func leaseGuardFixture(t *testing.T, c Clock) (*LeaseGuard, LeaseRead) {
 		return nil
 	})
 	require.NoError(t, err)
-	require.NoError(t, g.accept(r))
+	read, err := g.readAttempt(context.Background(), c.Elapsed()+time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, g.accept(read))
 	return g, r
 }
 

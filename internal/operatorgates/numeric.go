@@ -110,6 +110,15 @@ func (r *TimingRecorder) RecordFaultQuiet(timing FaultQuietTiming) {
 	}{"clock-fault-quiet", timing})
 }
 
+func (r *TimingRecorder) RecordHostRead(timing HostReadTiming) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.write(struct {
+		Type string `json:"type"`
+		HostReadTiming
+	}{"host-read", timing})
+}
+
 // Restoration stays exempt from the quiet gap. Include the whole attempt and
 // its send anchors so its overlap can be scored separately without host text.
 func (r *TimingRecorder) RecordRestorationLeaseRead(read LeaseRead, started, completed time.Duration) {

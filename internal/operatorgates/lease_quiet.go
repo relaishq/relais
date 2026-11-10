@@ -10,7 +10,7 @@ import (
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
-// callerQuietGap protects ordinary preflight batches before planned faults.
+// callerQuietGap protects all ordinary preflight host reads before planned faults.
 // Restoration is exempt, including stable-from rollback moves and their
 // unchanged post-operation coverage reads. Bound the mapped start interval using one
 // registration probe already retained by the caller. Later probe intersections
@@ -47,7 +47,7 @@ func callerQuietGap(burst operatorcaller.Burst, horizon time.Duration, bounds cl
 type FaultQuietTiming struct {
 	Action         string `json:"action"`
 	Slot           string `json:"slot"`
-	LastReadDoneNS int64  `json:"lastReadDoneNs"`
+	LastReadDoneNS int64  `json:"lastReadDoneNs"` // All host reads; retain the existing diagnostic key.
 	RequiredGapNS  int64  `json:"requiredGapNs"`
 	WaitedNS       int64  `json:"waitedNs"`
 	BeforeSendNS   int64  `json:"beforeSendNs"`
@@ -63,9 +63,7 @@ func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, t
 	g.refresh.Lock()
 	defer g.refresh.Unlock()
 	defer func() {
-		g.mu.Lock()
-		timing.LastReadDoneNS = int64(g.lastReadDone)
-		g.mu.Unlock()
+		timing.LastReadDoneNS = int64(g.session.hostReadCompleted())
 	}()
 	if gap < time.Second {
 		return fault("clock-lease-missing")
@@ -89,9 +87,7 @@ func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, t
 	g.mu.Unlock()
 	timing.RequiredGapNS = int64(gap)
 	for ctx.Err() == nil {
-		g.mu.Lock()
-		done := g.lastReadDone
-		g.mu.Unlock()
+		done := g.session.hostReadCompleted()
 		timing.LastReadDoneNS = int64(done)
 		now := g.clock.Elapsed()
 		ready := max(now, done+gap)
@@ -127,7 +123,11 @@ func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, t
 		wait, cancel := context.WithTimeout(ctx, until-g.clock.Elapsed())
 		read, err := g.readAttempt(wait, until)
 		cancel()
-		timing.Reacquires++
+		g.mu.Lock()
+		if g.reading && len(read.Sent) > 0 {
+			timing.Reacquires++
+		}
+		g.mu.Unlock()
 		accepted := g.accept(read)
 		if err != nil {
 			return err
@@ -147,10 +147,11 @@ func (g *LeaseGuard) checkFaultQuiet(gap time.Duration, timing *FaultQuietTiming
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.clock.Elapsed()
-	if g.reading || now-g.lastReadDone < gap {
+	done := g.session.hostReadCompleted()
+	if g.reading || now-done < gap {
 		return fault("clock-lease-expired")
 	}
-	timing.LastReadDoneNS = int64(g.lastReadDone)
+	timing.LastReadDoneNS = int64(done)
 	timing.RemainingNS = math.MaxInt64
 	for _, l := range g.leases {
 		v, err := l.At(now)

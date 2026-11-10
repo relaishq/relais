@@ -6173,13 +6173,23 @@
   },
   {
     "ID": "lease-fault-gap-restart-skipped",
-    "File": "internal/operatorgates/lease_guard.go",
-    "Function": "accept",
-    "Old": "defer func() { g.lastReadDone, g.reading = g.clock.Elapsed(), false }()",
-    "New": "defer func() { if !g.reading { g.lastReadDone = g.clock.Elapsed() }; g.reading = false }()",
     "Test": "TestFaultQuietReacquiresHeadroom/fresh-reference",
     "Marker": "MUTATION: lease-fault-gap-restart",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "read, err := g.readAttempt(wait, until)",
+        "New": "previousDone := g.session.hostReadCompleted()\n\t\tread, err := g.readAttempt(wait, until)"
+      },
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "accepted := g.accept(read)",
+        "New": "accepted := g.accept(read)\n\t\tg.session.mu.Lock()\n\t\tg.session.lastHostReadDone = previousDone\n\t\tg.session.mu.Unlock()"
+      }
+    ]
   },
   {
     "ID": "lease-fault-short-headroom-accepted",
@@ -6259,6 +6269,86 @@
     "New": "if r.Writer != nil { return }; r.mu.Lock()",
     "Test": "TestOrdinaryFaultAndRestorationTimingDiagnostics",
     "Marker": "MUTATION: ordinary-fault-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-gap-floor-removed",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "prepareFault",
+    "Old": "if gap < time.Second {",
+    "New": "if false {",
+    "Test": "TestOrdinaryFaultQuietFloorAndInflightRead/zero-gap",
+    "Marker": "MUTATION: lease-fault-floor-inflight",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-reading-check-removed",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "checkFaultQuiet",
+    "Old": "if g.reading || now-done < gap {",
+    "New": "if now-done < gap {",
+    "Test": "TestOrdinaryFaultQuietFloorAndInflightRead/inflight-read",
+    "Marker": "MUTATION: lease-fault-floor-inflight",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-fault-probe-min-last",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "callerQuietGap",
+    "Old": "width = min(width, mapped.Latest.Sub(mapped.Earliest))",
+    "New": "width = mapped.Latest.Sub(mapped.Earliest)",
+    "Test": "TestCallerQuietGapUsesTightestProbe",
+    "Marker": "MUTATION: lease-fault-probe-min",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "host-read-batch-gap-untracked",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if hostReadBatch(op) || op == operator.HostLeaseRead ||",
+    "New": "if op == operator.HostLeaseRead ||",
+    "Test": "TestOrdinaryFaultWaitsAfterCachedLeaseInventoryBatch",
+    "Marker": "MUTATION: host-read-quiet-gap",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-no-read-completion",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "accept",
+    "Old": "if g.reading && len(r.Sent) > 0 {",
+    "New": "if true {",
+    "Test": "TestLeaseAcceptanceWithoutReadPreservesCompletion",
+    "Marker": "MUTATION: lease-no-read-completion",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-unsent-reacquire-counted",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "prepareFault",
+    "Old": "if g.reading && len(read.Sent) > 0 {",
+    "New": "if g.reading {",
+    "Test": "TestQuietReacquisitionWithoutSubmission",
+    "Marker": "MUTATION: lease-unsent-reacquire",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "host-read-diagnostic-dropped",
+    "File": "internal/operatorgates/numeric.go",
+    "Function": "RecordHostRead",
+    "Old": "r.mu.Lock()",
+    "New": "if r.Writer != nil { return }; r.mu.Lock()",
+    "Test": "TestHostReadCompletionKindsAndDiagnostics/inventory",
+    "Marker": "MUTATION: host-read-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "host-read-private-label",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "labels := (operator.Uncertainty{Kind: string(op), Target: target, Action: action}).Public()",
+    "New": "labels := operator.Uncertainty{Kind: string(op), Target: target, Action: action}",
+    "Test": "TestHostReadDiagnosticRedactsLabels",
+    "Marker": "MUTATION: host-read-private-label",
     "Package": "./internal/operatorgates"
   }
 ]

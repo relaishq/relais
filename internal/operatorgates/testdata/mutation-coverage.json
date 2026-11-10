@@ -583,7 +583,15 @@
     "lease-fault-refresh-deadline-reset",
     "lease-fault-restoration-delayed",
     "restoration-read-timing-dropped",
-    "ordinary-fault-diagnostic-dropped"
+    "ordinary-fault-diagnostic-dropped",
+    "lease-fault-gap-floor-removed",
+    "lease-fault-reading-check-removed",
+    "lease-fault-probe-min-last",
+    "host-read-batch-gap-untracked",
+    "lease-no-read-completion",
+    "lease-unsent-reacquire-counted",
+    "host-read-diagnostic-dropped",
+    "host-read-private-label"
   ],
   "killed": [
     {
@@ -4928,6 +4936,54 @@
     {
       "id": "ordinary-fault-diagnostic-dropped",
       "test": "TestOrdinaryFaultAndRestorationTimingDiagnostics",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-gap-floor-removed",
+      "test": "TestOrdinaryFaultQuietFloorAndInflightRead/zero-gap",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-reading-check-removed",
+      "test": "TestOrdinaryFaultQuietFloorAndInflightRead/inflight-read",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-fault-probe-min-last",
+      "test": "TestCallerQuietGapUsesTightestProbe",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-batch-gap-untracked",
+      "test": "TestOrdinaryFaultWaitsAfterCachedLeaseInventoryBatch",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-no-read-completion",
+      "test": "TestLeaseAcceptanceWithoutReadPreservesCompletion",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-unsent-reacquire-counted",
+      "test": "TestQuietReacquisitionWithoutSubmission",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-diagnostic-dropped",
+      "test": "TestHostReadCompletionKindsAndDiagnostics/inventory",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-private-label",
+      "test": "TestHostReadDiagnosticRedactsLabels",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

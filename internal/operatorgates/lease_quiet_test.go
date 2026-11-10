@@ -236,12 +236,17 @@ func TestFaultQuietSendRechecksAndRestorationBypasses(t *testing.T) {
 			g, read := leaseGuardFixture(t, c)
 			g.pause = func(_ context.Context, d time.Duration) error { c.advance(d); return nil }
 			g.read = func(context.Context, time.Duration) (LeaseRead, error) {
+				if mode == "read-after-gap" {
+					return read, nil
+				}
 				t.Fatal("unexpected read")
 				return LeaseRead{}, nil
 			}
 			r.BeforeMutation = func(context.Context) error {
 				if mode == "read-after-gap" {
-					require.NoError(t, g.accept(read))
+					next, err := g.readAttempt(context.Background(), c.Elapsed()+time.Minute)
+					require.NoError(t, err)
+					require.NoError(t, g.accept(next))
 				} else {
 					c.advance(5 * time.Second)
 				}

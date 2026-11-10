@@ -23,6 +23,7 @@ type LeaseRead struct {
 type LeaseGuard struct {
 	mu, refresh               sync.Mutex
 	clock                     Clock
+	session                   *Session
 	read                      func(context.Context, time.Duration) (LeaseRead, error)
 	pause                     func(context.Context, time.Duration) error
 	leases                    map[string]clocks.Lease
@@ -34,7 +35,6 @@ type LeaseGuard struct {
 	frozenEnd                 int64
 	invalid                   bool
 	historyComplete           bool
-	lastReadDone              time.Duration
 	reading                   bool
 	refreshUntil              time.Duration
 	restorationReadObserved   func(LeaseRead, time.Duration, time.Duration)
@@ -45,13 +45,18 @@ func NewLeaseGuard(e clocks.CoverageEvidence, session *Session, read func(contex
 		return nil, fault("clock-config-differ")
 	}
 	r := e.Binding.Receipt
-	return &LeaseGuard{clock: session.clock, read: read, pause: pause, leases: map[string]clocks.Lease{}, samples: map[string]clocks.Sample{}, observations: map[string]clocks.LeaseObservation{}, bounds: r.Bounds, frontend: r.FrontendSlot, control: r.ControlSlot, growth: r.Policy.MaxDispersionGrowthPPM, workerBound: r.Bounds.FrontendWorkerBoundNS - r.Policy.SignalReserveNS, frozenEnd: r.EndUnixSeconds}, nil
+	return &LeaseGuard{clock: session.clock, session: session, read: read, pause: pause, leases: map[string]clocks.Lease{}, samples: map[string]clocks.Sample{}, observations: map[string]clocks.LeaseObservation{}, bounds: r.Bounds, frontend: r.FrontendSlot, control: r.ControlSlot, growth: r.Policy.MaxDispersionGrowthPPM, workerBound: r.Bounds.FrontendWorkerBoundNS - r.Policy.SignalReserveNS, frozenEnd: r.EndUnixSeconds}, nil
 }
 
 func (g *LeaseGuard) accept(r LeaseRead) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	defer func() { g.lastReadDone, g.reading = g.clock.Elapsed(), false }()
+	defer func() {
+		if g.reading && len(r.Sent) > 0 {
+			g.session.completeHostRead()
+		}
+		g.reading = false
+	}()
 	// Session cursors advance even if acceptance stops before storing every slot.
 	// A later historical proof must not bridge rows lost at that boundary.
 	g.historyComplete = false
