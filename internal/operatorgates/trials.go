@@ -107,7 +107,15 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 		kind  string
 		count int
 	}{{"move", target.Moves}, {"takeover", target.Takeovers}} {
-		for i := 0; i < batch.count; i++ {
+		count := batch.count
+		for i := 0; ; i++ {
+			if i == count {
+				if batch.kind != "takeover" || !g.replacement() {
+					break
+				}
+				count++
+			}
+			started := g.p.Clock.Elapsed()
 			before, err := status()
 			if err != nil {
 				return err
@@ -144,6 +152,7 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 				if err != nil {
 					return err
 				}
+				g.excludeKill(killed)
 				recovered, err := wait("trial-takeover", func(r StepResult) bool {
 					c, ok := findCall(r.Status, call.ID)
 					return ok && c.Owner == to && c.Epoch > call.Epoch && len(freshTakeovers(before, r, call.ID, call.Owner)) > 0
@@ -190,7 +199,56 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 			}); err != nil {
 				return err
 			}
+			if batch.kind == "takeover" {
+				g.takeoverCycle = max(g.takeoverCycle, g.p.Clock.Elapsed()-started)
+			}
 		}
 	}
 	return nil
+}
+
+// MaxKillReplacements bounds replacement takeovers for the whole run.
+const MaxKillReplacements = 2
+
+// excludeKill owes one replacement for an armed takeover whose timing the
+// pooled judge will exclude. The excluded kill itself is still fed and judged
+// for loss and window failure.
+func (g *procedure) excludeKill(killed StepResult) {
+	if killed.KillExcluded {
+		g.evidence.ExcludedKills++
+		g.owed++
+	}
+}
+
+// replacement admits one owed takeover inside the fixed gate window. It needs
+// run budget, and time for the longest measured takeover cycle in this gate
+// plus one more post-event media window before both the procedure end and the
+// caller's media end. A skipped replacement records why and leaves the pool short.
+func (g *procedure) replacement() bool {
+	if g.owed == 0 {
+		return false
+	}
+	end := g.end
+	if r := g.p.Broker.Registration(); r != nil {
+		media := r.MediaStartedAt
+		if media == nil {
+			media = r.RegisteredAt
+		}
+		if media != nil {
+			end = min(end, g.p.Clock.Elapsed()+time.UnixMilli(*media).Add(CampaignDuration(g.gate)).Sub(g.p.Clock.Wall()))
+		}
+	}
+	switch {
+	case g.c.KillReplacements >= MaxKillReplacements:
+		g.evidence.KillReplacementSkipped = "replacement-budget"
+	case g.takeoverCycle <= 0 || g.p.Clock.Elapsed()+g.takeoverCycle+ConsentWindow > end:
+		g.evidence.KillReplacementSkipped = "replacement-time"
+	default:
+		g.owed--
+		g.c.KillReplacements++
+		g.evidence.KillReplacements++
+		return true
+	}
+	g.owed = 0
+	return false
 }

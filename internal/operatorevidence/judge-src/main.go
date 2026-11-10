@@ -12,6 +12,7 @@ import (
 
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 type previewMediaSummary struct {
@@ -21,6 +22,7 @@ type previewMediaSummary struct {
 	IncludedPhases     int               `json:"includedPhases"`
 	DroppedPhases      int               `json:"droppedPhases"`
 	ExcludedEvents     int               `json:"excludedEvents"`
+	ExcludedKills      int               `json:"excludedKills"`
 	SaturationOverlaps int               `json:"saturationOverlaps"`
 	DuplicatePackets   uint64            `json:"duplicatePackets"`
 	PhaseDiagnostics   []phaseDiagnostic `json:"phaseDiagnostics"`
@@ -508,7 +510,50 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	}
 	out := previewMediaSummary{Status: "inconclusive"}
 	if r.Callers > 0 {
-		out = previewMediaQualified(r, false, pooledCoverage)
+		// Each phase verdict above judged every event, so loss or a failed window
+		// on an excluded kill still fails the pool. Drop each takeover whose only
+		// clock cause is the gate's excluded wide bracket, with its moves.
+		excludedIDs := map[callharness.OperationIdentity]bool{}
+		var kept []loadgen.EventResult
+		var keptPositions []eventPosition
+		keptCoverage := map[int][]string{}
+		for k, e := range r.Events {
+			if causes := pooledCoverage[k]; e.Event.Kind == "kill" && len(e.Identities) > 0 && len(causes) == 1 && causes[0] == "clock-coverage-kill-excluded" {
+				for _, id := range e.Identities {
+					excludedIDs[id] = true
+				}
+				continue
+			}
+			keptCoverage[len(kept)] = pooledCoverage[k]
+			keptPositions = append(keptPositions, positions[k])
+			kept = append(kept, e)
+		}
+		for _, p := range r.Processes {
+			for _, m := range p.Calls {
+				if c := m.Call; c != nil && len(excludedIDs) > 0 {
+					var moves []callharness.MoveReport
+					for _, move := range c.Moves {
+						if move.Identity == nil || !excludedIDs[*move.Identity] {
+							moves = append(moves, move)
+						}
+					}
+					c.Moves = moves
+					if c.Distributed != nil {
+						var armed []callharness.OperationIdentity
+						for _, id := range c.Distributed.Armed {
+							if !excludedIDs[id] {
+								armed = append(armed, id)
+							}
+						}
+						c.Distributed.Armed = armed
+					}
+				}
+			}
+		}
+		excludedKills := len(r.Events) - len(kept)
+		r.Events, positions = kept, keptPositions
+		out = previewMediaQualified(r, false, keptCoverage)
+		out.ExcludedKills = excludedKills
 	} else if relayCalls > 0 {
 		out.Status = "passed"
 	}

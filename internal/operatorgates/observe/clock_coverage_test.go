@@ -106,6 +106,36 @@ func TestClockCoverageKillBracket(t *testing.T) {
 		})
 	}
 }
+
+// Only a well-formed bracket the gate marked wide gets the excluded cause.
+func TestClockCoverageKillExcluded(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{{"well-formed", "clock-coverage-kill-excluded"}, {"reversed", "clock-coverage-kill-bracket"}, {"malformed", "clock-coverage-kill-bracket"}, {"midpoint", "clock-coverage-kill-bracket"}, {"duplicate", "clock-coverage-kill-bracket"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, w := coverageFixture()
+			before := coverageBase*coverageSecond + 10250000000
+			after := before + 5000000
+			mid := before + 2500000
+			w[0].Kind = "takeover"
+			w[0].StartUnixNS = fmt.Sprint(mid)
+			b := []CoverageBracket{{LeaseExcluded: true, Worker: "w1", BeforeUnixNS: fmt.Sprint(before), AfterUnixNS: fmt.Sprint(after), MidpointUnixNS: fmt.Sprint(mid)}}
+			switch tc.name {
+			case "reversed":
+				b[0].BeforeUnixNS, b[0].AfterUnixNS = b[0].AfterUnixNS, b[0].BeforeUnixNS
+			case "malformed":
+				b[0].AfterUnixNS = "bad"
+			case "midpoint":
+				b[0].BeforeUnixNS = fmt.Sprint(before + 2)
+			case "duplicate":
+				b = append(b, b[0])
+				b[1].AfterUnixNS = fmt.Sprint(after + 2)
+			}
+			got := EvaluateClockCoverage(m, "relay", "shared", 2000000, 3000000, w, b)
+			if !reflect.DeepEqual(got[0].Causes, []string{tc.want}) {
+				t.Fatal("MUTATION: malformed-bracket-excluded", tc.name, got, tc.want)
+			}
+		})
+	}
+}
 func TestClockCoverageRelocationAndDeterminism(t *testing.T) {
 	m, w := coverageFixture()
 	m["relay"].Rows[15].MaxErrorSeconds = 1

@@ -33,7 +33,7 @@ func TestUnboundJudgeInputBytes(t *testing.T) {
 }
 
 func TestPublicDiagnosticsKeepsClockCoverageCauses(t *testing.T) {
-	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified"} {
+	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-kill-excluded", "clock-coverage-falsified"} {
 		p := Summary{UndecidedMetrics: []UndecidedMetric{{Metric: "audio_loss", Causes: []string{cause}}}}
 		if got := p.PublicDiagnostics(); len(got.UndecidedMetrics) != 1 || len(got.UndecidedMetrics[0].Causes) != 1 || got.UndecidedMetrics[0].Causes[0] != cause {
 			t.Fatal("coverage cause removed", got)

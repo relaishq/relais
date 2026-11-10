@@ -969,8 +969,12 @@ The enforced causes are:
 - `clock-coverage-break`: an overlapping step, restart, source change,
   non-Normal leap status or self-consistency break. Break intervals also receive
   a one-second margin.
-- `clock-coverage-kill-bracket`: missing/invalid signal bracket, or its rounded-up
-  half-width plus frontend and killed-worker error exceeds the worker bound.
+- `clock-coverage-kill-bracket`: missing, duplicate, invalid or reversed signal
+  bracket, or its rounded-up half-width plus frontend and killed-worker error
+  exceeds the worker bound.
+- `clock-coverage-kill-excluded`: a well-formed bracket that the gate recorded as
+  wider than the selected worker bound (`leaseExcluded`). Only this gate-recorded
+  case gets the cause; see "Wide kill brackets" below.
 
 - `clock-coverage-falsified`: any falsified probe record, or a positive cumulative
   falsification count, removes clock trust from every window judged from then on
@@ -1220,11 +1224,42 @@ Coverage, padding, Check and both pinned judge summaries use the same bound proo
 The pre-judge drain retains its 110-second judge reserve and only marks coverage
 prepared when an actual drain attempt ran.
 
-A well-formed wide signal bracket counts the kill as executed. It excludes only
-that kill's timing evidence with `clock-coverage-kill-bracket`; recovery is still
-judged. Missing, malformed and reversed brackets retain the unknown-result latch.
-Well-formed timestamps must satisfy the coverage range and lie inside the host
-operation envelope before width can exclude timing alone.
+### Wide kill brackets
+
+Owner decision, 2026-11-10 (#430, option 1): a replacement kill. A well-formed
+wide signal bracket counts the kill as executed and never latches. Its coverage
+cause is `clock-coverage-kill-excluded`. Missing, malformed and reversed brackets
+retain the unknown-result latch. Well-formed timestamps must satisfy the coverage
+range and lie inside the host operation envelope before width can exclude timing
+alone.
+
+The excluded takeover stays in its phase. Each phase verdict still judges it, so
+a lost call or failed window on it fails the run. Before the pooled judgment, the
+judge overlay drops each takeover whose only clock cause is
+`clock-coverage-kill-excluded`, with its caller moves. Any other cause, or
+falsification, keeps the takeover in the pool as undecided. The pool reports
+`excludedKills` separately from generator `excludedEvents`. Its `eventCount`
+omits dropped kills, while each phase diagnostic keeps them, and undecided rows
+keep their original phase and event indexes. The pool minimum of 20 moves and
+10 takeovers is unchanged.
+
+The gate owes one replacement takeover for each excluded armed takeover: a trial
+kill, or control restart's `restart-takeover`. The unarmed degraded-restart kill
+owes none. After its regular takeovers, the trial loop runs each owed replacement
+when both conditions hold:
+
+- the run has used fewer than two replacements (`MaxKillReplacements`), counted
+  across every gate of the run; and
+- the longest measured takeover cycle in this gate, plus one more 60-second
+  post-event window, ends before both the procedure end and the caller's media
+  end (media start plus the fixed campaign duration).
+
+Otherwise the replacement is skipped and the pool stays short and inconclusive.
+Process evidence records `excludedKills`, `killReplacements` and
+`killReplacementSkipped` (`replacement-budget` or `replacement-time`). A
+replacement kill uses the same `worker-down` path, including the fault quiet gap.
+The session, gate and media durations never grow. In the free rehearsal, an
+excluded kill that leaves `trial-count-insufficient` still fails eligibility.
 Selected bounds can decide the former fixed-bound first-content near-tie. A wide
 bracket, expired lease or invalid binding can remove qualification or refuse a run.
 

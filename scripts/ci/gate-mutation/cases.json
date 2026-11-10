@@ -6350,5 +6350,95 @@
     "Test": "TestHostReadDiagnosticRedactsLabels",
     "Marker": "MUTATION: host-read-private-label",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "replacement-not-scheduled",
+    "File": "internal/operatorgates/trials.go",
+    "Function": "trials",
+    "Old": "if batch.kind != \"takeover\" || !g.replacement() {",
+    "New": "if true {",
+    "Test": "TestExcludedKillSchedulesReplacement",
+    "Marker": "MUTATION: replacement-not-scheduled",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "replacement-time-unguarded",
+    "File": "internal/operatorgates/trials.go",
+    "Function": "replacement",
+    "Old": "case g.takeoverCycle <= 0 || g.p.Clock.Elapsed()+g.takeoverCycle+ConsentWindow > end:",
+    "New": "case false:",
+    "Test": "TestReplacementSkippedWhenTimeShort/procedure/-1s",
+    "Marker": "MUTATION: replacement-time-guard",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "replacement-budget-unbounded",
+    "File": "internal/operatorgates/trials.go",
+    "Function": "replacement",
+    "Old": "case g.c.KillReplacements >= MaxKillReplacements:",
+    "New": "case false:",
+    "Test": "TestReplacementBudgetIsRunWide",
+    "Marker": "MUTATION: replacement-budget",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "gate-owned-kill-not-replaced",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "controlRestart",
+    "Old": "g.excludeKill(killed)",
+    "New": "",
+    "Test": "TestExcludedGateOwnedKillMadeUpByTrials/2",
+    "Marker": "MUTATION: gate-owned-kill-not-replaced",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "malformed-bracket-excluded",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "if errors.Is(e, clocks.ErrSignalBracketWide) {\n\t\t\t\tr.Session.mu.Lock()",
+    "New": "if e != nil {\n\t\t\t\tr.Session.mu.Lock()",
+    "Test": "TestActivatedBracketCertainty/malformed",
+    "Marker": "MUTATION: malformed-bracket-excluded",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "malformed-bracket-coverage-excluded",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "coverageSpans",
+    "Old": "if !x || !y || after < before || before+(after-before)/2 != a {",
+    "New": "if !found.LeaseExcluded && (!x || !y || after < before || before+(after-before)/2 != a) {",
+    "Test": "TestClockCoverageKillExcluded/reversed",
+    "Marker": "MUTATION: malformed-bracket-excluded",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "excluded-kill-not-dropped",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "pooledPreviewMedia",
+    "Old": "if causes := pooledCoverage[k]; e.Event.Kind == \"kill\" && len(e.Identities) > 0 && len(causes) == 1 && causes[0] == \"clock-coverage-kill-excluded\" {",
+    "New": "if causes := pooledCoverage[k]; false && len(causes) == 1 {",
+    "Test": "TestExcludedKillWithReplacementDecidesPool/5",
+    "Marker": "MUTATION: excluded-kill-not-dropped",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-kill-event-count",
+    "File": "internal/operatorrehearsal/timing.go",
+    "Function": "rehearsalMedia",
+    "Old": "events != p.EventCount+p.ExcludedKills",
+    "New": "events != p.EventCount",
+    "Test": "TestRehearsalExcludedKillCounts",
+    "Marker": "MUTATION: excluded-kill-event-count",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "excluded-kill-short-pool",
+    "File": "internal/operatorrehearsal/timing.go",
+    "Function": "rehearsalMedia",
+    "Old": "if cause == \"trial-count-insufficient\" && p.ExcludedKills > 0 {",
+    "New": "if false {",
+    "Test": "TestRehearsalExcludedKillCounts/short-pool",
+    "Marker": "MUTATION: excluded-kill-event-count",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

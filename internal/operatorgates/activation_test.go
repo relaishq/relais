@@ -131,6 +131,11 @@ func TestActivatedBracketCertainty(t *testing.T) {
 			if (err == nil) != wide || r.Session.Latched() == wide || wide && got.Certainty != operator.Succeeded {
 				t.Fatal("MUTATION: bracket-certainty", mode, err, r.Session.Latched())
 			}
+			// Only a well-formed wide bracket excludes its kill and owes a replacement.
+			marked := len(r.Session.clockBrackets) > 0 && r.Session.clockBrackets[len(r.Session.clockBrackets)-1].LeaseExcluded
+			if got.KillExcluded != (mode == "wide") || marked != (mode == "wide") {
+				t.Fatal("MUTATION: malformed-bracket-excluded", mode, got.KillExcluded, marked)
+			}
 		})
 	}
 }

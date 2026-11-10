@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/operator"
 	"github.com/relaishq/relais/pkg/relay"
 )
 
@@ -16,6 +17,7 @@ func RunReleaseGate(ctx context.Context, c *ProcessConfig, p ProcedurePorts, end
 }
 
 func runReleaseGate(ctx context.Context, g *procedure) ProcedureResult {
+	g.gate = operator.UpgradeRollback
 	g.evidence.RelayWindows = "inconclusive"
 	err := g.release(ctx)
 	return g.finish(ctx, err, true)

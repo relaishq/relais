@@ -134,8 +134,13 @@ func coverageSpans(w CoverageWindow, control string, cb, wb int64, brackets []Co
 	}
 	before, x := CoverageNS(found.BeforeUnixNS)
 	after, y := CoverageNS(found.AfterUnixNS)
-	if found.LeaseExcluded || !x || !y || after < before || before+(after-before)/2 != a {
+	if !x || !y || after < before || before+(after-before)/2 != a {
 		return nil, "clock-coverage-kill-bracket"
+	}
+	// The gate recorded this well-formed bracket as wider than its selected
+	// worker bound. The pooled judge excludes the takeover instead of deciding it.
+	if found.LeaseExcluded {
+		return nil, "clock-coverage-kill-excluded"
 	}
 	return []coverageSpan{{slot: w.Worker, a: before, b: after, bound: wb, half: (after - before + 1) / 2, signal: true}, {slot: control, a: b, b: b, bound: cb}}, ""
 }
@@ -353,7 +358,7 @@ func CoverageTailReady(timelines map[string]CoverageTimeline, frontend, control 
 // IsCoverageCause accepts only the clock qualification's fixed public codes.
 func IsCoverageCause(s string) bool {
 	switch s {
-	case "clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified", "clock-coverage-binding":
+	case "clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-kill-excluded", "clock-coverage-falsified", "clock-coverage-binding":
 		return true
 	}
 	return false

@@ -108,11 +108,40 @@ func TestRehearsalReportsEveryUndecidedTiming(t *testing.T) {
 }
 
 func TestRehearsalDoesNotWaiveClockCoverage(t *testing.T) {
-	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-falsified"} {
+	for _, cause := range []string{"clock-coverage-missing", "clock-coverage-bound", "clock-coverage-break", "clock-coverage-kill-bracket", "clock-coverage-kill-excluded", "clock-coverage-falsified"} {
 		r := timingReport()
 		r.Pool.UndecidedMetrics[0].Causes = []string{cause}
 		if rehearsalMedia(r.Pool) {
 			t.Fatal("clock coverage treated as optional timing", cause)
 		}
+	}
+}
+
+// An excluded kill stays in its phase's event count but leaves the pool. With a
+// replacement the rehearsal is judged as before; without one the short pool fails.
+func TestRehearsalExcludedKillCounts(t *testing.T) {
+	r := timingReport()
+	r.Pool.ExcludedKills = 1
+	r.Pool.PhaseDiagnostics[1].EventCount++
+	r.Evaluate()
+	if r.Verdict != operator.Passed {
+		t.Fatal("MUTATION: excluded-kill-event-count", r.Failures)
+	}
+	for name, mutate := range map[string]func(*Report){
+		"uncounted": func(r *Report) { r.Pool.ExcludedKills = 0 },
+		"short-pool": func(r *Report) {
+			r.Pool.UndecidedMetrics[2].Causes = []string{"metric-undecided", "trial-count-insufficient"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := timingReport()
+			r.Pool.ExcludedKills = 1
+			r.Pool.PhaseDiagnostics[1].EventCount++
+			mutate(&r)
+			r.Evaluate()
+			if r.Verdict != operator.Failure {
+				t.Fatal("MUTATION: excluded-kill-event-count", name)
+			}
+		})
 	}
 }
