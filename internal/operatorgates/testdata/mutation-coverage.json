@@ -568,7 +568,9 @@
     "resource-pool-input-before-drain",
     "gate-media-refresh-error-diagnostic",
     "gate-media-refresh-duration-zero",
-    "gate-media-refresh-timing-unwired"
+    "gate-media-refresh-timing-unwired",
+    "lease-client-normal-priority",
+    "lease-container-normal-priority"
   ],
   "killed": [
     {
@@ -4824,6 +4826,18 @@
       "id": "gate-media-refresh-timing-unwired",
       "test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
       "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-client-normal-priority",
+      "test": "TestHostReadCommandPriority/host.lease-read-batch",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "lease-container-normal-priority",
+      "test": "TestHostReadCommandPriority/host.lease-read-batch",
+      "package": "./internal/operatorrehearsal",
       "evidence": "killed"
     }
   ],

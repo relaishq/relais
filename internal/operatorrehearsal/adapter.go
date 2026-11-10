@@ -267,7 +267,15 @@ func (a *Adapter) executeHost(bounded context.Context, req operator.Request) (re
 	// timeout also lives inside the container: killing the docker client alone
 	// would not stop the submitted command. Its outcome still remains unknown.
 	wrapper := `f=$(mktemp) || exit 125; trap 'rm -f "$f"' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(seconds) + `s nice -n 10 sh "$f"`
-	command := Command{Label: "host-step", Args: []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}, Input: req.Script}
+	args := []string{"docker", "exec", "-i", id}
+	if req.Operation == operator.HostLeaseRead || req.Operation == operator.HostLeaseReadBatch {
+		// Lower the client and the entire container process tree, including
+		// shell setup, Python and chronyc. Docker daemon/shim priority is unchanged.
+		// Keep normal scheduling so reads can progress during sustained media.
+		args = append([]string{"nice", "-n", "19"}, args...)
+		args = append(args, "nice", "-n", "19")
+	}
+	command := Command{Label: "host-step", Args: append(args, "sh", "-c", wrapper), Input: req.Script}
 	result := a.Runner.Run(bounded, command)
 	reply = a.classify(req.ID, result)
 	if reply.Transport != operator.Succeeded || hostObservationFailed(req.Action, result.Stdout) {

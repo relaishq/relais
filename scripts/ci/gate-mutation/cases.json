@@ -6099,5 +6099,25 @@
     "Test": "TestResourceRunnerCallerStartBudget/coverage-judge-error",
     "Marker": "MUTATION: gate-media-refresh-timing",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "lease-client-normal-priority",
+    "File": "internal/operatorrehearsal/adapter.go",
+    "Function": "executeHost",
+    "Old": "args = append([]string{\"nice\", \"-n\", \"19\"}, args...)",
+    "New": "args = append([]string{\"nice\", \"-n\", \"0\"}, args...)",
+    "Test": "TestHostReadCommandPriority/host.lease-read-batch",
+    "Marker": "MUTATION: lease-command-priority",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "lease-container-normal-priority",
+    "File": "internal/operatorrehearsal/adapter.go",
+    "Function": "executeHost",
+    "Old": "args = append(args, \"nice\", \"-n\", \"19\")",
+    "New": "args = append(args, \"nice\", \"-n\", \"0\")",
+    "Test": "TestHostReadCommandPriority/host.lease-read-batch",
+    "Marker": "MUTATION: lease-command-priority",
+    "Package": "./internal/operatorrehearsal"
   }
 ]
