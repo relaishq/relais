@@ -591,7 +591,21 @@
     "lease-no-read-completion",
     "lease-unsent-reacquire-counted",
     "host-read-diagnostic-dropped",
-    "host-read-private-label"
+    "host-read-private-label",
+    "replacement-not-scheduled",
+    "replacement-time-unguarded",
+    "replacement-budget-unbounded",
+    "gate-owned-kill-not-replaced",
+    "malformed-bracket-excluded",
+    "malformed-bracket-coverage-excluded",
+    "excluded-kill-not-dropped",
+    "excluded-kill-event-count",
+    "excluded-kill-short-pool",
+    "excluded-bracket-skips-timelines",
+    "excluded-bracket-skips-timelines-judge",
+    "excluded-bracket-width-not-waived",
+    "excluded-tail-skipped",
+    "release-replacement-not-deferred"
   ],
   "killed": [
     {
@@ -4984,6 +4998,90 @@
     {
       "id": "host-read-private-label",
       "test": "TestHostReadDiagnosticRedactsLabels",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "replacement-not-scheduled",
+      "test": "TestExcludedKillSchedulesReplacement",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "replacement-time-unguarded",
+      "test": "TestReplacementSkippedWhenTimeShort/procedure/-1s",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "replacement-budget-unbounded",
+      "test": "TestReplacementBudgetIsRunWide",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-owned-kill-not-replaced",
+      "test": "TestExcludedGateOwnedKillMadeUpByTrials/2",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "malformed-bracket-excluded",
+      "test": "TestActivatedBracketCertainty/malformed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "malformed-bracket-coverage-excluded",
+      "test": "TestClockCoverageKillExcluded/reversed",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-kill-not-dropped",
+      "test": "TestExcludedKillWithReplacementDecidesPool/5",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-kill-event-count",
+      "test": "TestRehearsalExcludedKillCounts",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-kill-short-pool",
+      "test": "TestRehearsalExcludedKillCounts/short-pool",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-bracket-skips-timelines",
+      "test": "TestClockCoverageKillExcludedKeepsTimelineChecks/worker-step",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-bracket-skips-timelines-judge",
+      "test": "TestExcludedKillTimelineCauseIsNotDropped/worker-step",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-bracket-width-not-waived",
+      "test": "TestClockCoverageKillExcludedKeepsTimelineChecks/clean",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-tail-skipped",
+      "test": "TestCoverageTailWaitsForExcludedKill",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed"
+    },
+    {
+      "id": "release-replacement-not-deferred",
+      "test": "TestReleaseReplacementWaitsForRollback/short",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

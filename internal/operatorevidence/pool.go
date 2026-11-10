@@ -32,6 +32,7 @@ type Summary struct {
 	IncludedPhases     int               `json:"includedPhases"`
 	DroppedPhases      int               `json:"droppedPhases"`
 	ExcludedEvents     int               `json:"excludedEvents"`
+	ExcludedKills      int               `json:"excludedKills"`
 	SaturationOverlaps int               `json:"saturationOverlaps"`
 	DuplicatePackets   uint64            `json:"duplicatePackets"`
 	PhaseDiagnostics   []PhaseDiagnostic `json:"phaseDiagnostics"`

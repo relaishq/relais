@@ -299,7 +299,9 @@ func TestLeaseReplyAging(t *testing.T) {
 		b := r.Session.clockBrackets[0]
 		evidence := clocks.CoverageEvidence{Version: 2, FrontendSlot: "shared", ControlSlot: "shared", Bounds: clocks.FixedCoverageBounds(), KillBrackets: []observe.CoverageBracket{b}, Windows: []observe.CoverageWindow{{Kind: "kill", Worker: "w1", StartUnixNS: b.MidpointUnixNS, EndUnixNS: b.MidpointUnixNS}}}
 		evidence.Evaluate()
-		require.Equal(t, delay != 0, slices.Contains(evidence.Results[0].Causes, "clock-coverage-kill-bracket"), "MUTATION: lease-reply-age")
+		causes := evidence.Results[0].Causes
+		require.Equal(t, delay != 0, slices.Contains(causes, "clock-coverage-kill-excluded"), "MUTATION: lease-reply-age")
+		require.False(t, slices.Contains(causes, "clock-coverage-kill-bracket"), "MUTATION: lease-reply-age")
 	}
 }
 

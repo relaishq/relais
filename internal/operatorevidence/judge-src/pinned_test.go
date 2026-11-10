@@ -67,6 +67,11 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	for _, name := range []string{"covered", "missing", "lease-missing", "bound", "break", "kill-bracket", "falsified", "independent-failure", "independent-gap-failure", "repair-gap-with-later-sample", "omit-frontend-error", "omit-final-coverage"} {
 		cases = append(cases, coveragePoolFixture(t, name))
 	}
+	// An excluded kill with and without its replacement uses the same overlay.
+	replaced, short := replacementPoolSample(), rawPoolSample()
+	qualifiedPool(&replaced, map[[2]int][]string{{1, 5}: {"clock-coverage-kill-excluded"}})
+	qualifiedPool(&short, map[[2]int][]string{sampleTakeover: {"clock-coverage-kill-excluded"}})
+	cases = append(cases, replaced, short)
 	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
 	for _, commit := range commits {
 		if err := pinnedCommit(ctx, root, commit); err != nil {

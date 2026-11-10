@@ -23,7 +23,8 @@ func rehearsalMedia(p *operatorevidence.Summary) bool {
 		}
 		events += phase.EventCount
 	}
-	if events != p.EventCount || len(p.UndecidedMetrics) != p.InconclusiveMetrics || (p.Status == operator.Passed) != (p.InconclusiveMetrics == 0) {
+	// Excluded kills stay in their phase's event count but leave the pooled one.
+	if p.ExcludedKills < 0 || events != p.EventCount+p.ExcludedKills || len(p.UndecidedMetrics) != p.InconclusiveMetrics || (p.Status == operator.Passed) != (p.InconclusiveMetrics == 0) {
 		return false
 	}
 	type key struct {
@@ -39,6 +40,11 @@ func rehearsalMedia(p *operatorevidence.Summary) bool {
 		seen[k] = true
 		for _, cause := range row.Causes {
 			if observe.IsCoverageCause(cause) || cause == "unclassified" || operatorevidence.PublicTimingCause(cause) != cause {
+				return false
+			}
+			// An excluded kill without a replacement leaves the pool short. That
+			// stays a rehearsal failure, as the undecided kill was before.
+			if cause == "trial-count-insufficient" && p.ExcludedKills > 0 {
 				return false
 			}
 		}

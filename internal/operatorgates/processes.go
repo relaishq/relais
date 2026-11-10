@@ -18,6 +18,7 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 
 func runProcessGate(ctx context.Context, gate operator.Gate, g *procedure) ProcedureResult {
 	p := g.p
+	g.gate = gate
 	err := g.process(ctx, gate)
 	result := g.finish(ctx, err, false)
 	if gate == operator.RelayDeploy {
@@ -338,6 +339,8 @@ func (g *procedure) controlRestart(ctx context.Context, before controlplane.Stat
 	if err != nil {
 		return err
 	}
+	// An excluded gate-owned takeover still counts as run; trials owe its replacement.
+	g.excludeKill(killed)
 	// New ownership and a fresh receipt must describe this fault, not a prior kill.
 	recovered, err := g.waitStep(ctx, func(r StepResult) bool {
 		c, ok := findCall(r.Status, call.ID)

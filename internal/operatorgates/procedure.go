@@ -59,6 +59,7 @@ type MediaSummary struct {
 	IncludedPhases      int                                `json:"includedPhases"`
 	DroppedPhases       int                                `json:"droppedPhases"`
 	ExcludedEvents      int                                `json:"excludedEvents"`
+	ExcludedKills       int                                `json:"excludedKills"`
 	SaturationOverlaps  int                                `json:"saturationOverlaps"`
 	UndecidedMetrics    []operatorevidence.UndecidedMetric `json:"undecidedMetrics"`
 	PhaseDiagnostics    []operatorevidence.PhaseDiagnostic `json:"phaseDiagnostics"`
@@ -113,6 +114,9 @@ type StepResult struct {
 	ReadyMS        *int64
 	Raw            json.RawMessage
 	Moves, History []json.RawMessage
+	// KillExcluded marks a well-formed signal bracket wider than the selected
+	// worker bound. The kill ran; only its timing leaves the pooled judge.
+	KillExcluded bool
 }
 type StepFunc func(context.Context, string, string, time.Duration, ProcessExtra) (StepResult, error)
 type ProcedurePorts struct {
@@ -140,6 +144,9 @@ type ProcessConfig struct {
 	Target     string
 	Operation  string
 	Mixed      bool
+	// KillReplacements counts replacement takeovers across every gate that
+	// shares this run configuration; MaxKillReplacements bounds it.
+	KillReplacements int
 }
 type ProcessEvidence struct {
 	CompletedSteps            int     `json:"completedSteps"`
@@ -156,6 +163,9 @@ type ProcessEvidence struct {
 	RelayWindows              string  `json:"relayWindows,omitempty"`
 	RelayLocalTiming          string  `json:"relayLocalTiming,omitempty"`
 	RelayConnectionInvariants string  `json:"relayConnectionInvariants,omitempty"`
+	ExcludedKills             int     `json:"excludedKills,omitempty"`
+	KillReplacements          int     `json:"killReplacements,omitempty"`
+	KillReplacementSkipped    string  `json:"killReplacementSkipped,omitempty"`
 }
 type ProcedureResult struct {
 	ProcedureReason    string `json:"-"`
@@ -178,6 +188,7 @@ func (r ProcedureResult) GateResult(g operator.Gate) operator.GateResult {
 }
 
 type procedure struct {
+	gate       operator.Gate
 	c          *ProcessConfig
 	p          ProcedurePorts
 	end        time.Duration
@@ -189,6 +200,12 @@ type procedure struct {
 	// Keep positive loss even when an earlier restoration error is returned.
 	restoreLoss bool
 	evidence    ProcessEvidence
+	// owed counts excluded takeovers still waiting for a replacement decision;
+	// takeoverCycle is the longest measured trial takeover in this gate.
+	owed          int
+	takeoverCycle time.Duration
+	// deferReplacements holds owed replacements until the caller schedules them.
+	deferReplacements bool
 }
 
 func newProcedure(c *ProcessConfig, p ProcedurePorts, end time.Duration) *procedure {

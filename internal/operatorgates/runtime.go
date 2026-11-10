@@ -312,6 +312,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 				r.Session.mu.Lock()
 				if n := len(r.Session.clockBrackets); n > 0 && r.Session.clockBrackets[n-1].Worker == slot && r.Session.clockBrackets[n-1].BeforeUnixNS == bracket.Before && r.Session.clockBrackets[n-1].AfterUnixNS == bracket.After {
 					r.Session.clockBrackets[n-1].LeaseExcluded = true
+					observed.KillExcluded = true
 				}
 				r.Session.mu.Unlock()
 			}
