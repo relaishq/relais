@@ -377,6 +377,8 @@ masterauth {self.passwords['admin']}
         assert set(p.name for p in runtime.iterdir()) == {'relay.env', 'worker.env', 'control.env', 'signal.token'}
         commands = (self.work / 'manager.log').read_text()
         assert commands.index('sysctl -p ') < commands.index('enable --now relais-relay.service')
+        assert (image / 'etc/chrony.conf').read_text().endswith('\nlog tracking\n')
+        assert commands.index('restart chronyd.service') < commands.index('enable --now relais-relay.service')
         assert 'mask amazon-ssm-agent.service' in commands and 'enable --now relais-relay-standby.service' in commands
         check_program_access(image)
         self.image, self.runtime = image, runtime

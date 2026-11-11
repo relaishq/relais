@@ -287,6 +287,9 @@ func (d *Deployment) Boot(ctx context.Context) error {
 				_, x = d.command(ctx, "boot-"+slot, args, nil)
 			}
 			if x == nil {
+				x = d.restoreClock(ctx, slot)
+			}
+			if x == nil {
 				script, e := d.Topology.VerifyScript(slot)
 				x = e
 				if x == nil {
@@ -304,6 +307,20 @@ func (d *Deployment) Boot(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// restoreClock runs after the template boot: it checks the template's own
+// time-sync file, then restores the rehearsal reference before ClockCheck.
+// Failures name the step: template-chrony-<slot> or clock-resync-<slot>.
+func (d *Deployment) restoreClock(ctx context.Context, slot string) error {
+	check, err := d.Topology.TemplateChronyScript()
+	if err != nil {
+		return err
+	}
+	if err = d.shell(ctx, slot, "template-chrony-"+slot, check); err != nil {
+		return err
+	}
+	return d.shell(ctx, slot, "clock-resync-"+slot, ClockResyncScript)
 }
 
 // The disposable store still has its setup-only default user here. Install an

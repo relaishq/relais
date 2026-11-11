@@ -31,7 +31,7 @@ Both profiles use two AZs. These resources exist with **zero calls**:
 | Retained relay Elastic IP / primary network interface | 1 / 1 | 1 / 1 | Fixed caller address; dedicated interface |
 | Secrets Manager generated secrets | 5 | 5 | AWS API; exact role grants |
 | VPC / public subnets / private subnets / internet gateway | 1 / 2 / 2 / 1 | 1 / 2 / 2 / 1 | Dedicated network |
-| Component security groups | 6 | 6 | Relay, worker, control, signaling, ALB, store |
+| Security groups | 7 | 7 | Relay, worker, control, signaling, ALB, store; one host group for the clock probe |
 | Store role users / user group / subnet group | 3 / 1 / 1 | 3 / 1 / 1 | Valkey disables default user automatically |
 | Explicit subnet address reservations / metadata handle | 6 / 1 | 6 / 1 | No interfaces or running compute |
 | IAM instance roles / instance profiles | 5 / 5 | 5 / 5 | Only the profile's hosts use them |
@@ -120,6 +120,34 @@ After a separately approved creation, configure your certificate's DNS name to
 the `SignalLoadBalancer` output. Caller media uses `RelayIPv4:24780`. Outputs
 contain no token, password, snapshot key or credential-bearing URL.
 
+## Time sync for clock admission
+
+Clock admission needs at least 10 distinct chrony updates from each host in its
+120-second window. The image default polls every 16 s, which gives about 7.
+Before any component starts, `install.sh` replaces `/etc/chrony.conf` on every
+host with the same file, then runs `systemctl enable chronyd.service` and
+`systemctl restart chronyd.service`:
+
+| Setting | Value | Effect |
+| --- | --- | --- |
+| Source | `server 169.254.169.123 prefer iburst minpoll 3 maxpoll 3` | The image's link-local platform time source, polled every 8 s: about 15 updates per 120 s. Security groups do not filter link-local traffic |
+| Other sources | None | No pool, `/etc/chrony.d` drop-in or hardware clock reference is loaded |
+| Tracking log | `logdir /var/log/chrony`, `log tracking` | One row per clock update in `/var/log/chrony/tracking.log` |
+| Clock error | `maxclockerror 1` | 1 ppm, chrony's default, stated explicitly |
+| Leap seconds | `leapsecmode system`, no `leapsectz` | chrony's default; the platform source smears leap seconds, so every host follows the same smear |
+| Start-up | `driftfile /var/lib/chrony/drift`, `makestep 1.0 3`, `rtcsync` | Standard chrony start-up settings |
+
+Each tracking row has 14 columns. [Operator gates](../../docs/dev/operator-gates.md)
+describes the reader's columns, cursor and break rules, and the
+[selection window](../../docs/dev/operator-gates.md#clock-selection-and-binding).
+The reader takes only new complete rows from `/var/log/chrony/tracking.log`
+and never parses chrony configuration. To check a host by hand, run
+`sudo tail -n 20 /var/log/chrony/tracking.log`. Expect a new row about every
+8 s (15 per 120 s), column 3 `169.254.169.123`, column 8 `N` (normal leap
+status) and column 14 the maximum error in seconds. `chronyc -n sources` should
+show one source with Poll `3`. The 15-per-120-s rate is calculated from the
+poll interval, not measured; the paid acceptance run must confirm it.
+
 ## Boundaries and secrets
 
 The only public ingress is relay **UDP 24780** and ALB **TCP 443**. HTTPS on
@@ -144,8 +172,11 @@ describe these limits (read 2026-10-19).
 | Signaling | Control | TCP 24710, bounded frontend |
 | ALB | Signaling | TCP 24743, HTTPS and health checks |
 | Relay, worker, control | Store | TCP 6379, TLS and Cluster discovery |
+| Host | Host | TCP 24891, host clock probe |
 
-Each path has matching ingress and egress rules. There is no VPC-wide private
+Each path has matching ingress and egress rules. Every EC2 host, and no
+other resource, is a member of the host group; the clock probe rule's source is
+that group, so the port is closed to the internet, the ALB and the store. There is no VPC-wide private
 API ingress. HTTPS egress is the only internet egress rule. An unusable loopback
 ICMP rule suppresses each group's implicit allow-all egress. The VPC DNS
 resolver is handled by AWS and is not filtered by security groups. Security
@@ -153,7 +184,7 @@ groups are stateful, so responses do not need reverse ingress rules. See
 [AWS security-group rules](https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html)
 (read 2026-10-19).
 
-Component ports use 24700–24781, below Linux’s default ephemeral range
+Component ports use 24700–24781 and the clock probe uses 24891, below Linux’s default ephemeral range
 32768–60999. The policy check rejects any unreserved component port within
 that range. This avoids outgoing boot connections taking a service port before
 its listener binds. No ephemeral-port reservation is needed; UDP buffer limits

@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -183,6 +185,107 @@ func (r *serialBootRunner) Run(ctx context.Context, c Command) CommandResult {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.runner.Run(ctx, c)
+}
+
+// bootCommands boots the real template against the recording fake runner.
+func bootCommands(t *testing.T) []Command {
+	t.Helper()
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "release.tar.gz")
+	data := []byte("digest-bound archive fixture")
+	if err := os.WriteFile(archive, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	config := fixtureConfig()
+	sum := sha256.Sum256(data)
+	config.ArchiveSHA256 = hex.EncodeToString(sum[:])
+	topology, err := Load(os.DirFS("../.."), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := Layout([]int{2, 3, 8, 9}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &bootRunner{}
+	d, err := NewDeployment(topology, filepath.Join(dir, "work"), archive, layout, &serialBootRunner{runner: runner}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = d.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return runner.commands
+}
+
+// Per host: the rehearsal clock is set up, the template user data boots (and
+// installs its own chrony.conf), that file is checked, the rehearsal reference
+// is restored and synchronized, then the verify script (ending in ClockCheck) runs.
+func TestBootOrdersClockStepsPerHost(t *testing.T) {
+	resync := []string{"install -m 0644 /rehearsal/chrony.conf /etc/chrony.conf\n", "systemctl restart chronyd\n", "chronyc -n waitsync 240 0 20 1\n"}
+	if ClockResyncScript != "set -eu\n"+strings.Join(resync, "") {
+		t.Fatal("resync must restore the reference, restart, then wait a bounded time for sync")
+	}
+	commands := bootCommands(t)
+	for _, slot := range Slots {
+		var labels []string
+		for _, c := range commands {
+			if strings.HasSuffix(c.Label, "-"+slot) && (strings.HasPrefix(c.Label, "setup-") || strings.HasPrefix(c.Label, "boot-") || strings.HasPrefix(c.Label, "template-chrony-") || strings.HasPrefix(c.Label, "clock-resync-") || strings.HasPrefix(c.Label, "verify-")) {
+				labels = append(labels, strings.TrimSuffix(c.Label, "-"+slot))
+				if strings.HasPrefix(c.Label, "clock-resync-") && string(c.Input) != ClockResyncScript {
+					t.Fatal("resync script replaced", slot)
+				}
+				if strings.HasPrefix(c.Label, "verify-") && !strings.HasSuffix(string(c.Input), ClockCheck()) {
+					t.Fatal("verify does not end with the clock check", slot)
+				}
+			}
+		}
+		if want := []string{"setup", "boot", "template-chrony", "clock-resync", "verify"}; !reflect.DeepEqual(labels, want) {
+			t.Fatalf("%s clock step order %v, want %v", slot, labels, want)
+		}
+	}
+}
+
+// The check accepts exactly the file install.sh writes and refuses any other.
+func TestTemplateChronyScriptMatchesInstallBlock(t *testing.T) {
+	topology := fixtureTopology(t)
+	script, err := topology.TemplateChronyScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := topology.Common.Files["/opt/relais/boot/install.sh"].Content
+	root := t.TempDir()
+	snippet := install[strings.Index(install, "cat > "):strings.Index(install, "chmod 0644")]
+	if output, x := exec.Command("bash", "-euc", "root="+quote(root)+"\nmkdir -p \"$root/etc\"\n"+snippet).CombinedOutput(); x != nil {
+		t.Fatalf("install block: %v %s", x, output)
+	}
+	written, err := os.ReadFile(filepath.Join(root, "etc/chrony.conf"))
+	if err != nil || !strings.Contains(string(written), "minpoll 3 maxpoll 3\n") || !strings.HasSuffix(string(written), "\nlog tracking\n") {
+		t.Fatalf("install block wrote %q %v", written, err)
+	}
+	conf := filepath.Join(root, "etc/chrony.conf")
+	local := strings.ReplaceAll(script, "'/etc/chrony.conf'", strconv.Quote(conf))
+	for _, row := range []struct {
+		name, content string
+		pass          bool
+	}{
+		{"template", string(written), true},
+		{"rehearsal-reference", "server 10.42.0.5 prefer iburst minpoll 0 maxpoll 0\n", false},
+		{"slower-poll", strings.Replace(string(written), "minpoll 3 maxpoll 3", "minpoll 4 maxpoll 4", 1), false},
+	} {
+		if err = os.WriteFile(conf, []byte(row.content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		output, x := exec.Command("/bin/sh", "-eu", "-c", local).CombinedOutput()
+		if (x == nil) != row.pass || !row.pass && !strings.Contains(string(output), "template-chrony-mismatch") {
+			t.Fatalf("MUTATION: %s pass=%v err=%v output=%s", row.name, row.pass, x, output)
+		}
+	}
+	missing := *topology
+	missing.Common.Files = map[string]File{}
+	if _, err = missing.TemplateChronyScript(); err == nil || err.Error() != "template-chrony-missing" {
+		t.Fatal("missing install block accepted", err)
+	}
 }
 
 func TestBootRejectsWrongArchiveBeforeAnyCommand(t *testing.T) {

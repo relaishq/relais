@@ -12,7 +12,15 @@ EXPECTED_PATHS = {
     ('ControlGroup', 'RelayGroup', 'tcp', 24700), ('SignalGroup', 'ControlGroup', 'tcp', 24710),
     ('AlbGroup', 'SignalGroup', 'tcp', 24743),
     *((role + 'Group', 'StoreGroup', 'tcp', 6379) for role in ('Worker', 'Control', 'Relay')),
+    ('HostGroup', 'HostGroup', 'tcp', 24891),
 }
+# Clock admission needs at least 10 updates per 120 s; an 8 s poll gives about 15.
+# Only the platform's link-local time source; leap seconds arrive already smeared.
+EXPECTED_CHRONY = [
+    'server 169.254.169.123 prefer iburst minpoll 3 maxpoll 3', 'driftfile /var/lib/chrony/drift',
+    'makestep 1.0 3', 'rtcsync', 'maxclockerror 1', 'leapsecmode system',
+    'logdir /var/log/chrony', 'log tracking',
+]
 EXPECTED_ACLS = {
     'Relay': """on -@all +ping +cluster|slots +command +time +scan (+eval +evalsha ~relais:preview:lease:*
         ~relais:preview:state:* ~relais:preview:record:* ~relais:preview:epoch:* ~relais:preview:routes:*
@@ -52,6 +60,15 @@ def check_component_ports(template, launcher):
     for port in ports:
         assert isinstance(port, int) and not 32768 <= port <= 60999, (
             'component port lies in unreserved Linux ephemeral range: ' + str(port))
+
+
+def check_time_sync(install):
+    head, separator, rest = install.partition('cat > "$root/etc/chrony.conf" <<\'CHRONY\'\n')
+    assert separator and install.count('chrony.conf') == 2, 'install must write one chrony.conf'
+    body, separator, tail = rest.partition('\nCHRONY\n')
+    assert separator and body.splitlines() == EXPECTED_CHRONY, 'chrony configuration drift'
+    restart = tail.index('"$manager" enable chronyd.service\n"$manager" restart chronyd.service\n')
+    assert restart < tail.index('enable --now "relais-'), 'chronyd must restart before any component starts'
 
 
 def check(template):
@@ -96,6 +113,7 @@ def check(template):
     spec = importlib.util.spec_from_file_location('embedded_files', ROOT / 'tests/sync-files.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     module.check(template)
+    check_time_sync(resources['BootFiles']['Metadata']['RelaisFiles']['/opt/relais/boot/install.sh']['content'])
     expected_roles = {name + 'Role' for name in SECRET_SCOPE}
     assert {n for n, r in resources.items() if r['Type'] == 'AWS::IAM::Role'} == expected_roles
     for name, resource in resources.items():
@@ -147,7 +165,10 @@ def check(template):
                 assert instances.keys() == expected
                 assert sum(x['Type'] == 'AWS::EC2::NatGateway' for x in r.values()) == (1 if profile == 'lean' else 2)
                 assert sum(x['Type'] == 'AWS::EC2::Subnet' for x in r.values()) == 4
-                assert p['RelayInterface']['GroupSet'] == ['RelayGroup']
+                assert p['RelayInterface']['GroupSet'] == ['RelayGroup', 'HostGroup']
+                # Only hosts join the clock-probe group; the store and ALB never do.
+                assert {n for n, x in r.items() if 'HostGroup' in json.dumps(x.get('Properties', {}))} == (
+                    instances.keys() - {'RelayHost'}) | {'RelayInterface', 'HostClockProbeIngress', 'HostClockProbeEgress'}
                 paths = set()
                 egress_paths = set()
                 for n, resource in r.items():
@@ -187,8 +208,8 @@ def check(template):
                     assert set(node['secrets'].values()) == SECRET_SCOPE[role.title()]
                     assert v['IamInstanceProfile'] == role.title() + 'InstanceProfile'
                     assert node['components'] == (['control', 'signal'] if role == 'shared' else [role])
-                    groups = v.get('SecurityGroupIds', ['RelayGroup'])
-                    assert set(groups) == ({'ControlGroup', 'SignalGroup'} if role == 'shared' else {role.title() + 'Group'})
+                    groups = v.get('SecurityGroupIds', p['RelayInterface']['GroupSet'])
+                    assert set(groups) == ({'ControlGroup', 'SignalGroup'} if role == 'shared' else {role.title() + 'Group'}) | {'HostGroup'}
                     env = instance['Metadata']['RelaisFiles']['/etc/relais/node.env']['content']
                     settings = dict(line.split('=', 1) for line in env.splitlines())
                     assert set(settings) == {'RELAIS_REDIS_ADDR', 'RELAIS_REDIS_CLUSTER', 'RELAIS_REDIS_TLS',
@@ -297,6 +318,11 @@ def regression_tests(template):
         ('interfaces_wait_for_reservations', lambda t: t['Resources']['Store'].pop('DependsOn')),
         ('hosts_wait_for_shared_metadata', lambda t: t['Resources']['RelayHost']['DependsOn'].remove('BootFiles')),
         ('boot_success_signal_required', lambda t: t['Resources']['RelayHost'].pop('CreationPolicy')),
+        ('clock_probe_not_public', lambda t: t['Resources']['HostClockProbeIngress'].update(Properties={**{k: v for k, v in t['Resources']['HostClockProbeIngress']['Properties'].items() if k != 'SourceSecurityGroupId'}, 'CidrIp': '0.0.0.0/0'})),
+        ('clock_probe_source_is_hosts', lambda t: t['Resources']['HostClockProbeIngress']['Properties'].update(SourceSecurityGroupId={'Ref': 'WorkerGroup'})),
+        ('clock_probe_port', lambda t: t['Resources']['HostClockProbeEgress']['Properties'].update(FromPort=24892, ToPort=24892)),
+        ('store_not_in_host_group', lambda t: t['Resources']['Store']['Properties']['SecurityGroupIds'].append({'Ref': 'HostGroup'})),
+        ('every_host_in_host_group', lambda t: t['Resources']['WorkerTwo']['Properties']['SecurityGroupIds'].remove({'Ref': 'HostGroup'})),
     ]
     for token in ('allcommands','allkeys','%RW~*','~relais:*','+flushall'):
         mutations.append(('relay_rejects_' + token, lambda t, token=token: t['Resources']['RelayStoreUser']['Properties'].update(AccessString=t['Resources']['RelayStoreUser']['Properties']['AccessString']+' '+token)))
@@ -310,7 +336,29 @@ def regression_tests(template):
         except (AssertionError, KeyError):
             continue
         raise AssertionError('policy mutation escaped detection: ' + name)
-    print(f'PASS: {len(mutations)} unsafe template mutations refused')
+    install = template['Resources']['BootFiles']['Metadata']['RelaisFiles']['/opt/relais/boot/install.sh']['content']
+    check_time_sync(install)
+    sync = [('poll_8s', 'minpoll 3 maxpoll 3', 'minpoll 4 maxpoll 4'),
+            ('tracking_log', 'log tracking\n', ''),
+            ('log_directory', 'logdir /var/log/chrony\n', ''),
+            ('stated_maxclockerror', 'maxclockerror 1\n', ''),
+            ('leap_mode', 'leapsecmode system', 'leapsecmode slew'),
+            ('no_leap_table', 'log tracking\n', 'log tracking\nleapsectz right/UTC\n'),
+            ('platform_source_only', 'log tracking\n', 'log tracking\nsourcedir /etc/chrony.d\n'),
+            ('restart_chronyd', '"$manager" restart chronyd.service\n', ''),
+            ('restart_before_components', '"$manager" enable chronyd.service\n"$manager" restart chronyd.service\n', ''),
+            ('one_chrony_file', 'CHRONY\nchmod', 'CHRONY\ncp "$root/etc/chrony.conf" "$root/etc/chrony.d/x.conf"\nchmod')]
+    for name, old, new in sync:
+        assert install.count(old) == 1, name
+        changed = install.replace(old, new)
+        if name == 'restart_before_components':
+            changed = changed.replace('echo \'boot services started and ready\'', '"$manager" enable chronyd.service\n"$manager" restart chronyd.service')
+        try:
+            check_time_sync(changed)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError('time-sync mutation escaped detection: ' + name)
+    print(f'PASS: {len(mutations)} unsafe template mutations and {len(sync)} time-sync mutations refused')
 
 
 if __name__ == '__main__':
