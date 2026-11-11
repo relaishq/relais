@@ -6415,8 +6415,8 @@
     "ID": "excluded-kill-not-dropped",
     "File": "internal/operatorevidence/judge-src/main.go",
     "Function": "pooledPreviewMedia",
-    "Old": "if causes := pooledCoverage[k]; e.Event.Kind == \"kill\" && len(e.Identities) > 0 && len(causes) == 1 && causes[0] == \"clock-coverage-kill-excluded\" {",
-    "New": "if causes := pooledCoverage[k]; false && len(causes) == 1 {",
+    "Old": "if soleExcludedCause(e, pooledCoverage[k]) {",
+    "New": "if false {",
     "Test": "TestExcludedKillWithReplacementDecidesPool/5",
     "Marker": "MUTATION: excluded-kill-not-dropped",
     "Package": "./internal/operatorevidence/judge-src"
@@ -6444,9 +6444,9 @@
   {
     "ID": "excluded-bracket-skips-timelines",
     "File": "internal/operatorgates/observe/clock_coverage.go",
-    "Function": "coverageSpans",
-    "Old": "return spans, \"clock-coverage-kill-excluded\"",
-    "New": "return nil, \"clock-coverage-kill-excluded\"",
+    "Function": "evaluateClockCoverage",
+    "Old": "add(whyH)\n\t\t\tadd(whyF)\n",
+    "New": "if !s.excluded {\n\t\t\t\tadd(whyH)\n\t\t\t\tadd(whyF)\n\t\t\t}\n",
     "Test": "TestClockCoverageKillExcludedKeepsTimelineChecks/worker-step",
     "Marker": "MUTATION: excluded-bracket-skips-timelines",
     "Package": "./internal/operatorgates/observe"
@@ -6454,9 +6454,9 @@
   {
     "ID": "excluded-bracket-skips-timelines-judge",
     "File": "internal/operatorgates/observe/clock_coverage.go",
-    "Function": "coverageSpans",
-    "Old": "return spans, \"clock-coverage-kill-excluded\"",
-    "New": "return nil, \"clock-coverage-kill-excluded\"",
+    "Function": "evaluateClockCoverage",
+    "Old": "add(whyH)\n\t\t\tadd(whyF)\n",
+    "New": "if !s.excluded {\n\t\t\t\tadd(whyH)\n\t\t\t\tadd(whyF)\n\t\t\t}\n",
     "Test": "TestExcludedKillTimelineCauseIsNotDropped/worker-step",
     "Marker": "MUTATION: excluded-bracket-skips-timelines",
     "Package": "./internal/operatorevidence/judge-src"
@@ -6465,8 +6465,8 @@
     "ID": "excluded-bracket-width-not-waived",
     "File": "internal/operatorgates/observe/clock_coverage.go",
     "Function": "evaluateClockCoverage",
-    "Old": "if s.signal && !s.excluded && (",
-    "New": "if s.signal && (",
+    "Old": "add(\"clock-coverage-kill-excluded\")\n\t\t\t\t} else {",
+    "New": "add(\"clock-coverage-kill-bracket\")\n\t\t\t\t} else {",
     "Test": "TestClockCoverageKillExcludedKeepsTimelineChecks/clean",
     "Marker": "MUTATION: excluded-bracket-skips-timelines",
     "Package": "./internal/operatorgates/observe"
@@ -6480,6 +6480,76 @@
     "Test": "TestCoverageTailWaitsForExcludedKill",
     "Marker": "MUTATION: excluded-tail-skipped",
     "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "excluded-bracket-trusts-gate",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "if s.signal && (h > math.MaxInt64-f ||",
+    "New": "if s.signal && (s.excluded || h > math.MaxInt64-f ||",
+    "Test": "TestClockCoverageKillExcludedRecheck/2000000",
+    "Marker": "MUTATION: excluded-bracket-trusts-gate",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "excluded-bracket-trusts-gate-judge",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "if s.signal && (h > math.MaxInt64-f ||",
+    "New": "if s.signal && (s.excluded || h > math.MaxInt64-f ||",
+    "Test": "TestExcludedTakeoverBracketRecheck/fits",
+    "Marker": "MUTATION: excluded-bracket-trusts-gate",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-bracket-half-width-alone",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "|| s.half > s.bound || h+f > s.bound-s.half) {",
+    "New": "|| s.half > s.bound) {",
+    "Test": "TestClockCoverageKillExcludedRecheck/4000000",
+    "Marker": "MUTATION: excluded-bracket-trusts-gate",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "excluded-takeover-unreported",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "pooledPreviewMedia",
+    "Old": "out.Excluded = back.Excluded\n",
+    "New": "out.Excluded = &excludedPool{}\n",
+    "Test": "TestExcludedTakeoverReportsItsRow",
+    "Marker": "MUTATION: excluded-takeover-unreported",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-takeover-sign-off-skipped",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "pooledPreviewMedia",
+    "Old": "e.OwnerSignOff = e.OwnerSignOff || !row.NonTimingPassed",
+    "New": "e.OwnerSignOff = e.OwnerSignOff || row.Phase < 0",
+    "Test": "TestExcludedTakeoverNonTimingChecks/audio-loss",
+    "Marker": "MUTATION: excluded-takeover-strict-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-takeover-timing-required",
+    "File": "internal/operatorevidence/judge-src/excluded_takeovers.go",
+    "Function": "excludedTakeoverRow",
+    "Old": "if !timingMetric(m.Metric) && m.Outcome != \"pass\" {",
+    "New": "if m.Outcome != \"pass\" {",
+    "Test": "TestExcludedTakeoverNonTimingChecks/first-content",
+    "Marker": "MUTATION: excluded-takeover-strict-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-rows-optional",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "DecodeSummary",
+    "Old": "if s.ExcludedKills > 0 {",
+    "New": "if false {",
+    "Test": "TestExcludedTakeoverReportsItsRow",
+    "Marker": "MUTATION: excluded-rows-optional",
+    "Package": "./internal/operatorevidence/judge-src"
   },
   {
     "ID": "release-replacement-not-deferred",

@@ -973,10 +973,14 @@ The enforced causes are:
   bracket, or its rounded-up half-width plus frontend and killed-worker error
   exceeds the worker bound.
 - `clock-coverage-kill-excluded`: a well-formed bracket that the gate recorded as
-  wider than the selected worker bound (`leaseExcluded`). Only this gate-recorded
-  case gets the cause; see "Wide kill brackets" below. It waives only the
-  bracket's own half-width check. The worker, frontend and control timelines of
-  that takeover are still checked, and any of their causes is added beside it.
+  wider than the selected worker bound (`leaseExcluded`), and that the evaluator
+  confirms is too wide: its rounded-up half-width plus frontend and killed-worker
+  error exceeds the worker bound. Half-width alone does not decide it. A
+  recorded bracket that fits gets no kill cause, and its takeover is judged like
+  any other. See "Wide kill brackets" below. The worker, frontend and control
+  timelines of that takeover are still checked, and any of their causes is added
+  beside it. When a timeline cause stops the width recheck, the gate's exclusion
+  is kept beside that cause.
 
 - `clock-coverage-falsified`: any falsified probe record, or a positive cumulative
   falsification count, removes clock trust from every window judged from then on
@@ -1247,6 +1251,28 @@ waits for an excluded takeover's tracking tails. The pool reports
 omits dropped kills, while each phase diagnostic keeps them, and undecided rows
 keep their original phase and event indexes. The pool minimum of 20 moves and
 10 takeovers is unchanged.
+
+Owner decision, 2026-11-11 (#444): report each excluded takeover and gate a
+strict pass on its non-timing checks. When `excludedKills` is nonzero, the
+summary (and the gate's media status) carries an `excluded` object:
+
+- `takeovers`: one row per excluded takeover, with its phase and event, each
+  matching call's `windowOutcome`, `killToLive` bounds and `eventGaps` bounds
+  per track, and every yardstick metric's outcome for that event.
+  `nonTimingPassed` is true when every metric other than the timing metrics
+  (`first_content`, `first_new_content`, `distributed_window`) passed.
+- `countedBackIn`: the pooled status when the excluded takeovers are judged
+  again with their brackets trusted (their sole cause waived). The rows above
+  come from that judgment. It is a sensitivity verdict only.
+- `ownerSignOff`: true when the pool would pass but an excluded takeover's
+  non-timing checks did not all pass. The status is then `inconclusive`, not
+  `passed`; the owner decides from the rows whether to accept the run.
+
+A failure on an excluded takeover still fails the run, as above. Timing results
+of an excluded takeover never change the strict status. Runs with no excluded
+takeover keep the same summary bytes, with no `excluded` member
+(`TestNoExcludedTakeoverKeepsSummaryBytes`). In the free rehearsal, a status
+held for owner sign-off is not eligible.
 
 The gate owes one replacement takeover for each excluded armed takeover: a trial
 kill, or control restart's `restart-takeover`. The unarmed degraded-restart kill

@@ -605,6 +605,13 @@
     "excluded-bracket-skips-timelines-judge",
     "excluded-bracket-width-not-waived",
     "excluded-tail-skipped",
+    "excluded-bracket-trusts-gate",
+    "excluded-bracket-trusts-gate-judge",
+    "excluded-bracket-half-width-alone",
+    "excluded-takeover-unreported",
+    "excluded-takeover-sign-off-skipped",
+    "excluded-takeover-timing-required",
+    "excluded-rows-optional",
     "release-replacement-not-deferred"
   ],
   "killed": [
@@ -5077,6 +5084,48 @@
       "id": "excluded-tail-skipped",
       "test": "TestCoverageTailWaitsForExcludedKill",
       "package": "./internal/operatorgates/observe",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-bracket-trusts-gate",
+      "test": "TestClockCoverageKillExcludedRecheck/2000000",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-bracket-trusts-gate-judge",
+      "test": "TestExcludedTakeoverBracketRecheck/fits",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-bracket-half-width-alone",
+      "test": "TestClockCoverageKillExcludedRecheck/4000000",
+      "package": "./internal/operatorgates/observe",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-takeover-unreported",
+      "test": "TestExcludedTakeoverReportsItsRow",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-takeover-sign-off-skipped",
+      "test": "TestExcludedTakeoverNonTimingChecks/audio-loss",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-takeover-timing-required",
+      "test": "TestExcludedTakeoverNonTimingChecks/first-content",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-rows-optional",
+      "test": "TestExcludedTakeoverReportsItsRow",
+      "package": "./internal/operatorevidence/judge-src",
       "evidence": "killed"
     },
     {

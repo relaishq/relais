@@ -42,6 +42,8 @@ type previewMediaSummary struct {
 	MaxMediaGapNs       int64  `json:"maxMediaGapNs"`
 	DecryptionFailures  int    `json:"decryptionFailures"`
 	ICERestarts         int    `json:"iceRestarts"`
+
+	Excluded *excludedPool `json:"excluded,omitempty"`
 }
 
 type phaseDiagnostic struct {
@@ -421,6 +423,8 @@ type previewPoolInput struct {
 	RunID               string                         `json:"runId"`
 	Phases              []previewMediaInput            `json:"phases"`
 	Missing             bool                           `json:"missing"`
+	// waiveExcluded judges each excluded takeover with its bracket trusted.
+	waiveExcluded bool
 }
 
 // Assemble RAW processes and receipts first; invoke the unchanged public policy
@@ -432,8 +436,8 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	included, dropped, excluded, overlaps := 0, 0, 0, 0
 	var duplicates uint64
 	completeMedia, lost := true, 0
-	type eventPosition struct{ phase, event int }
 	var positions []eventPosition
+	waived := map[eventPosition]bool{}
 	pooledCoverage := map[int][]string{}
 	var relayCalls int
 	var relayGap int64
@@ -441,6 +445,12 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	for i := range input.Phases {
 		phase := &input.Phases[i]
 		phase.coverage = coverageForPhase(input, i)
+		for j, causes := range phase.coverage {
+			if input.waiveExcluded && soleExcludedCause(phase.Events[j], causes) {
+				phase.coverage[j] = []string{}
+				waived[eventPosition{i, j}] = true
+			}
+		}
 		part, verdict, qualified := parsePreviewMedia(phase)
 		valid = valid && qualified && phase.RunID == input.RunID
 		failed = failed || phase.RunID == input.RunID && verdict.Status == "failed"
@@ -518,7 +528,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		var keptPositions []eventPosition
 		keptCoverage := map[int][]string{}
 		for k, e := range r.Events {
-			if causes := pooledCoverage[k]; e.Event.Kind == "kill" && len(e.Identities) > 0 && len(causes) == 1 && causes[0] == "clock-coverage-kill-excluded" {
+			if soleExcludedCause(e, pooledCoverage[k]) {
 				for _, id := range e.Identities {
 					excludedIDs[id] = true
 				}
@@ -554,6 +564,21 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		r.Events, positions = kept, keptPositions
 		out = previewMediaQualified(r, false, keptCoverage)
 		out.ExcludedKills = excludedKills
+		if input.waiveExcluded {
+			out.Excluded = &excludedPool{Takeovers: []excludedTakeover{}}
+			for k, at := range positions {
+				if waived[at] {
+					out.Excluded.Takeovers = append(out.Excluded.Takeovers, excludedTakeoverRow(r, k, at))
+				}
+			}
+		} else if excludedKills > 0 {
+			again := *input
+			again.Phases = append([]previewMediaInput{}, input.Phases...)
+			again.waiveExcluded = true
+			back := pooledPreviewMedia(&again)
+			out.Excluded = back.Excluded
+			out.Excluded.CountedBackIn = back.Status
+		}
 	} else if relayCalls > 0 {
 		out.Status = "passed"
 	}
@@ -566,6 +591,16 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	}
 	if failed {
 		out.Status = "failed"
+	}
+	// A strict pass needs every excluded takeover's non-timing checks to pass.
+	if e := out.Excluded; e != nil && !input.waiveExcluded && out.Status == "passed" {
+		e.OwnerSignOff = len(e.Takeovers) != out.ExcludedKills
+		for _, row := range e.Takeovers {
+			e.OwnerSignOff = e.OwnerSignOff || !row.NonTimingPassed
+		}
+		if e.OwnerSignOff {
+			out.Status = "inconclusive"
+		}
 	}
 	out.IncludedPhases = included
 	out.DroppedPhases = dropped
