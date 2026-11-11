@@ -29,6 +29,28 @@ type ClockSelectionReport struct {
 	Updates        map[string]int `json:"updates,omitempty"`
 	ReceiptSHA256  string         `json:"receiptSha256,omitempty"`
 	EvidenceSHA256 string         `json:"evidenceSha256,omitempty"`
+	// Set only on a clock-lease-expired refusal; values come from the sanitized evidence.
+	LeaseRefusal *ClockLeaseRefusal `json:"leaseRefusal,omitempty"`
+}
+
+type ClockLeaseRefusal struct {
+	Slot           string `json:"slot"`
+	AgedLeaseAgeNS int64  `json:"agedLeaseAgeNs"`
+	BudgetNS       int64  `json:"budgetNs"`
+}
+
+// leaseRefusal names the first expired host in slot order, as the selector does.
+func leaseRefusal(cause string, hosts []clocks.SelectionHost) *ClockLeaseRefusal {
+	if cause != "clock-lease-expired" {
+		return nil
+	}
+	var out *ClockLeaseRefusal
+	for _, h := range hosts {
+		if age, budget, ok := clocks.ExpiredLeaseAge(h.Lease); ok && (out == nil || h.Slot < out.Slot) {
+			out = &ClockLeaseRefusal{Slot: h.Slot, AgedLeaseAgeNS: age, BudgetNS: budget}
+		}
+	}
+	return out
 }
 
 func clockSelectionCause(cause string) string {
@@ -246,6 +268,10 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			}
 			e.Hosts = append(e.Hosts, h)
 		}
+		// Keep the last named slot if a later expired read cannot be attributed; clear it on any other cause.
+		if refusal := leaseRefusal(result.Cause, e.Hosts); refusal != nil || result.Cause != "clock-lease-expired" {
+			result.LeaseRefusal = refusal
+		}
 		if end.IsZero() && complete {
 			// Keep seed overflow breaks outside the selector's two-second margin.
 			if p.pause(ctx, 2*time.Second) != nil {
@@ -281,6 +307,9 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			} else {
 				selection, cause := p.selectBounds(ctx, e, rehearsalClockPolicy())
 				result.Cause = clockSelectionCause(cause)
+				if refusal := leaseRefusal(result.Cause, e.Hosts); refusal != nil || result.Cause != "clock-lease-expired" {
+					result.LeaseRefusal = refusal
+				}
 				if cause == "" {
 					result.Bounds = &selection.Receipt.Bounds
 					result.ReceiptSHA256, result.EvidenceSHA256 = selection.SHA256, selection.Receipt.EvidenceSHA256
