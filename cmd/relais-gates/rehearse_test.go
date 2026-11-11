@@ -35,6 +35,9 @@ func TestRehearseReleaseReadFailurePrintsRefusalCode(t *testing.T) {
 		want string
 	}{
 		{&artifacts.Refusal{Code: "read-rate-limited", Detail: "secret-token https://x.invalid"}, "release-refusal: read-rate-limited"},
+		{&artifacts.Refusal{Code: "manifest-invalid", Detail: "d"}, "release-refusal: manifest-invalid"},
+		{&artifacts.Refusal{Code: "upgrade-refused", Detail: "d"}, "release-refusal: upgrade-refused"},
+		{&artifacts.Refusal{Code: "release-profile-differs", Detail: "d"}, "release-refusal: release-profile-differs"},
 		{&artifacts.Refusal{Code: "token-ghp_abc", Detail: "d"}, "release-refusal: unclassified"},
 		{errors.New("get https://x.invalid?token=secret"), "release-refusal: unclassified"},
 	}
