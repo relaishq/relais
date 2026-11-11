@@ -304,3 +304,62 @@ func TestClockSelectionStickyProbe(t *testing.T) {
 		t.Fatal("MUTATION: admission-sticky")
 	}
 }
+
+// A lease aged just above the 5-poll budget names the slot, aged age and budget.
+func TestClockSelectionLeaseRefusalNamesSlot(t *testing.T) {
+	const referenceAgeNS = 5200000000
+	p := admissionFixture(t, false, func(_ context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+		s, err := clocks.Select(e, policy)
+		if err != nil {
+			return s, err.Error()
+		}
+		return s, ""
+	})
+	read := p.read
+	var elapsed int64
+	p.read = func(ctx context.Context, slot, script string) (string, error) {
+		out, err := read(ctx, slot, script)
+		if err != nil || slot != "w2" || p.now().Unix() < 1792886525 {
+			return out, err
+		}
+		raw, err := host.Unpack(out, 256000)
+		require.NoError(t, err)
+		var doc map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &doc))
+		var o clocks.LeaseObservation
+		require.NoError(t, json.Unmarshal(doc["lease"], &o))
+		var measured int64
+		_, err = fmt.Sscan(o.MeasuredUnixNS, &measured)
+		require.NoError(t, err)
+		o.ReferenceAgeNS, o.ReferenceUnixNS = referenceAgeNS, fmt.Sprint(measured-referenceAgeNS)
+		elapsed = o.HostElapsedNS
+		doc["lease"], err = json.Marshal(o)
+		require.NoError(t, err)
+		raw, err = json.Marshal(doc)
+		require.NoError(t, err)
+		var packed bytes.Buffer
+		z := gzip.NewWriter(&packed)
+		_, err = z.Write(raw)
+		require.NoError(t, err)
+		require.NoError(t, z.Close())
+		return base64.StdEncoding.EncodeToString(packed.Bytes()), nil
+	}
+	r := collectClockSelection(context.Background(), "refusal-test", "shared", "shared", p)
+	require.Equal(t, "clock-lease-expired", r.Cause)
+	require.Nil(t, r.Bounds)
+	require.Equal(t, &ClockLeaseRefusal{Slot: "w2", AgedLeaseAgeNS: referenceAgeNS + elapsed, BudgetNS: 5000000000}, r.LeaseRefusal)
+	raw, err := json.Marshal(r)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"leaseRefusal":{"slot":"w2","agedLeaseAgeNs":`)
+}
+
+// The admitted status file keeps its exact bytes; refusal fields are absent.
+func TestClockSelectionAdmittedStatusBytes(t *testing.T) {
+	r := &ClockSelectionReport{Bounds: &clocks.Bounds{FrontendControlBoundNS: 120000, FrontendWorkerBoundNS: 170000, DriftPPM: 100}, Updates: map[string]int{"w2": 120}, ReceiptSHA256: "aa", EvidenceSHA256: "bb"}
+	dir := t.TempDir()
+	stage := &rehearsal{report: &Report{}, c: RehearseConfig{Output: dir}, diagnostics: io.Discard}
+	stage.recordClockSelectionReport(r)
+	got, err := os.ReadFile(filepath.Join(dir, "clock-selection-status.json"))
+	require.NoError(t, err)
+	require.Equal(t, `{"cause":"","selectedBounds":{"frontendControlBoundNs":120000,"frontendWorkerBoundNs":170000,"driftPpm":100},"updates":{"w2":120},"receiptSha256":"aa","evidenceSha256":"bb"}`, string(got))
+}
