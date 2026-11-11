@@ -133,6 +133,14 @@ func (r *Report) Evaluate() {
 	}
 }
 
+// PublicCode returns s when it is a known public label, else "unclassified".
+func PublicCode(s string) string {
+	if s == "" {
+		return "unclassified"
+	}
+	return publicCode(s)
+}
+
 // Reports are typed projections: no raw mailbox, script, environment, product
 // response or error string is serializable here. Restrict all remaining labels.
 func publicCode(s string) string {
