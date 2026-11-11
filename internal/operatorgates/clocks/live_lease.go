@@ -14,16 +14,32 @@ type Lease struct {
 }
 
 func LeaseRefreshBudget(o LeaseObservation) (time.Duration, error) {
+	n, err := pollsNS(o, LeaseRefreshPolls)
+	return time.Duration(n), err
+}
+
+func pollsNS(o LeaseObservation, polls int64) (int64, error) {
 	p, err := exact(o.PollSeconds)
 	if err != nil || p.Sign() <= 0 {
 		return 0, &BindingError{"clock-lease-missing"}
 	}
-	p.Mul(p, big.NewRat(LeaseRefreshPolls*1e9, 1))
+	p.Mul(p, big.NewRat(polls*1e9, 1))
 	n := new(big.Int).Quo(p.Num(), p.Denom())
 	if !n.IsInt64() || n.Sign() <= 0 {
 		return 0, &BindingError{"clock-lease-missing"}
 	}
-	return time.Duration(n.Int64()), nil
+	return n.Int64(), nil
+}
+
+// ExpiredLeaseAge reports an expired lease's aged age (reference age plus host
+// elapsed time) and its validity budget. Both come from published fields.
+func ExpiredLeaseAge(o LeaseObservation) (ageNS, budgetNS int64, ok bool) {
+	v, err := RecordLease(o, o.HostElapsedNS)
+	if err != nil || !v.Expired {
+		return 0, 0, false
+	}
+	budgetNS, err = pollsNS(o, LeaseValidityPolls)
+	return o.ReferenceAgeNS + o.HostElapsedNS, budgetNS, err == nil
 }
 
 func (l Lease) Observe(o LeaseObservation, sent, received time.Duration) (Lease, error) {

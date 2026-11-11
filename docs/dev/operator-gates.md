@@ -1122,7 +1122,9 @@ not characterize independent hosts; changed reference updates can refuse leases.
 The real CLI archives `clock-selection.json`, `clock-admission-evidence.json`,
 `clock-selection-policy.json` and `clock-selection-status.json`. Report
 `clockSelection` and logs print digests, bounds and counts or the fixed refusal
-cause. Archives omit addresses, source labels and opaque cursors. Rehearsal refuses
+cause. A `clock-lease-expired` refusal also records `leaseRefusal`: the first
+expired slot, its aged lease age (reference age plus host elapsed time) and the
+5-poll budget, all taken from the sanitized evidence. Archives omit addresses, source labels and opaque cursors. Rehearsal refuses
 before calibration without an admitted receipt. Selected bounds reach both pinned
 caller manifests and external coverage qualification. Pinned product bytes and
 judge policies remain unchanged; stored classifications cannot be re-bounded.
