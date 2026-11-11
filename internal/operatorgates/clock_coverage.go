@@ -137,7 +137,7 @@ func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, win
 		return e
 	}
 	// Drainage consumes the original collection reserve; it never extends it.
-	limit := 10 * time.Second
+	limit := s.timing.drainLimit()
 	if deadline, ok := ctx.Deadline(); ok {
 		limit = min(limit, max(0, time.Until(deadline)))
 	}

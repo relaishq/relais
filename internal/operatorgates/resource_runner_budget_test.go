@@ -124,8 +124,8 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 						// Completion is unavailable until all 17 minutes of media have run.
 						clock.Advance(max(0, mediaStart.Add(17*time.Minute).Sub(clock.Wall())) + 30*time.Second)
 						if mode == "coverage-skipped" {
-							s.Budget.end = clock.Elapsed() + judgeReserve
-							s.Budget.wallEnd = clock.Wall().Add(judgeReserve).UnixMilli()
+							s.Budget.end = clock.Elapsed() + referenceTiming.judgeReserve()
+							s.Budget.wallEnd = clock.Wall().Add(referenceTiming.judgeReserve()).UnixMilli()
 						}
 						cutoff := time.UnixMilli(manifest.Deadline)
 						if !clock.Wall().Before(cutoff) {

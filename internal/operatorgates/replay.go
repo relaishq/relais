@@ -174,6 +174,7 @@ func ErrorCategory(name, message string) string {
 			"command-result-unknown", "gate-deadline", "interrupted", "caller-not-near", "precondition-unhealthy", "precondition-failed", "not-implemented", "prior-gate-stopped",
 			"gate-caller-bounds-differ", "clock-binding-missing", "clock-binding-invalid", "clock-binding-run-differ", "clock-binding-roles-differ", "clock-binding-leap-differ", "clock-binding-digest-differ", "clock-binding-policy-differ", "clock-binding-selection-differ", "clock-binding-readback-differ",
 			"clock-history-invalid", "clock-history-incomplete", "clock-history-limit", "clock-history-gap", "clock-history-precision", "clock-history-changed", "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ",
+			"clock-timing-invalid", "clock-timing-lease-validity", "clock-timing-judge-reserve", "clock-timing-restore-reserve",
 			"unsupported-capability", "protocol-error", "duplicate-result", "invalid-refusal", "invalid-blob", "gate-failed", "restore-failed", "unclassified":
 			return message
 		}

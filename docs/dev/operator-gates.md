@@ -1,11 +1,13 @@
 # Operator session core
 
-`relais-gates session -config FILE [-spool DIR] [-timing-evidence FILE]` accepts one init and runs the
+`relais-gates session -config FILE [-spool DIR] [-timing-evidence FILE] [-coverage-adapter FILE]` accepts one init and runs the
 public `RunSequence` over JSON Lines on stdin/stdout. Stdout contains protocol
 frames only. The private JSON configuration supplies `parameters` (the existing
 process endpoints), two release `pins`, clock `bounds`, `architecture`,
 caller `endpoints` and `token`, and an absolute `judgeBinary` path.
 Optional `callerIdBase` allocates caller identities after setup callers.
+Optional `clockTiming` states the clock poll period and the host read latency;
+see [Timing budget for slow host reads](#timing-budget-for-slow-host-reads).
 The binary is checked against Init's judge SHA-256 before resource requests;
 release pins are bound to Init's scenario. No release build or download occurs
 inside a gate. `-spool` binds an agreed local blob directory without putting its
@@ -1023,8 +1025,10 @@ diagnostics on pool decoding failure when no final judge ran. The final report
 and judge input share the drained snapshot when final judging succeeds.
 An optional isolated `ClockCoverageReader` can drain tracking evidence outside
 `Session.Exchange`, whose unknown replies must still latch policy requests.
-The rehearsal adapter provides this isolated reader. Without one, an uncovered
-tail stays incomplete; no unsafe transport fallback is used.
+The rehearsal adapter provides this isolated reader. `relais-gates session`
+provides it when `-coverage-adapter` names a second adapter executable.
+Without one, an uncovered tail stays incomplete; no unsafe transport fallback
+is used.
 Diagnostic cursors do not acknowledge the policy reader's cursor, so later
 policy reads may repeat rows; duplicate intervals do not narrow the maximum.
 
@@ -1210,6 +1214,64 @@ duration per slot, including failures, to measure actual exec and cold costs.
 A container-free parallel replay measured 320–347 ms warm batches and a
 610 ms first batch; actual runner exec costs still need measurement.
 These diagnostics do not enter verdict inputs. No warm-up read is added.
+
+### Timing budget for slow host reads
+
+The lease and drain times above are the reference timing: a one-second poll
+(P) and local host reads. A remote command transport can take seconds for each
+host action. The private configuration then states both numbers once:
+
+```json
+"clockTiming": {"pollSeconds": 8, "hostReadLatencyMs": 4000}
+```
+
+`hostReadLatencyMs` (L) is the p99 latency of one host read action, single or
+batch. Without `clockTiming` the session uses the reference timing, P = 1 s and
+L = 400 ms, and every value below equals the earlier fixed constant
+(`TestTimingBudgetDerivation`).
+
+| Time | Derivation | Reference | P = 8 s, L = 4 s |
+|---|---|---|---|
+| Single lease read, after queueing | L + 150 ms process start | 550 ms | 4.15 s |
+| Lease batch, after queueing | 4L | 1.6 s | 16 s |
+| Whole lease observation (attempt) | 4L + P/5 | 1.8 s | 17.6 s |
+| Trailing coverage drain limit | max(10 s, 2P + 4L) | 10 s | 32 s |
+| Judge reserve | 120 s pool reserve − drain limit | 110 s | 88 s |
+
+Lease validity (5P) and the refresh window (10P) still come from each host's
+own reported poll period. The 100 ms retry poll and the one-second drain wait
+do not change.
+
+A configuration that cannot fit the existing deadlines is refused with a named
+cause. `relais-gates session` checks it after it reads the configuration and
+exits with status 2 and `operator-config-refused: <cause>` on stderr, before
+hello. The runner checks it again with the adapter's capabilities, before the
+first host request; every gate is then `not_run` with that cause.
+
+| Cause | Rule |
+|---|---|
+| `clock-timing-invalid` | P and L are both positive and at most 120 s |
+| `clock-timing-lease-validity` | 5P ≥ 5L: a lease outlasts five reads |
+| `clock-timing-judge-reserve` | the drain limit leaves the judge at least 60 s |
+| `clock-timing-restore-reserve` | the reads before a restoration command, plus the 30 s host floor and 1 s, fit the 60 s `RestoreReserve` |
+
+The restoration rule counts two reads for an adapter with both batch
+capabilities and eight for a serial adapter. The check before hello assumes
+batch reads. A serial adapter therefore fits up to L = 3.625 s.
+
+An unknown or late lease read still latches the session; the budget only
+changes when a reply is late. `TestSlowHostReadsGateSequence` runs a rollout
+with five moves and three kills on a fake transport at P = 8 s and four seconds
+for each action, with no `clock-lease-*` or `clock-coverage-*` cause. This is a
+fake-clock test, not a measurement of a remote transport.
+
+`-coverage-adapter FILE` starts a second adapter process (absolute path, no
+arguments, the fixed adapter environment) for the trailing coverage drain. Each
+read is one `host.execute` `clock` request on that process, with session
+`clock-coverage` and its own request numbers. The gate session's pipe, request
+identities and latch are not involved. A lost, late or uncorrelated reply
+closes the reader; a definite host failure fails only that read. In both cases
+the tail stays incomplete.
 Every bound preparation refusal retains its fixed `clock-lease-missing`,
 `clock-lease-expired`, `clock-lease-bound` or `clock-config-differ` cause in the
 gate reason and `precondition-check` diagnostics, including head-caller reports.

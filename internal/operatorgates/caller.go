@@ -75,16 +75,14 @@ func (r *EvidenceRuntime) media(ctx context.Context, prepare func(*clocks.Covera
 	return procedureMedia(summary), err
 }
 
-// Keep the existing two-minute pool budget, less its maximum ten-second drain, for judging.
-const judgeReserve = PoolReserve - 10*time.Second
-
 // finalizePool drains within the original final collection cutoff before the
-// judge receives its input. Gate media can then be refreshed with that snapshot.
+// judge receives its input, keeping the timing budget's judge reserve. Gate media
+// can then be refreshed with that snapshot.
 func (s *Session) finalizePool(ctx context.Context, end time.Duration, pool *EvidenceRuntime, bounds clocks.Bounds, read ClockCoverageReader, pause func(context.Context, time.Duration) error) (*MediaSummary, *clocks.CoverageEvidence, error) {
 	var coverage *clocks.CoverageEvidence
 	media, err := pool.media(ctx, func(e *clocks.CoverageEvidence) *clocks.CoverageEvidence {
 		if e != nil {
-			coverage = s.collectCoverage(ctx, bounds, e.Windows, read, pause, end-judgeReserve)
+			coverage = s.collectCoverage(ctx, bounds, e.Windows, read, pause, end-s.timing.judgeReserve())
 		}
 		return coverage
 	})
