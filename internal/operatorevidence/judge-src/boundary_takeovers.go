@@ -119,3 +119,16 @@ func boundaryRows(r *loadgen.RunReport) []undecidedMetric {
 	}
 	return out
 }
+
+// excludedBoundaryRows keeps the boundary label of each excluded takeover.
+// back is the counted-back-in judgment, the only one that settles an excluded
+// takeover; its rows already carry the original phase and event.
+func excludedBoundaryRows(back previewMediaSummary) []undecidedMetric {
+	var out []undecidedMetric
+	for _, row := range back.BoundaryMetrics {
+		if slices.ContainsFunc(back.Excluded.Takeovers, func(e excludedTakeover) bool { return e.Phase == row.Phase && e.Event == row.Event }) {
+			out = append(out, row)
+		}
+	}
+	return out
+}

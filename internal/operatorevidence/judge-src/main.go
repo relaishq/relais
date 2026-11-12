@@ -524,6 +524,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		r.Events = append(r.Events, part.Events...)
 	}
 	out := previewMediaSummary{Status: "inconclusive"}
+	var excludedBoundary []undecidedMetric
 	if r.Callers > 0 {
 		// Each phase verdict above judged every event, so loss or a failed window
 		// on an excluded kill still fails the pool. Drop each takeover whose only
@@ -583,6 +584,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 			back := pooledPreviewMedia(&again)
 			out.Excluded = back.Excluded
 			out.Excluded.CountedBackIn = back.Status
+			excludedBoundary = excludedBoundaryRows(back)
 		}
 	} else if relayCalls > 0 {
 		out.Status = "passed"
@@ -627,6 +629,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 			}
 		}
 	}
+	out.BoundaryMetrics = append(out.BoundaryMetrics, excludedBoundary...)
 	return out
 }
 func decodePool(data []byte) (input previewPoolInput, err error) {

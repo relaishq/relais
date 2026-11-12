@@ -47,6 +47,11 @@ func boundaryRun(t *testing.T, change func(*callharness.MoveReport)) previewMedi
 	input := rawPoolSample()
 	editSampleTakeover(t, &input, change)
 	qualifiedPool(&input, nil)
+	return judgeRawAndSanitized(t, input)
+}
+
+func judgeRawAndSanitized(t *testing.T, input previewPoolInput) previewMediaSummary {
+	t.Helper()
 	raw, _ := json.Marshal(input)
 	var pool operatorevidence.Pool
 	if err := json.Unmarshal(raw, &pool); err != nil {
@@ -259,5 +264,37 @@ func TestBoundaryRowsOncePerEventAndMetric(t *testing.T) {
 	want := []undecidedMetric{{0, 0, "first_content", boundaryRowCauses}, {0, 0, "first_new_content", boundaryRowCauses}}
 	if rows := boundaryRows(r); !reflect.DeepEqual(rows, want) {
 		t.Fatalf("MUTATION: boundary-row-per-call: %+v", rows)
+	}
+}
+
+// An excluded takeover is settled only in the counted-back-in judgment. Its
+// passing row keeps the boundary label, at its own phase and event.
+func TestExcludedBoundaryTakeoverKeepsItsLabel(t *testing.T) {
+	input := replacementPoolSample()
+	editExcludedMove(t, &input, [2]int{1, 5}, func(m *callharness.MoveReport) { boundaryMove(m) })
+	qualifiedPool(&input, map[[2]int][]string{{1, 5}: {"clock-coverage-kill-excluded"}})
+	got := judgeRawAndSanitized(t, input)
+	e := got.Excluded
+	if got.Status != "passed" || got.ExcludedKills != 1 || e == nil || e.CountedBackIn != "passed" || len(e.Takeovers) != 1 || e.Takeovers[0].Calls[0].WindowOutcome != "pass" {
+		t.Fatalf("excluded boundary takeover: %+v %+v", got, e)
+	}
+	want := []undecidedMetric{{1, 5, "first_content", boundaryRowCauses}, {1, 5, "first_new_content", boundaryRowCauses}}
+	if !reflect.DeepEqual(got.BoundaryMetrics, want) {
+		t.Fatalf("MUTATION: excluded-boundary-label-dropped: %+v", got.BoundaryMetrics)
+	}
+	raw, _ := json.Marshal(got)
+	decoded, err := operatorevidence.DecodeSummary(raw)
+	again, _ := json.Marshal(decoded)
+	if err != nil || !bytes.Equal(raw, again) {
+		t.Fatal("summary bytes", err, string(again))
+	}
+}
+
+// Only an excluded takeover's rows come from the counted-back-in judgment.
+func TestExcludedBoundaryRowsSkipPooledTakeovers(t *testing.T) {
+	back := previewMediaSummary{Excluded: &excludedPool{Takeovers: []excludedTakeover{{Phase: 1, Event: 5}}},
+		BoundaryMetrics: []undecidedMetric{{1, 5, "first_content", boundaryRowCauses}, {1, 6, "first_content", boundaryRowCauses}, {0, 5, "first_content", boundaryRowCauses}}}
+	if rows := excludedBoundaryRows(back); len(rows) != 1 || rows[0].Phase != 1 || rows[0].Event != 5 {
+		t.Fatalf("MUTATION: excluded-boundary-row-scope: %+v", rows)
 	}
 }

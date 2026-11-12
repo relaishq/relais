@@ -629,7 +629,10 @@
     "boundary-label-dropped",
     "boundary-label-not-decoded",
     "boundary-row-untrusted",
-    "boundary-row-per-call"
+    "boundary-row-per-call",
+    "excluded-boundary-label-dropped",
+    "excluded-boundary-row-phase",
+    "excluded-boundary-row-event"
   ],
   "killed": [
     {
@@ -5250,6 +5253,24 @@
     {
       "id": "boundary-row-per-call",
       "test": "TestBoundaryRowsOncePerEventAndMetric",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-boundary-label-dropped",
+      "test": "TestExcludedBoundaryTakeoverKeepsItsLabel",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-boundary-row-phase",
+      "test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-boundary-row-event",
+      "test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
       "package": "./internal/operatorevidence/judge-src",
       "evidence": "killed"
     }

@@ -6730,5 +6730,35 @@
     "Test": "TestBoundaryRowsOncePerEventAndMetric",
     "Marker": "MUTATION: boundary-row-per-call",
     "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-boundary-label-dropped",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "pooledPreviewMedia",
+    "Old": "excludedBoundary = excludedBoundaryRows(back)",
+    "New": "excludedBoundary = nil",
+    "Test": "TestExcludedBoundaryTakeoverKeepsItsLabel",
+    "Marker": "MUTATION: excluded-boundary-label-dropped",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-boundary-row-phase",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "excludedBoundaryRows",
+    "Old": "e.Phase == row.Phase && e.Event == row.Event",
+    "New": "e.Event == row.Event",
+    "Test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
+    "Marker": "MUTATION: excluded-boundary-row-scope",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-boundary-row-event",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "excludedBoundaryRows",
+    "Old": "e.Phase == row.Phase && e.Event == row.Event",
+    "New": "e.Phase == row.Phase",
+    "Test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
+    "Marker": "MUTATION: excluded-boundary-row-scope",
+    "Package": "./internal/operatorevidence/judge-src"
   }
 ]

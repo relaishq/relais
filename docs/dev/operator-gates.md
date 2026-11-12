@@ -1342,6 +1342,9 @@ now reads that record before the product judge runs:
 - The label stays in the report. The summary (and the gate's media status)
   lists each such verdict in `boundaryMetrics`, with its phase, event, metric
   and those cause codes. The member is absent when there is none.
+- An excluded takeover (wide kill bracket) is settled only in the
+  counted-back-in judgment. Its rows are copied from that judgment with its
+  own phase and event, so a passing excluded row keeps its label.
 
 The judge cannot tell which comparison changed the label. The pinned release
 records no label for each kill time, so every label-only difference passes,
