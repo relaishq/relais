@@ -40,7 +40,7 @@ func TestFinalDrainQualificationAndSafety(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEqual(t, operator.Passed, before.Status)
 			var coverage *clocks.CoverageEvidence
-			var read ClockCoverageReader = func(context.Context, string, string) (string, error) {
+			var read ClockCoverageReader = func(context.Context, operator.HostLeaseReadInput) (string, error) {
 				if mode == "read-error" {
 					return "", fmt.Errorf("unavailable")
 				}
@@ -119,7 +119,7 @@ func TestPrejudgeDrainDeadline(t *testing.T) {
 		parent, done := context.WithTimeout(context.Background(), time.Minute)
 		parentEnd, _ := parent.Deadline()
 		out := s.RunSequence(parent, SequencePorts{Finalize: func(ctx context.Context, end time.Duration) (*MediaSummary, error) {
-			summary, _, err := s.finalizePool(ctx, end, pool, clocks.FixedCoverageBounds(), func(ctx context.Context, _ string, _ string) (string, error) {
+			summary, _, err := s.finalizePool(ctx, end, pool, clocks.FixedCoverageBounds(), func(ctx context.Context, _ operator.HostLeaseReadInput) (string, error) {
 				deadline, _ := ctx.Deadline()
 				require.False(t, deadline.After(parentEnd))
 				return packedCoverageSample(t, 1793930021, true), nil
@@ -157,7 +157,7 @@ func TestPrejudgeDrainReservesJudge(t *testing.T) {
 					return true
 				},
 				Finalize: func(ctx context.Context, end time.Duration) (*MediaSummary, error) {
-					m, _, err := s.finalizePool(ctx, end, pool, clocks.FixedCoverageBounds(), func(context.Context, string, string) (string, error) {
+					m, _, err := s.finalizePool(ctx, end, pool, clocks.FixedCoverageBounds(), func(context.Context, operator.HostLeaseReadInput) (string, error) {
 						reads++
 						return packedCoverageSample(t, 1793930021, true), nil
 					}, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })

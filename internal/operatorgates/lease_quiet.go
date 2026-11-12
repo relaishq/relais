@@ -117,7 +117,7 @@ func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, t
 		if err = g.pause(ctx, min(100*time.Millisecond, until-now)); err != nil {
 			return err
 		}
-		if until-g.clock.Elapsed() < leaseReadAttempt {
+		if until-g.clock.Elapsed() < g.session.timing.leaseAttempt() {
 			return fault("clock-lease-expired")
 		}
 		wait, cancel := context.WithTimeout(ctx, until-g.clock.Elapsed())

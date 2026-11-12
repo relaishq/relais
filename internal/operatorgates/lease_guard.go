@@ -187,7 +187,7 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 		if g.clock.Elapsed() >= until {
 			break
 		}
-		if until-g.clock.Elapsed() < leaseReadAttempt {
+		if until-g.clock.Elapsed() < g.session.timing.leaseAttempt() {
 			return fault("clock-lease-expired")
 		}
 		wait, done := context.WithTimeout(ctx, until-g.clock.Elapsed())
@@ -242,10 +242,11 @@ func isLeaseRefusal(err error) bool {
 }
 
 func (g *LeaseGuard) readAttempt(ctx context.Context, end time.Duration) (LeaseRead, error) {
-	if end-g.clock.Elapsed() < leaseReadAttempt {
+	attempt := g.session.timing.leaseAttempt()
+	if end-g.clock.Elapsed() < attempt {
 		return LeaseRead{}, fault("clock-lease-expired")
 	}
-	bounded, cancel := context.WithTimeout(ctx, leaseReadAttempt)
+	bounded, cancel := context.WithTimeout(ctx, attempt)
 	defer cancel()
 	g.mu.Lock()
 	g.reading = true

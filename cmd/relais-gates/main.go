@@ -145,6 +145,7 @@ func runWithAdapter(startAdapter func(context.Context, string, []string) (*opera
 		directory := flags.String("spool", "", "agreed local blob spool")
 		configuration := flags.String("config", "", "private resource configuration JSON")
 		evidence := flags.String("timing-evidence", "", "new local numeric evidence JSONL file (default stderr)")
+		coverage := flags.String("coverage-adapter", "", "absolute read-only adapter executable for the trailing clock coverage read")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 {
 			return 2
 		}
@@ -155,6 +156,11 @@ func runWithAdapter(startAdapter func(context.Context, string, []string) (*opera
 		var config operatorgates.ResourceConfig
 		if err != nil || observe.Decode(raw, &config, nil) != nil {
 			fmt.Fprintln(os.Stderr, "operator-config-unavailable")
+			return 2
+		}
+		// A timing budget that cannot fit is refused here, before the session starts.
+		if err := config.CheckClockTiming(); err != nil {
+			fmt.Fprintln(os.Stderr, "operator-config-refused:", err)
 			return 2
 		}
 		var root *os.Root
@@ -181,7 +187,19 @@ func runWithAdapter(startAdapter func(context.Context, string, []string) (*opera
 			timingOutput = file
 		}
 		timing := &operatorgates.TimingRecorder{Writer: timingOutput}
-		err = operatorgates.ServeSequence(ctx, operatortransport.NewPipe(os.Stdin, os.Stdout), hello, (operatorgates.ResourceRunner{Config: config, Timing: timing}).Run, root)
+		runner := operatorgates.ResourceRunner{Config: config, Timing: timing}
+		if *coverage != "" {
+			// The trailing coverage read has its own adapter process. Its failures
+			// leave the tail incomplete; they never reach the session's pipe or latch.
+			peer, e := startAdapter(ctx, *coverage, nil)
+			if e != nil {
+				fmt.Fprintln(os.Stderr, "operator-coverage-adapter-unavailable")
+				return 1
+			}
+			defer func() { cancel(); _ = peer.Close(); _ = peer.Wait() }()
+			runner.CoverageRead = operatorgates.NewCoverageReader(peer, root)
+		}
+		err = operatorgates.ServeSequence(ctx, operatortransport.NewPipe(os.Stdin, os.Stdout), hello, runner.Run, root)
 		return sessionExitCode(err, timing.Err(), os.Stderr)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command")

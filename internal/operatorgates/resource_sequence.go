@@ -35,6 +35,7 @@ type ResourceConfig struct {
 	CallerIDBase  uint64                   `json:"callerIdBase,omitempty"`
 	JudgeBinary   string                   `json:"judgeBinary"`
 	Admission     *AdmissionPlan           `json:"admission,omitempty"`
+	ClockTiming   ClockTiming              `json:"clockTiming,omitzero"`
 }
 type ResourceResult struct {
 	ClockCoverage *clocks.CoverageEvidence
@@ -129,7 +130,12 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	if pause == nil {
 		pause = resourcePause
 	}
-	setupErr := r.validate(s)
+	// The timing budget is settled before any host request, never during a fault.
+	budget, setupErr := r.Config.ClockTiming.budget(s.restoreReads())
+	if setupErr == nil {
+		s.timing = budget
+		setupErr = r.validate(s)
+	}
 	if setupErr == nil {
 		setupErr = s.BindClock(ctx, peer, r.Config, min(s.Budget.end, s.clock.Elapsed()+2*time.Minute))
 	}
