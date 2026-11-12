@@ -198,7 +198,7 @@ Outputs, all in `-output`:
 | Exit | Meaning |
 | --- | --- |
 | 0 | Admitted. Receipt and binding are written. |
-| 1 | Admission ran and refused. Stderr is one fixed cause; the status file records it. |
+| 1 | Admission ran and refused. Stderr is one fixed cause; the status file records a selection refusal, but not a binding refusal (see below). |
 | 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, or no output directory), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule, or its `windowSeconds` is not 120, the only window collection builds) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
 
 `clock-selection-status.json` describes selection only. A binding refusal
