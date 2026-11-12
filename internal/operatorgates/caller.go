@@ -90,7 +90,7 @@ func (s *Session) finalizePool(ctx context.Context, end time.Duration, pool *Evi
 }
 func procedureMedia(s operatorevidence.Summary) *MediaSummary {
 	return &MediaSummary{IncludedPhases: s.IncludedPhases, DroppedPhases: s.DroppedPhases,
-		ExcludedEvents: s.ExcludedEvents, ExcludedKills: s.ExcludedKills, Excluded: s.Excluded, SaturationOverlaps: s.SaturationOverlaps,
+		ExcludedEvents: s.ExcludedEvents, ExcludedKills: s.ExcludedKills, Excluded: s.Excluded, BoundaryMetrics: s.BoundaryMetrics, SaturationOverlaps: s.SaturationOverlaps,
 		UndecidedMetrics: s.UndecidedMetrics, PhaseDiagnostics: s.PhaseDiagnostics, Status: s.Status, QualifiedMoves: &s.QualifiedMoves, QualifiedTakeovers: &s.QualifiedTakeovers,
 		ExpectedCalls: s.ExpectedCalls, CompletedCalls: s.CompletedCalls, EventCount: s.EventCount, MetricCount: s.MetricCount,
 		FailedMetrics: s.FailedMetrics, InconclusiveMetrics: s.InconclusiveMetrics, MaxMediaGapNS: s.MaxMediaGapNS,

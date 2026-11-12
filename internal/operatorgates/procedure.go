@@ -61,6 +61,7 @@ type MediaSummary struct {
 	ExcludedEvents      int                                `json:"excludedEvents"`
 	ExcludedKills       int                                `json:"excludedKills"`
 	Excluded            *operatorevidence.ExcludedPool     `json:"excluded,omitempty"`
+	BoundaryMetrics     []operatorevidence.UndecidedMetric `json:"boundaryMetrics,omitempty"`
 	SaturationOverlaps  int                                `json:"saturationOverlaps"`
 	UndecidedMetrics    []operatorevidence.UndecidedMetric `json:"undecidedMetrics"`
 	PhaseDiagnostics    []operatorevidence.PhaseDiagnostic `json:"phaseDiagnostics"`

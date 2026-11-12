@@ -615,7 +615,24 @@
     "excluded-takeover-kill-timed-resume",
     "excluded-takeover-row-count",
     "excluded-bracket-unchecked-drops-exclusion",
-    "release-replacement-not-deferred"
+    "release-replacement-not-deferred",
+    "boundary-takeover-not-settled",
+    "boundary-window-stays-undecided",
+    "boundary-window-cause-raw-text",
+    "boundary-first-reason-unchecked",
+    "boundary-reason-count-unchecked",
+    "boundary-second-reason-unchecked",
+    "boundary-other-verdict-ignored",
+    "boundary-window-cause-ignored",
+    "boundary-window-failure-cleared",
+    "boundary-rule-on-moves",
+    "boundary-label-dropped",
+    "boundary-label-not-decoded",
+    "boundary-row-untrusted",
+    "boundary-row-per-call",
+    "excluded-boundary-label-dropped",
+    "excluded-boundary-row-phase",
+    "excluded-boundary-row-event"
   ],
   "killed": [
     {
@@ -5153,6 +5170,108 @@
       "id": "release-replacement-not-deferred",
       "test": "TestReleaseReplacementWaitsForRollback/short",
       "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-takeover-not-settled",
+      "test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-window-stays-undecided",
+      "test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-window-cause-raw-text",
+      "test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-first-reason-unchecked",
+      "test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/evaluation-budget",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-reason-count-unchecked",
+      "test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/reason-after-duration",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-second-reason-unchecked",
+      "test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/reason-after-interval",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-other-verdict-ignored",
+      "test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/first-live",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-window-cause-ignored",
+      "test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/window-cause",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-window-failure-cleared",
+      "test": "TestBoundaryTakeoverKeepsFailure",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-rule-on-moves",
+      "test": "TestNoBoundaryTakeoverKeepsSummaryBytes",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-label-dropped",
+      "test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-label-not-decoded",
+      "test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-row-untrusted",
+      "test": "TestBoundaryRowsOncePerEventAndMetric",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-row-per-call",
+      "test": "TestBoundaryRowsOncePerEventAndMetric",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-boundary-label-dropped",
+      "test": "TestExcludedBoundaryTakeoverKeepsItsLabel",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-boundary-row-phase",
+      "test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-boundary-row-event",
+      "test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
+      "package": "./internal/operatorevidence/judge-src",
       "evidence": "killed"
     }
   ],
