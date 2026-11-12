@@ -135,14 +135,6 @@ func pollRows(after, now time.Time, poll time.Duration) []clocks.TrackingRow {
 	return rows
 }
 
-func packedTracking(t *testing.T, rows []clocks.TrackingRow) string {
-	t.Helper()
-	reply := hostReply(t, oracleJSON(clocks.Sample{MeasuredUnixNS: "1793930000000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: rows}}))
-	var out operator.HostOutput
-	require.NoError(t, json.Unmarshal(reply.Payload, &out))
-	return out.Stdout
-}
-
 // slowWorld makes every host action take four seconds and every host clock
 // update once per eight seconds, on the round-trip world's real procedures.
 func slowWorld(t *testing.T) (*roundTripWorld, ProcedurePorts, *[]time.Time) {
