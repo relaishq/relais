@@ -205,6 +205,31 @@ func TestControlStaleMoveIsDefiniteRefusal(t *testing.T) {
 	})
 }
 
+// #443 review: only the stale-move sentinel crosses the rollback error. A
+// route error that also carries uncertainty must not make the rolled-back
+// move uncertain, and stale_move is still reported.
+func TestControlRollbackStaleMoveIsolatesRouteError(t *testing.T) {
+	p, a, b, fake := setup(t)
+	routes := &epochRelay{fakeRelay: fake, refuse: func(call epochCall) error {
+		if call.to == a.addr {
+			return errors.Join(staleRefusal(), privateapi.Uncertain(errors.New("reply lost")))
+		}
+		return nil
+	}}
+	p.relay = routes
+	id, _, err := p.Create(context.Background(), "offer", "a")
+	require.NoError(t, err)
+	b.resumeError = true
+	res, err := p.Move(context.Background(), id, "b")
+	require.True(t, res.Result.RolledBack)
+	require.ErrorIs(t, err, relay.ErrStaleMove)
+	require.False(t, errors.Is(err, privateapi.ErrUncertain))
+	codes := privateapi.ErrorCodes(err, RemoteErrors)
+	require.Contains(t, codes, "stale_move")
+	require.NotContains(t, codes, "uncertain")
+	require.True(t, a.runs(id))
+}
+
 // #443: RemoteRelay maps the relay's 409 stale-move code to the typed error
 // on both move routes; move-after-export does not fall back to /move.
 func TestRemoteRelayStaleMoveIsTyped(t *testing.T) {

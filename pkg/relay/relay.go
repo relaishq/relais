@@ -236,8 +236,8 @@ type Config struct {
 	// LoggerFactory defaults to Pion's default logger factory.
 	LoggerFactory logging.LoggerFactory
 
-	// beforeExportDrain, when set, runs as MoveSessionAfterExport starts,
-	// before any lock. Tests use it to interleave a racing move.
+	// beforeExportDrain, when set, runs just before the export drain takes
+	// forwardMu. Tests use it to interleave a racing move.
 	beforeExportDrain func(sessionID string)
 
 	// beforeApply, when set, runs after a session's owner has been read and
@@ -648,9 +648,6 @@ func (r *Relay) invalidateCleanup(id string) {
 // Without such a hold it is MoveSessionAtEpoch. A stale epoch is refused
 // under forwardMu, which every move holds, before the drain touches a hold.
 func (r *Relay) MoveSessionAfterExport(sessionID string, from, to netip.AddrPort, epoch uint64) error {
-	if r.cfg.beforeExportDrain != nil {
-		r.cfg.beforeExportDrain(sessionID)
-	}
 	if err := r.drainExportedOutput(sessionID, unmap(from), unmap(to), epoch); err != nil {
 		return err
 	}
@@ -663,6 +660,9 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort, epoch ui
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil
+	}
+	if r.cfg.beforeExportDrain != nil {
+		r.cfg.beforeExportDrain(id)
 	}
 	r.forwardMu.Lock()
 	if r.flows.staleMove(id, epoch) {

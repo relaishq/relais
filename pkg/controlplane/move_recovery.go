@@ -442,9 +442,9 @@ func (m *moveRecovery) rollback(move *moveTransfer, result *mediaworker.Handover
 
 	result.RolledBack = true
 	if errors.Is(routeErr, relay.ErrStaleMove) {
-		// A definite refusal keeps its code; other route errors stay text so
-		// uncertain or transient route replies never reclassify the rollback.
-		return fmt.Errorf("controlplane: rolled back on source; relay restore failed (%w): %w", routeErr, cause)
+		// Only the stale-move sentinel is wrapped; the route error stays text,
+		// so nothing joined to it (uncertainty) can reclassify the rollback.
+		return fmt.Errorf("controlplane: rolled back on source; relay restore failed (%v): %w: %w", routeErr, relay.ErrStaleMove, cause)
 	}
 	if routeErr != nil {
 		return fmt.Errorf("controlplane: rolled back on source; relay restore failed (%v): %w", routeErr, cause)
