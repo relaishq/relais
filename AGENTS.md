@@ -2,7 +2,7 @@
 
 This file provides guidance to coding agents when working with code in this repository.
 
-Before handing over a change, run `make check`. See [CODING_STANDARDS.md](CODING_STANDARDS.md) for the review checklist.
+Before handing over a change, run `make check-quality` and the tests of the packages you changed. CI on the exact revision (the PR head, or the batch head when PRs merge in a batch) is the final validation; run the full `make check` locally only when CI cannot run it. See [CODING_STANDARDS.md](CODING_STANDARDS.md) for the review checklist.
 
 ## Build Commands
 
