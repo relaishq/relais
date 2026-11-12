@@ -650,6 +650,101 @@ func TestFailedProposalCleanupIsRetried(t *testing.T) {
 	require.Equal(t, next.proposal().Token, records[0].Token)
 }
 
+// beginGate holds an episode's begin until release closes; passed closes once
+// that write returned. With holdRead, the first record read made while begin
+// is held releases it and returns only once the episode armed.
+type beginGate struct {
+	*sessionstore.Memory
+	on, holdRead                 atomic.Bool
+	held, release, passed, armed chan struct{}
+	holdOnce, releaseOnce        sync.Once
+}
+
+func (s *beginGate) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	if s.on.Load() && to.Episode.Open() && !from.Episode.Open() {
+		held := false
+		s.holdOnce.Do(func() { close(s.held); held = true })
+		if held {
+			<-s.release
+			defer close(s.passed)
+		}
+	}
+	return s.Memory.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+}
+
+func (s *beginGate) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	a, rec, err := s.Memory.RelayConfirmation(ctx, id)
+	select {
+	case <-s.held:
+		if s.holdRead.Load() {
+			s.releaseOnce.Do(func() {
+				close(s.release)
+				<-s.armed
+			})
+		}
+	default:
+	}
+	return a, rec, err
+}
+
+// completionRace sets up R2 review of #436: a planned change's settlement
+// confirms with no episode open (seq advances), then its recovery episode is
+// proposed and its watcher's begin is held by the gate.
+func completionRace(t *testing.T, holdRead bool) (*beginGate, *Plane, *call, *relayEpisode) {
+	t.Helper()
+	store := &beginGate{Memory: sessionstore.NewMemory(), held: make(chan struct{}), release: make(chan struct{}), passed: make(chan struct{}), armed: make(chan struct{})}
+	store.holdRead.Store(holdRead)
+	p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+	stopRelayRecoveries(t, p)
+	c, err := p.lookup(id)
+	require.NoError(t, err)
+	var armOnce sync.Once
+	hook := func(from *call, name string) {
+		if from == c && name == "armed" {
+			armOnce.Do(func() { close(store.armed) })
+		}
+	}
+	relayWatchHooks.Store(&hook)
+	t.Cleanup(func() { relayWatchHooks.Store(nil) })
+	now := time.Now()
+	lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
+		Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+	committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
+	require.NoError(t, store.CommitRelay(context.Background(), lease, pending, committed))
+	_, rec, err := store.RelayConfirmation(context.Background(), id)
+	require.NoError(t, err)
+	require.NoError(t, p.confirmRelaySuccess(context.Background(), id, committed, rec))
+	store.on.Store(true)
+	e, err := p.relayRecoveryEpisode(context.Background(), c, now)
+	require.NoError(t, err)
+	<-store.held
+	return store, p, c, e
+}
+
+// Completion reads the record before the episode begins; the episode then
+// begins and arms before completion acts. Completion must not close an open
+// episode: its watcher keeps it.
+func TestCompletionNeverClosesEpisodeThatBeganMeanwhile(t *testing.T) {
+	store, p, c, e := completionRace(t, true)
+	err := p.completeRelayEpisode(context.Background(), c, e)
+	require.ErrorIs(t, err, ErrMoveInProgress)
+	require.True(t, episodeOf(t, store, c.id).Open())
+	require.False(t, e.completed.Load(), "an open episode keeps its watcher")
+}
+
+// Completion that acts before the episode begins fences its proposal: the
+// begin is refused, and no episode opens after the confirmed change.
+func TestCompletionFencesUnbegunProposal(t *testing.T) {
+	store, p, c, e := completionRace(t, false)
+	require.NoError(t, p.completeRelayEpisode(context.Background(), c, e))
+	close(store.release)
+	<-store.passed
+	require.False(t, episodeOf(t, store, c.id).Open(), "the fenced proposal never begins")
+	records, err := store.ControlIntents(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, records)
+}
+
 // seqFault fails confirmation-record reads while fail is set.
 type seqFault struct {
 	*sessionstore.Memory

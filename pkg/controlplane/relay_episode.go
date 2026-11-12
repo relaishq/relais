@@ -680,17 +680,46 @@ func (p *Plane) completeRelayEpisode(ctx context.Context, c *call, e *relayEpiso
 		p.cleanupRelayEpisode(ctx, c, e)
 		return nil
 	}
-	_, rec, err := store.RelayConfirmation(ctx, c.id)
-	if err == nil && rec.Episode != nil && rec.Episode.Token == e.proposal().Token {
-		switch rec.Episode.Outcome {
-		case sessionstore.RelayEpisodeEnded:
-			return errRelayEpisodeEnded
-		case sessionstore.RelayEpisodeOpen:
-			return ErrMoveInProgress
+	for {
+		a, rec, err := store.RelayConfirmation(ctx, c.id)
+		if errors.Is(err, sessionstore.ErrNotFound) {
+			break
 		}
-	}
-	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
-		return err
+		if err != nil {
+			return err
+		}
+		ep, proposal := rec.Episode, e.proposal()
+		if ep != nil && ep.Token == proposal.Token {
+			switch ep.Outcome {
+			case sessionstore.RelayEpisodeEnded:
+				return errRelayEpisodeEnded
+			case sessionstore.RelayEpisodeOpen:
+				return ErrMoveInProgress
+			}
+			break
+		}
+		// A proposal that can still begin is fenced before its cleanup: an
+		// episode that began after the read above would be closed while open.
+		var seq uint64
+		if ep != nil {
+			seq = ep.Seq
+		}
+		if ep.Open() || ep != nil && ep.Outcome == sessionstore.RelayEpisodeEnded || proposal.Seq != seq+1 {
+			break
+		}
+		fenced := sessionstore.RelayEpisode{}
+		if ep != nil {
+			fenced = *ep
+		}
+		fenced.Seq++
+		next := rec
+		next.Episode = &fenced
+		if err = p.decisionCAS(ctx, c.id, a, rec, next, time.Time{}, time.Time{}); err == nil {
+			break
+		}
+		if !errors.Is(err, sessionstore.ErrRelayConflict) {
+			return err
+		}
 	}
 	p.cleanupRelayEpisode(ctx, c, e)
 	return nil
