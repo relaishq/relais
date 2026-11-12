@@ -367,10 +367,15 @@
     "clock-admission-forget-observations",
     "clock-admission-clear-falsified",
     "clock-admission-no-seed-margin",
-    "clock-admission-setup-ignores-latency",
+    "clock-admission-setup-ignores-commands",
+    "clock-admission-window-ignores-poll",
+    "clock-admission-window-one-trailing-read",
+    "clock-admission-window-no-allowance",
+    "clock-admission-over-cap-accepted",
     "clock-admission-setup-fixed",
-    "clock-admission-setup-latency-dropped",
-    "clock-admission-latency-fit-no-reads",
+    "clock-admission-window-fixed",
+    "clock-admission-latency-dropped",
+    "clock-admission-poll-dropped",
     "clock-select-ignore-post-window-leap",
     "clock-select-ignore-post-window-reference",
     "clock-select-ignore-expired-lease",
@@ -3494,29 +3499,64 @@
       "guardFingerprint": ""
     },
     {
-      "id": "clock-admission-setup-ignores-latency",
-      "test": "TestClockAdmissionSetupBudget/derived",
+      "id": "clock-admission-setup-ignores-commands",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-window-ignores-poll",
+      "test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-window-one-trailing-read",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-window-no-allowance",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-over-cap-accepted",
+      "test": "TestClockAdmissionTiming",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
     },
     {
       "id": "clock-admission-setup-fixed",
-      "test": "TestClockAdmissionSetupBudget/derived",
+      "test": "TestClockAdmissionDerivedWindow/L=4s,P=8/phase=0",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
     },
     {
-      "id": "clock-admission-setup-latency-dropped",
-      "test": "TestClockAdmissionSetupBudget/derived",
+      "id": "clock-admission-window-fixed",
+      "test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
     },
     {
-      "id": "clock-admission-latency-fit-no-reads",
-      "test": "TestClockAdmissionLatencyFit",
+      "id": "clock-admission-latency-dropped",
+      "test": "TestClockAdmissionDerivedWindow/L=4s,P=8/phase=0",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-poll-dropped",
+      "test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""

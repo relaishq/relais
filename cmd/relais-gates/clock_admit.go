@@ -61,11 +61,13 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 	policyFile := flags.String("policy", "", "launcher clock policy JSON file")
 	program := flags.String("host-command", "", "absolute host command executable")
 	output := flags.String("output", "", "existing directory for admission artifacts")
-	// A flag, not a plan or policy field: the plan's scenario digest and the
-	// receipt's policy stay what they were, and no value keeps the fixed budget.
-	latencyMS := flags.Int64("host-read-latency-ms", 0, "p99 latency of one host command in ms; 0 keeps the fixed setup budget")
+	// Flags, not plan or policy fields: the plan's scenario digest and the
+	// receipt's policy stay what they were. Without them admission keeps its
+	// fixed 10 s helper setup and 150 s window.
+	latencyMS := flags.Int64("host-read-latency-ms", 0, "p99 latency of one host command in ms (clockTiming.hostReadLatencyMs)")
+	pollSeconds := flags.Int64("poll-seconds", 0, "hosts' tracking-row period in seconds (clockTiming.pollSeconds); 0 is one second")
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *planFile == "" || *policyFile == "" || *output == "" || !filepath.IsAbs(*program) {
-		fmt.Fprintln(diagnostics, "usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR [-host-read-latency-ms MS]")
+		fmt.Fprintln(diagnostics, "usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR [-host-read-latency-ms MS] [-poll-seconds S]")
 		return 2
 	}
 	var plan clockAdmitPlan
@@ -76,7 +78,7 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 		return 2
 	}
 	until, err := strconv.ParseInt(plan.HelpersUntilUnixMS, 10, 64)
-	valid := err == nil && *latencyMS >= 0 && *latencyMS <= 150000 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(inventory.Slots, plan.FrontendSlot) && slices.Contains(inventory.Slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(inventory.Slots)
+	valid := err == nil && *latencyMS >= 0 && *latencyMS <= 150000 && *pollSeconds >= 0 && *pollSeconds <= 300 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(inventory.Slots, plan.FrontendSlot) && slices.Contains(inventory.Slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(inventory.Slots)
 	for _, slot := range inventory.Slots {
 		address, err := netip.ParseAddr(plan.Addresses[slot])
 		valid = valid && err == nil && address.Is4()
@@ -95,8 +97,8 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
-	latency := time.Duration(*latencyMS) * time.Millisecond
-	if err := operatorrehearsal.CheckClockAdmissionLatency(latency); err != nil {
+	latency, poll := time.Duration(*latencyMS)*time.Millisecond, time.Duration(*pollSeconds)*time.Second
+	if err := operatorrehearsal.CheckClockAdmissionTiming(latency, poll); err != nil {
 		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
@@ -105,7 +107,7 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 	status := operatorrehearsal.AdmitClock(ctx, operatorrehearsal.ClockAdmission{
 		RunID: plan.RunID, FrontendSlot: plan.FrontendSlot, ControlSlot: plan.ControlSlot, CallerLeapMode: plan.CallerLeapMode,
 		Policy: policy, Addresses: plan.Addresses, HelpersUntil: time.UnixMilli(until), Output: *output,
-		Host: clockAdmitHost(*program), HostReadLatency: latency, Now: clock.now, Pause: clock.pause,
+		Host: clockAdmitHost(*program), HostReadLatency: latency, PollPeriod: poll, Now: clock.now, Pause: clock.pause,
 	})
 	if status.Cause != "" {
 		fmt.Fprintln(diagnostics, status.Cause)

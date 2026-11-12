@@ -33,12 +33,15 @@ type ClockAdmission struct {
 	HelpersUntil time.Time
 	Output       string
 	Host         ClockHostCommand
-	// HostReadLatency is the p99 latency of one host command, the L of
-	// clockTiming.hostReadLatencyMs. Zero keeps the fixed setup budget.
-	HostReadLatency time.Duration
-	// Now and Pause are the admission clock; nil selects the real clock.
-	Now   func() time.Time
-	Pause func(context.Context, time.Duration) error
+	// HostReadLatency is the p99 latency of one host command (L, as in
+	// clockTiming.hostReadLatencyMs). PollPeriod is the hosts' tracking-row
+	// period (P, as in clockTiming.pollSeconds); zero is one second. Both size
+	// helper setup and the admission window; both zero keep 10 s and 150 s.
+	HostReadLatency, PollPeriod time.Duration
+	// Now, Pause and Timeout are the admission clock; nil selects the real clock.
+	Now     func() time.Time
+	Pause   func(context.Context, time.Duration) error
+	Timeout func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 }
 
 // ClockAdmissionBinding is what Init needs after an admitted selection.
@@ -50,24 +53,42 @@ type ClockAdmissionBinding struct {
 // Collection always freezes this trailing window, so no other policy window can be admitted.
 const clockAdmissionWindowSeconds = 120
 
-// Helper setup gets at least the original fixed budget, and a margin for
-// the frontend helper to start probing after its command returns.
+// Helper setup and the admission window never drop below the fixed values
+// the rehearsal has always used.
 const clockSetupMinimum = 10 * time.Second
-const clockSetupMargin = 2 * time.Second
+const clockAdmissionMinimum = 150 * time.Second
 
-// clockSetupBudget covers the helper commands, which run one after another:
-// each slot writes its helper, then starts it.
-func clockSetupBudget(latency time.Duration) time.Duration {
-	return max(clockSetupMinimum, 2*time.Duration(len(Slots))*latency+clockSetupMargin)
+// No derived admission may exceed this: twice the fixed window. A session's
+// timing budget accepts only L ≤ P and 2P + 4L ≤ 60 s, whose largest window
+// is 234 s (L = P = 10 s), so every timing a session accepts fits.
+const clockAdmissionMaximum = 300 * time.Second
+
+// The selector accepts a first probe up to 2 s after the window start.
+const clockProbeAllowance = 2 * time.Second
+
+// Each admitting attempt is one parallel read, then this pause.
+const clockRetryPause = 2 * time.Second
+
+// clockAdmissionTiming derives helper setup and the admission window from
+// the host command latency L and the tracking-row period P.
+func clockAdmissionTiming(latency, poll time.Duration) (setup, window time.Duration) {
+	poll = max(poll, time.Second)
+	// Eight commands run one after another: each slot writes its helper, then
+	// starts it. Two seconds let the frontend helper send its first probes.
+	setup = max(clockSetupMinimum, 2*time.Duration(len(Slots))*latency+2*time.Second)
+	// Probes start after setup, so the window may start no earlier than
+	// setup minus the allowance. It ends one second before a tracking row,
+	// which can come up to P later. An attempt that just misses that row is
+	// followed by the retry pause and one more read; one second is left for
+	// selection.
+	needed := setup - clockProbeAllowance + clockAdmissionWindowSeconds*time.Second + time.Second + poll + latency + clockRetryPause + latency + time.Second
+	return setup, max(clockAdmissionMinimum, needed)
 }
 
-// CheckClockAdmissionLatency refuses a host latency whose helper setup leaves
-// no room in the 150 s admission. Probes start only after setup, so the 120 s
-// window, the second the trailing row lags, the 2 s retry pause and two
-// trailing reads (an attempt that just misses the row and the one that reads
-// it) all follow the setup budget. Zero is the fixed budget and always fits.
-func CheckClockAdmissionLatency(latency time.Duration) error {
-	if clockSetupBudget(latency)+(clockAdmissionWindowSeconds+3)*time.Second+2*latency > 150*time.Second {
+// CheckClockAdmissionTiming refuses a latency and poll period whose derived
+// admission window exceeds the maximum.
+func CheckClockAdmissionTiming(latency, poll time.Duration) error {
+	if _, window := clockAdmissionTiming(latency, poll); window > clockAdmissionMaximum {
 		return errors.New("clock-admit-budget")
 	}
 	return nil
@@ -99,8 +120,11 @@ func (a ClockAdmission) ports() clockAdmissionPorts {
 	if a.Now == nil {
 		a.Now, a.Pause = time.Now, pause
 	}
+	if a.Timeout == nil {
+		a.Timeout = context.WithTimeout
+	}
 	return clockAdmissionPorts{
-		policy: a.Policy, leapMode: a.CallerLeapMode, selectBounds: a.selectBounds, pause: a.Pause, now: a.Now, latency: a.HostReadLatency,
+		policy: a.Policy, leapMode: a.CallerLeapMode, selectBounds: a.selectBounds, pause: a.Pause, now: a.Now, timeout: a.Timeout, latency: a.HostReadLatency, poll: a.PollPeriod,
 		read: func(ctx context.Context, slot, script string) (string, error) {
 			return a.Host(ctx, slot, false, []byte(script), "sh", "-eu")
 		},

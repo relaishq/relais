@@ -172,10 +172,10 @@ func TestClockAdmitWritesReceiptAndBinding(t *testing.T) {
 	require.NotContains(t, string(evidenceRaw), "192.0.2.")
 }
 
-// The largest latency that fits (2.5 s) is accepted and admission runs to a binding.
-func TestClockAdmitAcceptsFittingLatency(t *testing.T) {
+// A slow transport's timing (L = 4 s, P = 8 s) is accepted and admission runs to a binding.
+func TestClockAdmitAcceptsSlowTiming(t *testing.T) {
 	f := newClockAdmitFixture(t)
-	f.args = append(f.args, "-host-read-latency-ms", "2500")
+	f.args = append(f.args, "-host-read-latency-ms", "4000", "-poll-seconds", "8")
 	code, cause := f.run(t)
 	require.Equal(t, 0, code, cause)
 	require.FileExists(t, filepath.Join(f.output, "clock-binding.json"))
@@ -246,9 +246,13 @@ func TestClockAdmitRefusesBeforeHostCommands(t *testing.T) {
 		"policy-growth":    {"clock-select-policy", func(f *clockAdmitFixture) { f.policy.MaxDispersionGrowthPPM = "fast" }},
 		"latency-negative": {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-host-read-latency-ms", "-1") }},
 		"latency-huge":     {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-host-read-latency-ms", "9223372036854775807") }},
-		// 8 × 4 s of helper setup leaves the 120 s window no room in 150 s.
-		"latency-unfit":    {"clock-admit-budget", func(f *clockAdmitFixture) { f.args = append(f.args, "-host-read-latency-ms", "4000") }},
-		"relative-command": {"usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR [-host-read-latency-ms MS]", func(f *clockAdmitFixture) { f.args[5] = "host-command" }},
+		"poll-negative":    {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-poll-seconds", "-1") }},
+		"poll-huge":        {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-poll-seconds", "301") }},
+		// L = 16 s, P = 17 s derives a 301 s admission, above the 300 s maximum.
+		"timing-over-cap": {"clock-admit-budget", func(f *clockAdmitFixture) {
+			f.args = append(f.args, "-host-read-latency-ms", "16000", "-poll-seconds", "17")
+		}},
+		"relative-command": {"usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR [-host-read-latency-ms MS] [-poll-seconds S]", func(f *clockAdmitFixture) { f.args[5] = "host-command" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newClockAdmitFixture(t)
