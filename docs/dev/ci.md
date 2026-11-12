@@ -6,6 +6,11 @@ local Redis setup, see [Redis and tests](../../CONTRIBUTING.md#redis-and-tests).
 `make check` runs the PR `quality` and `unit-tests` jobs locally
 ([local PR checks](../../scripts/dev/README.md)).
 
+Final validation is CI on the exact revision that merges: the PR head, or the
+batch head when several PRs are tested and merged as one batch. Before handover,
+run `make check-quality` and the changed packages' tests locally; the full race
+suites count as final from that CI run.
+
 ## Pull requests
 
 PR CI runs lint (v2.14.0), build, vet, race tests for every package except
