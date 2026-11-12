@@ -367,6 +367,20 @@
     "clock-admission-forget-observations",
     "clock-admission-clear-falsified",
     "clock-admission-no-seed-margin",
+    "clock-admission-setup-ignores-commands",
+    "clock-admission-window-ignores-poll",
+    "clock-admission-window-one-trailing-read",
+    "clock-admission-window-no-allowance",
+    "clock-admission-over-cap-accepted",
+    "clock-admission-setup-fixed",
+    "clock-admission-window-fixed",
+    "clock-admission-latency-dropped",
+    "clock-admission-poll-dropped",
+    "clock-admission-seed-fixed",
+    "clock-admission-seed-one-read",
+    "clock-admission-seed-unused",
+    "clock-admission-cap-ignores-seed",
+    "clock-admission-sparse-poll-accepted",
     "clock-select-ignore-post-window-leap",
     "clock-select-ignore-post-window-reference",
     "clock-select-ignore-expired-lease",
@@ -3504,6 +3518,104 @@
     {
       "id": "clock-admission-no-seed-margin",
       "test": "TestClockSelectionAdmissionArtifacts",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-setup-ignores-commands",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-window-ignores-poll",
+      "test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-window-one-trailing-read",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-window-no-allowance",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-over-cap-accepted",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-setup-fixed",
+      "test": "TestClockAdmissionDerivedWindow/L=4s,P=8/phase=0",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-window-fixed",
+      "test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-latency-dropped",
+      "test": "TestClockAdmissionDerivedWindow/L=4s,P=8/phase=0",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-poll-dropped",
+      "test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-seed-fixed",
+      "test": "TestClockAdmissionDerivedWindow/L=9s,P=10/phase=0",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-seed-one-read",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-seed-unused",
+      "test": "TestClockAdmissionDerivedWindow/L=9s,P=10/phase=0",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-cap-ignores-seed",
+      "test": "TestClockAdmissionTiming",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-sparse-poll-accepted",
+      "test": "TestClockAdmissionTiming",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""

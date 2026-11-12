@@ -38,7 +38,7 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	return clockAdmissionPorts{policy: rehearsalClockPolicy(), leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
+	return clockAdmissionPorts{policy: rehearsalClockPolicy(), leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, timeout: context.WithTimeout, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -397,4 +397,231 @@ func TestClockSelectionAdmittedStatusBytes(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "clock-selection-status.json"))
 	require.NoError(t, err)
 	require.Equal(t, `{"cause":"","selectedBounds":{"frontendControlBoundNs":120000,"frontendWorkerBoundNs":170000,"driftPpm":100},"updates":{"w2":120},"receiptSha256":"aa","evidenceSha256":"bb"}`, string(got))
+}
+
+type virtualDeadlineKey struct{}
+
+// virtualClock is an admission clock whose timeouts fire when Pause or a fake
+// host command advances it past their deadline. Nothing waits in real time.
+type virtualClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	timers []virtualTimer
+}
+
+type virtualTimer struct {
+	at     time.Time
+	cancel context.CancelFunc
+}
+
+func (c *virtualClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+
+// advance moves time forward to at (never back) and fires due timeouts.
+func (c *virtualClock) advance(at time.Time) {
+	c.mu.Lock()
+	if at.After(c.now) {
+		c.now = at
+	}
+	var due []context.CancelFunc
+	kept := c.timers[:0]
+	for _, t := range c.timers {
+		if t.at.After(c.now) {
+			kept = append(kept, t)
+		} else {
+			due = append(due, t.cancel)
+		}
+	}
+	c.timers = kept
+	c.mu.Unlock()
+	for _, cancel := range due {
+		cancel()
+	}
+}
+
+func virtualDeadline(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(virtualDeadlineKey{}).(time.Time)
+	return at, ok
+}
+
+func (c *virtualClock) Timeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	at := c.Now().Add(d)
+	if outer, ok := virtualDeadline(parent); ok && outer.Before(at) {
+		at = outer
+	}
+	ctx, cancel := context.WithCancel(parent)
+	c.mu.Lock()
+	c.timers = append(c.timers, virtualTimer{at, cancel})
+	c.mu.Unlock()
+	c.advance(time.Time{})
+	return context.WithValue(ctx, virtualDeadlineKey{}, at), cancel
+}
+
+// spend runs a host action that takes d from start; at its context deadline
+// it is killed instead, as the real command would be.
+func (c *virtualClock) spend(ctx context.Context, start time.Time, d time.Duration) error {
+	if at, ok := virtualDeadline(ctx); ok && at.Before(start.Add(d)) {
+		c.advance(at)
+		return context.DeadlineExceeded
+	}
+	c.advance(start.Add(d))
+	return ctx.Err()
+}
+
+func (c *virtualClock) Pause(ctx context.Context, d time.Duration) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return c.spend(ctx, c.Now(), d)
+}
+
+// clockAdmissionRun is one admission against fake hosts. Every host command
+// takes cost of virtual time; the four parallel reads of an attempt
+// share one issue time, and the host samples its tracking log when the read
+// is issued. Tracking rows come every poll period at phase; the frontend
+// helper probes from the moment its start command returns.
+type clockAdmissionRun struct {
+	began, setupDone, end, admitted time.Time
+	result                          *ClockSelectionReport
+}
+
+func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase int64) clockAdmissionRun {
+	t.Helper()
+	clock := &virtualClock{now: time.Unix(1792886400, 0)}
+	dir := t.TempDir()
+	probes := int64(1 << 40)
+	var mu sync.Mutex
+	var batch *struct {
+		issued time.Time
+		ready  chan struct{}
+		n      int
+	}
+	interval := max(int64(poll/time.Second), 1)
+	a := ClockAdmission{RunID: "timing-test", FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, HelpersUntil: clock.Now().Add(time.Hour), Output: t.TempDir(), HostReadLatency: latency, PollPeriod: poll, Now: clock.Now, Pause: clock.Pause, Timeout: clock.Timeout}
+	a.Host = func(ctx context.Context, slot string, detach bool, input []byte, args ...string) (string, error) {
+		if args[0] != "sh" {
+			if err := clock.spend(ctx, clock.Now(), cost); err != nil {
+				return "", err
+			}
+			if detach && slot == a.FrontendSlot {
+				mu.Lock()
+				probes = (clock.Now().UnixNano() + 999999999) / 1e9
+				mu.Unlock()
+			}
+			return "", nil
+		}
+		mu.Lock()
+		if batch == nil {
+			batch = &struct {
+				issued time.Time
+				ready  chan struct{}
+				n      int
+			}{issued: clock.Now(), ready: make(chan struct{})}
+		}
+		b := batch
+		if b.n++; b.n == len(Slots) {
+			close(b.ready)
+			batch = nil
+		}
+		from := probes
+		mu.Unlock()
+		select {
+		case <-b.ready:
+		case <-time.After(10 * time.Second):
+			return "", errors.New("read batch incomplete")
+		}
+		cmd := exec.Command("python3", "-B", "../operatorgates/host/clock_admission_test.py", dir, slot, fmt.Sprint(b.issued.Unix()), "false", fmt.Sprint(interval), fmt.Sprint(phase), fmt.Sprint(from))
+		cmd.Stdin = bytes.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", err
+		}
+		return string(out), clock.spend(ctx, b.issued, cost)
+	}
+	var r clockAdmissionRun
+	p := a.ports()
+	start, selectBounds := p.start, p.selectBounds
+	p.start = func(ctx context.Context, end time.Time) error {
+		r.began, r.end = clock.Now(), end
+		err := start(ctx, end)
+		r.setupDone = clock.Now()
+		return err
+	}
+	p.selectBounds = func(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+		selection, cause := selectBounds(ctx, e, policy)
+		if cause == "" {
+			r.admitted = clock.Now()
+		}
+		return selection, cause
+	}
+	r.result = collectClockSelection(context.Background(), a.RunID, a.FrontendSlot, a.ControlSlot, p)
+	return r
+}
+
+// Admission at the configured timing: delayed reads, probes only after helper
+// setup and slow tracking rows, at every row phase. No flags keep 10 s and 150 s.
+func TestClockAdmissionDerivedWindow(t *testing.T) {
+	for name, c := range map[string]struct {
+		latency, poll time.Duration
+		setup, window time.Duration
+		phases        int64
+	}{
+		"reference":  {0, 0, 10 * time.Second, 150 * time.Second, 1},
+		"L=2.5s,P=8": {2500 * time.Millisecond, 8 * time.Second, 22 * time.Second, 157 * time.Second, 8},
+		"L=4s,P=8":   {4 * time.Second, 8 * time.Second, 34 * time.Second, 172 * time.Second, 8},
+		// The seed needs 2L + 5 s: a fixed 10 s ends before the first read and pause.
+		"L=9s,P=10": {9 * time.Second, 10 * time.Second, 74 * time.Second, 224 * time.Second, 10},
+		// The largest timing a session accepts that admission can select.
+		"L=10s,P=10": {10 * time.Second, 10 * time.Second, 82 * time.Second, 234 * time.Second, 10},
+	} {
+		for phase := range c.phases {
+			t.Run(fmt.Sprintf("%s/phase=%d", name, phase), func(t *testing.T) {
+				t.Parallel()
+				r := runClockAdmission(t, c.latency, c.poll, c.latency, phase)
+				if r.result.Cause != "" || r.result.Bounds == nil || r.end.Sub(r.began) != c.window || r.setupDone.Sub(r.began) > c.setup || r.admitted.After(r.end) {
+					t.Fatal("MUTATION: admission-derived-window", r.result.Cause, r.end.Sub(r.began), r.setupDone.Sub(r.began), r.admitted.Sub(r.began))
+				}
+				if c.latency == 0 && r.admitted.Sub(r.began) != 123*time.Second {
+					t.Fatal("MUTATION: admission-derived-window", "reference first attempt", r.admitted.Sub(r.began))
+				}
+			})
+		}
+	}
+}
+
+// Characterization: with no latency given, the fixed 10 s setup kills the
+// fourth 2.5 s helper command. The derived cases above complete setup.
+func TestClockAdmissionFixedSetupBudget(t *testing.T) {
+	r := runClockAdmission(t, 0, 0, 2500*time.Millisecond, 0)
+	if r.result.Cause != "clock-selection-helper" || r.setupDone.Sub(r.began) != 10*time.Second {
+		t.Fatal("MUTATION: admission-setup-budget", r.result.Cause, r.setupDone.Sub(r.began))
+	}
+}
+
+// The derivation table, and the up-front refusals: rows too sparse for the
+// selector's minimum updates, and a seed plus window above 300 s.
+func TestClockAdmissionTiming(t *testing.T) {
+	s := func(seconds float64) time.Duration { return time.Duration(seconds * float64(time.Second)) }
+	for _, c := range []struct {
+		latency, poll, seed, setup, window time.Duration
+		cause                              string
+	}{
+		{0, 0, s(10), s(10), s(150), ""},
+		{0, s(1), s(10), s(10), s(150), ""},
+		{s(2.5), s(8), s(10), s(22), s(157), ""},
+		{s(4), s(8), s(13), s(34), s(172), ""},
+		{s(9), s(10), s(23), s(74), s(224), ""},
+		{s(10), s(10), s(25), s(82), s(234), ""},
+		// Exactly 300 s, then 12 ms over.
+		{s(13.25), s(12), s(31.5), s(108), s(268.5), ""},
+		{s(13.251), s(12), s(31.502), s(108.008), s(268.51), "clock-admit-budget"},
+		// Twelve-second rows still give the selector ten updates in 120 s.
+		{s(1), s(13), s(10), s(10), s(150), "clock-admit-poll"},
+		{s(4), s(16), s(13), s(34), s(180), "clock-admit-poll"},
+	} {
+		seed, setup, window := clockAdmissionTiming(c.latency, c.poll)
+		err := CheckClockAdmissionTiming(c.latency, c.poll)
+		if seed != c.seed || setup != c.setup || window != c.window || c.cause == "" != (err == nil) || err != nil && err.Error() != c.cause {
+			t.Fatal("MUTATION: admission-timing", c.latency, c.poll, seed, setup, window, err)
+		}
+	}
 }
