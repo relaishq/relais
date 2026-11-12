@@ -25,6 +25,11 @@ type PhaseDiagnostic struct {
 	SaturationOverlaps int                   `json:"saturationOverlaps"`
 	Issue              observe.EvidenceIssue `json:"issue"`
 }
+
+// Summary is the judge's pooled result. BoundaryMetrics lists takeover verdicts
+// that pass for every kill time in the clock interval while their content
+// label differs (#446). The judge trusts them and keeps the label here. The
+// member is absent when there is none.
 type Summary struct {
 	CompleteMedia      bool              `json:"completeMedia"`
 	LostCalls          int               `json:"lostCalls"`
@@ -34,6 +39,7 @@ type Summary struct {
 	ExcludedEvents     int               `json:"excludedEvents"`
 	ExcludedKills      int               `json:"excludedKills"`
 	Excluded           *ExcludedPool     `json:"-"`
+	BoundaryMetrics    []UndecidedMetric `json:"-"`
 	SaturationOverlaps int               `json:"saturationOverlaps"`
 	DuplicatePackets   uint64            `json:"duplicatePackets"`
 	PhaseDiagnostics   []PhaseDiagnostic `json:"phaseDiagnostics"`
@@ -103,8 +109,9 @@ func (s Summary) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(struct {
 		wire
-		Excluded *ExcludedPool `json:"excluded,omitempty"`
-	}{wire(s), s.Excluded})
+		Excluded        *ExcludedPool     `json:"excluded,omitempty"`
+		BoundaryMetrics []UndecidedMetric `json:"boundaryMetrics,omitempty"`
+	}{wire(s), s.Excluded, s.BoundaryMetrics})
 }
 
 // DecodeSummary validates presence once; missing counters never become zeros.
@@ -132,6 +139,21 @@ func DecodeSummary(raw []byte) (Summary, error) {
 			return s, errors.New("invalid-media-summary")
 		}
 		s.Excluded = &excluded.Excluded
+	}
+	var optional struct {
+		BoundaryMetrics json.RawMessage `json:"boundaryMetrics"`
+	}
+	if json.Unmarshal(raw, &optional) == nil && optional.BoundaryMetrics != nil {
+		var boundary struct {
+			BoundaryMetrics []UndecidedMetric `json:"boundaryMetrics"`
+		}
+		if observe.DecodeEvidenceLimit(raw, &boundary, 256000) != nil || observe.Numbers(boundary) != nil {
+			if knownFailure {
+				return Summary{Status: operator.Failure}, nil
+			}
+			return s, errors.New("invalid-media-summary")
+		}
+		s.BoundaryMetrics = boundary.BoundaryMetrics
 	}
 	trialsComplete := s.EventCount > 0 && s.MetricCount > 0
 	if s.RelayCalls == s.CompletedCalls {

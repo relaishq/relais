@@ -1311,6 +1311,52 @@ excluded kill that leaves `trial-count-insufficient` still fails eligibility.
 Selected bounds can decide the former fixed-bound first-content near-tie. A wide
 bracket, expired lease or invalid binding can remove qualification or refuse a run.
 
+### Takeover label at the kill boundary
+
+Owner decision, 2026-11-11 (#446, option C): verdict invariance. A takeover's
+first decoded content gets a label, for example `cache` when the caller
+received that content before the kill. This comparison uses a caller time and
+the kill time, which comes from another clock. A frame in flight at the kill
+can land inside the kill-time interval. Then no clock bound decides the label.
+A narrow enough interval that does not contain the receipt still decides it,
+and the rule below does not apply.
+
+The pinned caller already evaluates every kill time in the clock interval
+(at most 4096 start, end and baseline combinations for each event). It reports
+`first_content` or `first_new_content` as undecided when the trust, the result
+or the label differs between them, even if every one passes. The judge overlay
+now reads that record before the product judge runs:
+
+- The rule applies to takeovers only, and to `first_content` and
+  `first_new_content` only. No other verdict carries a label.
+- A verdict passes when its only reasons are
+  `classification-varies-with-clock-interval` and, optionally,
+  `duration-bounds-uncertain`. The caller joins the reasons of every kill time
+  that fails or is untrusted, and a passing kill time has no reason. So these
+  reasons alone prove that every kill time passes and only the label differs.
+  Any other reason keeps the verdict undecided.
+- The takeover window passes again only when every content verdict is then
+  trusted and the window has no cause but those two. A failed window, a lost
+  call, a gap cause or an uncertain receipt stays as it is.
+- Clock coverage qualification runs afterwards and still removes trust.
+- The label stays in the report. The summary (and the gate's media status)
+  lists each such verdict in `boundaryMetrics`, with its phase, event, metric
+  and those cause codes. The member is absent when there is none.
+
+The judge cannot tell which comparison changed the label. The pinned release
+records no label for each kill time, so every label-only difference passes,
+not only `cache`. The judge evaluates nothing again: the cost is one pass over
+the moves. Option A (a caller-local boundary) is deferred, and option B (a
+one-sided guard band) is rejected.
+
+A pool with no such takeover keeps the same summary bytes
+(`TestNoExcludedTakeoverKeepsSummaryBytes`,
+`TestNoBoundaryTakeoverKeepsSummaryBytes`). Sanitized evidence gives the same
+result, because the rule reads the fixed reason codes. The reason shape that
+the rule depends on is fixed by `TestFrameInFlightAtKillLeavesOnlyIntervalReasons`
+and `TestFrameInFlightAtKillKeepsAFailingKillTimeReason` in `pkg/callharness`.
+The change alters the judge executable hash.
+
 Signal brackets optionally retain `signalDiagnostics`: helper CPU IDs before/after,
 thread involuntary/voluntary context-switch deltas, thread CPU time, and priority.
 `threadCPUTimeNs` comes from `ru_utime`/`ru_stime` at microsecond resolution.
