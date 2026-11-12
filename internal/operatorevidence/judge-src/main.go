@@ -44,6 +44,9 @@ type previewMediaSummary struct {
 	ICERestarts         int    `json:"iceRestarts"`
 
 	Excluded *excludedPool `json:"excluded,omitempty"`
+	// BoundaryMetrics lists takeover verdicts that pass for every kill time in
+	// the clock interval while their label differs (boundary_takeovers.go).
+	BoundaryMetrics []undecidedMetric `json:"boundaryMetrics,omitempty"`
 }
 
 type phaseDiagnostic struct {
@@ -90,6 +93,7 @@ func previewMediaQualified(r *loadgen.RunReport, relay bool, coverage map[int][]
 			}
 		}
 	} else {
+		settleBoundaryTakeovers(r)
 		r.Judge()
 		qualifyClockCoverage(r, coverage)
 	}
@@ -157,6 +161,7 @@ func previewMediaQualified(r *loadgen.RunReport, relay bool, coverage map[int][]
 		out.CompleteMedia = out.CompleteMedia && p.Complete && len(p.Causes) == 0
 	}
 	out.UndecidedMetrics = undecidedRows(r)
+	out.BoundaryMetrics = boundaryRows(r)
 	if relay {
 		out.RelayCalls = out.CompletedCalls
 	}
@@ -519,6 +524,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		r.Events = append(r.Events, part.Events...)
 	}
 	out := previewMediaSummary{Status: "inconclusive"}
+	var excludedBoundary []undecidedMetric
 	if r.Callers > 0 {
 		// Each phase verdict above judged every event, so loss or a failed window
 		// on an excluded kill still fails the pool. Drop each takeover whose only
@@ -578,6 +584,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 			back := pooledPreviewMedia(&again)
 			out.Excluded = back.Excluded
 			out.Excluded.CountedBackIn = back.Status
+			excludedBoundary = excludedBoundaryRows(back)
 		}
 	} else if relayCalls > 0 {
 		out.Status = "passed"
@@ -613,13 +620,16 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	if out.UndecidedMetrics == nil {
 		out.UndecidedMetrics = []undecidedMetric{}
 	}
-	for j := range out.UndecidedMetrics {
-		row := &out.UndecidedMetrics[j]
-		if row.Event < len(positions) {
-			pos := positions[row.Event]
-			row.Phase, row.Event = pos.phase, pos.event
+	for _, rows := range [][]undecidedMetric{out.UndecidedMetrics, out.BoundaryMetrics} {
+		for j := range rows {
+			row := &rows[j]
+			if row.Event < len(positions) {
+				pos := positions[row.Event]
+				row.Phase, row.Event = pos.phase, pos.event
+			}
 		}
 	}
+	out.BoundaryMetrics = append(out.BoundaryMetrics, excludedBoundary...)
 	return out
 }
 func decodePool(data []byte) (input previewPoolInput, err error) {

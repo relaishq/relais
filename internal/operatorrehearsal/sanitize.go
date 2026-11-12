@@ -159,8 +159,8 @@ func sanitizeGates(gates []GateReport) []GateReport {
 		if g.Media != nil {
 			m := *g.Media
 			m.Status = publicVerdict(m.Status)
-			diagnostics := (operatorevidence.Summary{UndecidedMetrics: m.UndecidedMetrics, PhaseDiagnostics: m.PhaseDiagnostics}).PublicDiagnostics()
-			m.UndecidedMetrics, m.PhaseDiagnostics = diagnostics.UndecidedMetrics, diagnostics.PhaseDiagnostics
+			diagnostics := (operatorevidence.Summary{UndecidedMetrics: m.UndecidedMetrics, BoundaryMetrics: m.BoundaryMetrics, PhaseDiagnostics: m.PhaseDiagnostics}).PublicDiagnostics()
+			m.UndecidedMetrics, m.BoundaryMetrics, m.PhaseDiagnostics = diagnostics.UndecidedMetrics, diagnostics.BoundaryMetrics, diagnostics.PhaseDiagnostics
 			g.Media = &m
 		}
 	}

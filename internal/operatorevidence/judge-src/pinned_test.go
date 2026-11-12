@@ -72,6 +72,15 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	qualifiedPool(&replaced, map[[2]int][]string{{1, 5}: {"clock-coverage-kill-excluded"}})
 	qualifiedPool(&short, map[[2]int][]string{sampleTakeover: {"clock-coverage-kill-excluded"}})
 	cases = append(cases, replaced, short)
+	// A boundary takeover (#446) passes or stays undecided in the same overlay.
+	boundary, undecidedBoundary := rawPoolSample(), rawPoolSample()
+	editSampleTakeover(t, &boundary, func(m *callharness.MoveReport) { boundaryMove(m) })
+	editSampleTakeover(t, &undecidedBoundary, func(m *callharness.MoveReport) {
+		boundaryMove(m, "no decoded new content after resume before limit")
+	})
+	qualifiedPool(&boundary, nil)
+	qualifiedPool(&undecidedBoundary, nil)
+	cases = append(cases, boundary, undecidedBoundary)
 	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
 	for _, commit := range commits {
 		if err := pinnedCommit(ctx, root, commit); err != nil {
