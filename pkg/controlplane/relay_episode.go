@@ -37,6 +37,7 @@ type relayEpisode struct {
 	running, loaded        bool // guarded by relayEpisodeMu
 	persisted, cleanupDone bool // guarded by relayEpisodeMu
 	watching               bool // guarded by relayEpisodeMu; set once its watcher runs
+	retiring               int  // guarded by relayEpisodeMu; completions deciding on it: no begin or re-proposal starts
 	completed              atomic.Bool
 }
 
@@ -364,6 +365,12 @@ func (p *Plane) reproposeRelayEpisode(ctx context.Context, c *call, e *relayEpis
 	journal := p.store.(sessionstore.ControlStore)
 	c.relayEpisodeMu.Lock()
 	defer c.relayEpisodeMu.Unlock()
+	if e.retiring > 0 || e.completed.Load() {
+		// Completion decides on the proposal it read, and a closed episode's
+		// journal entry is gone for good: neither gets a new token.
+		relayWatchEvent(c, "held")
+		return relayUncertain
+	}
 	if deleteRelayProposal(ctx, journal, e) != nil {
 		return relayUncertain
 	}
@@ -449,6 +456,16 @@ func (p *Plane) beginRelayEpisode(ctx context.Context, c *call, e *relayEpisode)
 	}
 	storeDeadline, err := p.convertClock(ctx, c.id, e.deadline, true)
 	if err != nil {
+		return relayUncertain
+	}
+	// No begin is issued while completion decides on this episode: one that
+	// landed after completion's read would open the episode under it. A begin
+	// already in flight is settled by completion's fence.
+	c.relayEpisodeMu.Lock()
+	held := e.retiring > 0
+	c.relayEpisodeMu.Unlock()
+	if held {
+		relayWatchEvent(c, "held")
 		return relayUncertain
 	}
 	next := rec
@@ -672,6 +689,11 @@ func (p *Plane) awaitRelayAuthority(c *call, done <-chan struct{}) bool {
 // completeRelayEpisode is a driver's report after its confirmation write. The
 // decision is already durable: completion was recorded with the confirmation.
 // It refuses with errRelayEpisodeEnded when the episode ended first.
+//
+// While it decides, the episode's watcher issues no begin and no re-proposal
+// (retiring), so the proposal read here is the one cleaned up. A begin issued
+// earlier either committed before the fence (the episode is open and keeps its
+// watcher) or is refused by it.
 func (p *Plane) completeRelayEpisode(ctx context.Context, c *call, e *relayEpisode) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), relayDecisionLimit)
 	defer cancel()
@@ -680,17 +702,50 @@ func (p *Plane) completeRelayEpisode(ctx context.Context, c *call, e *relayEpiso
 		p.cleanupRelayEpisode(ctx, c, e)
 		return nil
 	}
-	_, rec, err := store.RelayConfirmation(ctx, c.id)
-	if err == nil && rec.Episode != nil && rec.Episode.Token == e.proposal().Token {
-		switch rec.Episode.Outcome {
-		case sessionstore.RelayEpisodeEnded:
-			return errRelayEpisodeEnded
-		case sessionstore.RelayEpisodeOpen:
-			return ErrMoveInProgress
+	c.relayEpisodeMu.Lock()
+	e.retiring++
+	c.relayEpisodeMu.Unlock()
+	defer func() { c.relayEpisodeMu.Lock(); e.retiring--; c.relayEpisodeMu.Unlock() }()
+	for {
+		a, rec, err := store.RelayConfirmation(ctx, c.id)
+		if errors.Is(err, sessionstore.ErrNotFound) {
+			break
 		}
-	}
-	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
-		return err
+		if err != nil {
+			return err
+		}
+		ep, proposal := rec.Episode, e.proposal()
+		if ep != nil && ep.Token == proposal.Token {
+			switch ep.Outcome {
+			case sessionstore.RelayEpisodeEnded:
+				return errRelayEpisodeEnded
+			case sessionstore.RelayEpisodeOpen:
+				return ErrMoveInProgress
+			}
+			break
+		}
+		// A proposal that can still begin is fenced before its cleanup: an
+		// episode that began after the read above would be closed while open.
+		var seq uint64
+		if ep != nil {
+			seq = ep.Seq
+		}
+		if ep.Open() || ep != nil && ep.Outcome == sessionstore.RelayEpisodeEnded || proposal.Seq != seq+1 {
+			break
+		}
+		fenced := sessionstore.RelayEpisode{}
+		if ep != nil {
+			fenced = *ep
+		}
+		fenced.Seq++
+		next := rec
+		next.Episode = &fenced
+		if err = p.decisionCAS(ctx, c.id, a, rec, next, time.Time{}, time.Time{}); err == nil {
+			break
+		}
+		if !errors.Is(err, sessionstore.ErrRelayConflict) {
+			return err
+		}
 	}
 	p.cleanupRelayEpisode(ctx, c, e)
 	return nil
