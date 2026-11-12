@@ -68,6 +68,8 @@ type clockAdmissionPorts struct {
 	now          func() time.Time
 	policy       clocks.SelectionPolicy
 	leapMode     string
+	// latency is the host command latency that sizes helper setup.
+	latency time.Duration
 }
 
 func rehearsalClockPolicy() clocks.SelectionPolicy {
@@ -241,7 +243,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			admission, admissionDone := context.WithTimeout(parent, 150*time.Second)
 			defer admissionDone()
 			ctx = admission
-			setup, setupDone := context.WithTimeout(ctx, 10*time.Second)
+			setup, setupDone := context.WithTimeout(ctx, clockSetupBudget(p.latency))
 			err := p.start(setup, end)
 			setupDone()
 			if err != nil {

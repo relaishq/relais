@@ -33,6 +33,9 @@ type ClockAdmission struct {
 	HelpersUntil time.Time
 	Output       string
 	Host         ClockHostCommand
+	// HostReadLatency is the p99 latency of one host command, the L of
+	// clockTiming.hostReadLatencyMs. Zero keeps the fixed setup budget.
+	HostReadLatency time.Duration
 	// Now and Pause are the admission clock; nil selects the real clock.
 	Now   func() time.Time
 	Pause func(context.Context, time.Duration) error
@@ -46,6 +49,29 @@ type ClockAdmissionBinding struct {
 
 // Collection always freezes this trailing window, so no other policy window can be admitted.
 const clockAdmissionWindowSeconds = 120
+
+// Helper setup gets at least the original fixed budget, and a margin for
+// the frontend helper to start probing after its command returns.
+const clockSetupMinimum = 10 * time.Second
+const clockSetupMargin = 2 * time.Second
+
+// clockSetupBudget covers the helper commands, which run one after another:
+// each slot writes its helper, then starts it.
+func clockSetupBudget(latency time.Duration) time.Duration {
+	return max(clockSetupMinimum, 2*time.Duration(len(Slots))*latency+clockSetupMargin)
+}
+
+// CheckClockAdmissionLatency refuses a host latency whose helper setup leaves
+// no room in the 150 s admission. Probes start only after setup, so the 120 s
+// window, the second the trailing row lags, the 2 s retry pause and two
+// trailing reads (an attempt that just misses the row and the one that reads
+// it) all follow the setup budget. Zero is the fixed budget and always fits.
+func CheckClockAdmissionLatency(latency time.Duration) error {
+	if clockSetupBudget(latency)+(clockAdmissionWindowSeconds+3)*time.Second+2*latency > 150*time.Second {
+		return errors.New("clock-admit-budget")
+	}
+	return nil
+}
 
 // CheckClockAdmissionPolicy needs no host: the selector's own policy rule plus
 // the one window that collection supports.
@@ -74,7 +100,7 @@ func (a ClockAdmission) ports() clockAdmissionPorts {
 		a.Now, a.Pause = time.Now, pause
 	}
 	return clockAdmissionPorts{
-		policy: a.Policy, leapMode: a.CallerLeapMode, selectBounds: a.selectBounds, pause: a.Pause, now: a.Now,
+		policy: a.Policy, leapMode: a.CallerLeapMode, selectBounds: a.selectBounds, pause: a.Pause, now: a.Now, latency: a.HostReadLatency,
 		read: func(ctx context.Context, slot, script string) (string, error) {
 			return a.Host(ctx, slot, false, []byte(script), "sh", "-eu")
 		},

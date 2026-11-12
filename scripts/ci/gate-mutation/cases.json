@@ -4052,6 +4052,47 @@
     "Package": "./internal/operatorrehearsal"
   },
   {
+    "ID": "clock-admission-setup-ignores-latency",
+    "File": "internal/operatorrehearsal/clock_admission.go",
+    "Function": "clockSetupBudget",
+    "Old": "2*time.Duration(len(Slots))*latency+clockSetupMargin",
+    "New": "latency+clockSetupMargin",
+    "Test": "TestClockAdmissionSetupBudget/derived",
+    "Marker": "MUTATION: admission-setup-budget",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-setup-fixed",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "context.WithTimeout(ctx, clockSetupBudget(p.latency))",
+    "New": "context.WithTimeout(ctx, 10*time.Second)",
+    "Test": "TestClockAdmissionSetupBudget/derived",
+    "Marker": "MUTATION: admission-setup-budget",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-setup-latency-dropped",
+    "File": "internal/operatorrehearsal/clock_admission.go",
+    "Function": "ports",
+    "Receiver": "ClockAdmission",
+    "Old": "latency: a.HostReadLatency,",
+    "New": "",
+    "Test": "TestClockAdmissionSetupBudget/derived",
+    "Marker": "MUTATION: admission-setup-budget",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-latency-fit-no-reads",
+    "File": "internal/operatorrehearsal/clock_admission.go",
+    "Function": "CheckClockAdmissionLatency",
+    "Old": "+2*latency > 150*time.Second",
+    "New": " > 150*time.Second",
+    "Test": "TestClockAdmissionLatencyFit",
+    "Marker": "MUTATION: admission-latency-fit",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
     "ID": "clock-select-ignore-post-window-leap",
     "File": "internal/operatorgates/clocks/select.go",
     "Function": "selectionMaximum",

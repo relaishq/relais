@@ -172,6 +172,15 @@ func TestClockAdmitWritesReceiptAndBinding(t *testing.T) {
 	require.NotContains(t, string(evidenceRaw), "192.0.2.")
 }
 
+// The largest latency that fits (2.5 s) is accepted and admission runs to a binding.
+func TestClockAdmitAcceptsFittingLatency(t *testing.T) {
+	f := newClockAdmitFixture(t)
+	f.args = append(f.args, "-host-read-latency-ms", "2500")
+	code, cause := f.run(t)
+	require.Equal(t, 0, code, cause)
+	require.FileExists(t, filepath.Join(f.output, "clock-binding.json"))
+}
+
 func TestClockAdmitRefusesWithNamedCause(t *testing.T) {
 	for cause, change := range map[string]func(*testing.T, *clockAdmitFixture){
 		"clock-select-ceiling":   func(_ *testing.T, f *clockAdmitFixture) { f.policy.ControlCeilingNS = 1 },
@@ -235,7 +244,11 @@ func TestClockAdmitRefusesBeforeHostCommands(t *testing.T) {
 		"policy":           {"clock-select-policy", func(f *clockAdmitFixture) { f.policy.WindowSeconds = 60 }},
 		"policy-window":    {"clock-select-policy", func(f *clockAdmitFixture) { f.policy.WindowSeconds = 121 }},
 		"policy-growth":    {"clock-select-policy", func(f *clockAdmitFixture) { f.policy.MaxDispersionGrowthPPM = "fast" }},
-		"relative-command": {"usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR", func(f *clockAdmitFixture) { f.args[5] = "host-command" }},
+		"latency-negative": {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-host-read-latency-ms", "-1") }},
+		"latency-huge":     {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-host-read-latency-ms", "9223372036854775807") }},
+		// 8 × 4 s of helper setup leaves the 120 s window no room in 150 s.
+		"latency-unfit":    {"clock-admit-budget", func(f *clockAdmitFixture) { f.args = append(f.args, "-host-read-latency-ms", "4000") }},
+		"relative-command": {"usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR [-host-read-latency-ms MS]", func(f *clockAdmitFixture) { f.args[5] = "host-command" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newClockAdmitFixture(t)

@@ -387,3 +387,59 @@ func TestClockSelectionAdmittedStatusBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `{"cause":"","selectedBounds":{"frontendControlBoundNs":120000,"frontendWorkerBoundNs":170000,"driftPpm":100},"updates":{"w2":120},"receiptSha256":"aa","evidenceSha256":"bb"}`, string(got))
 }
+
+// A fake transport spends cost of virtual time on each helper command and
+// refuses a command that would end after its context deadline, as a killed
+// command would. The deadline is the real time left when the first helper
+// command arrives. Lease reads answer at once.
+func TestClockAdmissionSetupBudget(t *testing.T) {
+	for name, c := range map[string]struct {
+		latency, cost time.Duration
+		commands      int
+		cause         string
+	}{
+		// With no latency the fixed ten-second budget ends during the fourth 2.5 s command.
+		"fixed": {0, 2500 * time.Millisecond, 3, "clock-selection-helper"},
+		// Eight 2.5 s commands fit 8L + 2 s = 22 s; admission then selects.
+		"derived": {2500 * time.Millisecond, 2500 * time.Millisecond, 8, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := admissionFixture(t, false, nil)
+			a := ClockAdmission{RunID: "setup-test", FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, HelpersUntil: p.now().Add(time.Hour), Output: t.TempDir(), HostReadLatency: c.latency, Now: p.now, Pause: p.pause}
+			var began time.Time
+			var budget time.Duration
+			commands := 0
+			a.Host = func(ctx context.Context, slot string, _ bool, input []byte, args ...string) (string, error) {
+				if args[0] == "sh" {
+					return p.read(ctx, slot, string(input))
+				}
+				if commands == 0 {
+					deadline, _ := ctx.Deadline()
+					began, budget = p.now(), time.Until(deadline)
+				}
+				if p.now().Add(c.cost).Sub(began) > budget {
+					return "", context.DeadlineExceeded
+				}
+				commands++
+				return "", p.pause(ctx, c.cost)
+			}
+			result := AdmitClock(context.Background(), a)
+			if result.Cause != c.cause || commands != c.commands {
+				t.Fatal("MUTATION: admission-setup-budget", result.Cause, commands, budget)
+			}
+		})
+	}
+}
+
+// The largest latency that fits is 2.5 s: 8L + 2 s setup, then 123 s and two
+// trailing reads, is exactly 150 s. Zero keeps the fixed budget.
+func TestClockAdmissionLatencyFit(t *testing.T) {
+	require.Equal(t, 10*time.Second, clockSetupBudget(0))
+	require.Equal(t, 10*time.Second, clockSetupBudget(time.Second))
+	for latency, fits := range map[time.Duration]bool{0: true, 400 * time.Millisecond: true, 2500 * time.Millisecond: true, 2501 * time.Millisecond: false, 4 * time.Second: false} {
+		err := CheckClockAdmissionLatency(latency)
+		if fits != (err == nil) || err != nil && err.Error() != "clock-admit-budget" {
+			t.Fatal("MUTATION: admission-latency-fit", latency, err)
+		}
+	}
+}

@@ -153,6 +153,7 @@ relais-gates clock-admit -plan plan.json -policy policy.json \
 ```
 
 All four flags are required. `-output` must be an existing directory.
+`-host-read-latency-ms MS` is optional; see [Helper setup budget](#helper-setup-budget).
 `policy.json` is the launcher policy shown below; there is no default.
 `plan.json` is a closed schema that holds only values known before measurement:
 
@@ -204,7 +205,7 @@ Outputs, all in `-output`:
 | --- | --- |
 | 0 | Admitted. Receipt and binding are written. |
 | 1 | Admission ran and refused. Stderr is one fixed cause; the status file records a selection refusal, but not a binding refusal (see below). |
-| 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, or no output directory), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule, or its `windowSeconds` is not 120, the only window collection builds) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
+| 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, no output directory, or a latency outside 0–150000 ms), `clock-admit-budget` (the helper setup budget leaves no room in the 150 s admission; see below), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule, or its `windowSeconds` is not 120, the only window collection builds) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
 
 `clock-selection-status.json` describes selection only. A binding refusal
 exits 1 with its cause on stderr while the status file keeps `cause` `""` and
@@ -220,6 +221,32 @@ changed after its digest was fixed (`operator.CheckPlan`,
 killed at its deadline and its pipes are closed one second later, so a child
 that keeps stdout open cannot hold admission past its deadline
 (`TestClockAdmitHostReadEndsWithDeadline`).
+
+#### Helper setup budget
+
+Admission starts the probe helpers with eight host commands, one after
+another: each slot writes its helper, then starts it. The budget for these
+commands depends on `-host-read-latency-ms` (L), which has the same meaning as
+`clockTiming.hostReadLatencyMs`: the p99 latency of one host command.
+
+| Value | Rule |
+|---|---|
+| Setup budget | max(10 s, 8L + 2 s). Without the flag (or with 0) it is exactly 10 s, as before, and the rehearsal is unchanged. |
+| Fit | setup budget + 123 s + 2L ≤ 150 s, else `clock-admit-budget` before any host command |
+
+The probes start only after setup, and the selector needs probes from the
+start of its 120 s window. So the window, the one second the trailing row
+lags, the 2 s retry pause and two trailing reads (an attempt that just misses
+the trailing row and the one that reads it) all follow the setup budget inside
+the unchanged 150 s admission. The largest latency that fits is L = 2.5 s:
+22 s + 123 s + 5 s = 150 s. L = 4 s is refused: its 34 s setup alone pushes
+the window past the deadline (`TestClockAdmissionLatencyFit`).
+`TestClockAdmissionSetupBudget` runs admission on a virtual clock with a fake
+host whose helper commands each take 2.5 s: with no latency the fixed 10 s
+budget ends during the fourth command (`clock-selection-helper`); with
+L = 2.5 s all eight complete and admission selects bounds.
+
+The 10 s seed budget before setup is not derived from L.
 
 Exit 1 causes keep their existing meanings: the selector's `clock-select-*`
 causes, `clock-lease-missing` and `clock-lease-expired` from admission reads,

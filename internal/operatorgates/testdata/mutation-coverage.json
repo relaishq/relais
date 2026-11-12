@@ -367,6 +367,10 @@
     "clock-admission-forget-observations",
     "clock-admission-clear-falsified",
     "clock-admission-no-seed-margin",
+    "clock-admission-setup-ignores-latency",
+    "clock-admission-setup-fixed",
+    "clock-admission-setup-latency-dropped",
+    "clock-admission-latency-fit-no-reads",
     "clock-select-ignore-post-window-leap",
     "clock-select-ignore-post-window-reference",
     "clock-select-ignore-expired-lease",
@@ -3485,6 +3489,34 @@
     {
       "id": "clock-admission-no-seed-margin",
       "test": "TestClockSelectionAdmissionArtifacts",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-setup-ignores-latency",
+      "test": "TestClockAdmissionSetupBudget/derived",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-setup-fixed",
+      "test": "TestClockAdmissionSetupBudget/derived",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-setup-latency-dropped",
+      "test": "TestClockAdmissionSetupBudget/derived",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "clock-admission-latency-fit-no-reads",
+      "test": "TestClockAdmissionLatencyFit",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
