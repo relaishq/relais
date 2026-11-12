@@ -52,6 +52,7 @@ func TestFreeUDPOutsideEphemeralRange(t *testing.T) { testFreePort(t, "udp", Fre
 
 func testFreePort(t *testing.T, network string, allocate func() (string, error)) {
 	t.Helper()
+	isolateIssuedPorts(t)
 	band, err := driverPortBand()
 	require.NoError(t, err)
 	ephemeral, rangeErr := ephemeralPortRange()
@@ -89,6 +90,7 @@ func testFreePort(t *testing.T, network string, allocate func() (string, error))
 func TestFreePortRejectsOccupiedBand(t *testing.T) {
 	for _, network := range []string{"tcp", "udp"} {
 		t.Run(network, func(t *testing.T) {
+			isolateIssuedPorts(t)
 			// Another socket holds the only candidate; it was never issued here.
 			socket, port := occupy(t, network, "127.0.0.1:0")
 			defer socket.Close()
@@ -106,6 +108,7 @@ func TestFreePortRejectsOccupiedBand(t *testing.T) {
 func TestFreePortNeverReissuesAPort(t *testing.T) {
 	for _, networks := range [][2]string{{"tcp", "tcp"}, {"udp", "udp"}, {"tcp", "udp"}, {"udp", "tcp"}} {
 		t.Run(networks[0]+"-then-"+networks[1], func(t *testing.T) {
+			isolateIssuedPorts(t)
 			socket, port := occupy(t, networks[0], "127.0.0.1:0")
 			require.NoError(t, socket.Close())
 			band := portBand{port, port}
@@ -121,6 +124,21 @@ func TestFreePortNeverReissuesAPort(t *testing.T) {
 			require.NoError(t, relay.Close())
 		})
 	}
+}
+
+// isolateIssuedPorts gives a serial test an empty registry, so repeated runs
+// neither exhaust the band nor inherit ports issued by earlier tests.
+func isolateIssuedPorts(t *testing.T) {
+	t.Helper()
+	issued.Lock()
+	saved := issued.ports
+	issued.ports = map[int]bool{}
+	issued.Unlock()
+	t.Cleanup(func() {
+		issued.Lock()
+		issued.ports = saved
+		issued.Unlock()
+	})
 }
 
 func occupy(t *testing.T, network, addr string) (io.Closer, int) {
