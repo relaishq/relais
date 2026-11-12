@@ -82,6 +82,7 @@ func (r *ProcessRuntime) measurePorts(caller *CallerRuntime, calls int) MeasureP
 func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRuntime, caller *CallerRuntime, boundary *operatorcaller.Broker, launchers resourceCallers, end time.Duration, token string, result *ResourceResult) ProcedureResult {
 	wall := func(end time.Duration) time.Time { return s.clock.Wall().Add(max(0, end-s.clock.Elapsed())) }
 	ports := runtime.measurePorts(caller, 1)
+	var idle *WaitDiagnostic
 	admitted := RunAdmission(ctx, AdmissionPorts{
 		Clock: s.clock,
 		// Broker.Begin schedules media one second ahead. The actual stop/idle
@@ -95,7 +96,7 @@ func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRunti
 			return stop.Inactive && stop.Certainty == operator.Succeeded
 		},
 		Idle: func(ctx context.Context, end time.Duration) error {
-			return WaitBoundaryIdle(ctx, ports.ProcedurePorts, end)
+			return WaitBoundaryIdle(ctx, ports.ProcedurePorts, end, &idle)
 		},
 		Boundary: func(ctx context.Context, end time.Duration) MeasureResult {
 			if err := operatorcaller.BeginBoundary(ctx, launchers, caller.Broker, boundary, token, wall(end)); err != nil {
@@ -126,7 +127,15 @@ func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRunti
 		},
 	}, end)
 	result.Admission = &admitted
-	return ProcedureResult{Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media}
+	out := ProcedureResult{Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media}
+	// Keep the latest expired wait: boundary, then idle, then survivor.
+	for _, w := range []*WaitDiagnostic{admitted.Boundary.ExpiredWait, idle, admitted.Survivor.ExpiredWait} {
+		if w != nil {
+			out.Process.ExpiredWait = w
+			break
+		}
+	}
+	return out
 }
 func admissionMedia(raw string, b *operatorcaller.Broker) (*MediaSummary, error) {
 	summary := &MediaSummary{Status: operator.Inconclusive, ExpectedCalls: b.Manifest.Plan.Calls}

@@ -826,7 +826,8 @@ func TestBoundaryOracle(t *testing.T) {
 				var end int64
 				_ = json.Unmarshal(root.req.Inputs[1], &end)
 				o := newProcedureOracle(t, root.req, root.res, root.events, "measure.waitBoundaryIdle.arg0")
-				actual := WaitBoundaryIdle(context.Background(), o.ports(), time.Duration(end)*time.Millisecond)
+				var expired *WaitDiagnostic
+				actual := WaitBoundaryIdle(context.Background(), o.ports(), time.Duration(end)*time.Millisecond, &expired)
 				if code(actual) != code(oracleError(root.res)) {
 					t.Fatalf("MUTATION: boundary-oracle error got %v want %v", actual, oracleError(root.res))
 				}

@@ -3313,7 +3313,7 @@
     "ID": "resource-admission-skips-idle",
     "File": "internal/operatorgates/resource_admission.go",
     "Function": "runResourceAdmission",
-    "Old": "return WaitBoundaryIdle(ctx, ports.ProcedurePorts, end)",
+    "Old": "return WaitBoundaryIdle(ctx, ports.ProcedurePorts, end, &idle)",
     "New": "return nil",
     "Test": "TestSessionBinaryOwnsAdmission/offered",
     "Marker": "MUTATION: optional-session",
@@ -6689,6 +6689,56 @@
     "New": "if false {",
     "Test": "TestExpiredWaitProjectionIsStrict",
     "Marker": "MUTATION: expired-wait-projection-strict",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-settle-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "if initial.Status != nil && len(initial.Status.Calls) > p.Calls {\n\t\tcalls.expired()\n\t}",
+    "New": "",
+    "Test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-recovery-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "return recovery.end(fault(\"gate-deadline\"))",
+    "New": "return fault(\"gate-deadline\")",
+    "Test": "TestMeasurementWaitsNameExpiredWait/failover-primary-recovered",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "collection-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "wait.expired()\n\t\t\t\tbreak",
+    "New": "break",
+    "Test": "TestMeasurementWaitsNameExpiredWait/collection-complete",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-expired-wait-unpublished",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.ExpiredWait = g.evidence.ExpiredWait",
+    "New": "",
+    "Test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-idle-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "WaitBoundaryIdle",
+    "Old": "return wait.end(fault(\"gate-deadline\"))",
+    "New": "return fault(\"gate-deadline\")",
+    "Test": "TestMeasurementWaitsNameExpiredWait/boundary-idle",
+    "Marker": "MUTATION: measurement-expired-wait",
     "Package": "./internal/operatorgates"
   }
 ]

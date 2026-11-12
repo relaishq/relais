@@ -625,7 +625,12 @@
     "restore-floor-unrecorded",
     "worker-empty-expiry-unrecorded",
     "expired-wait-projection-incomplete",
-    "expired-wait-projection-unvalidated"
+    "expired-wait-projection-unvalidated",
+    "measure-settle-expiry-unrecorded",
+    "failover-recovery-expiry-unrecorded",
+    "collection-expiry-unrecorded",
+    "measure-expired-wait-unpublished",
+    "boundary-idle-expiry-unrecorded"
   ],
   "killed": [
     {
@@ -5222,6 +5227,36 @@
     {
       "id": "expired-wait-projection-unvalidated",
       "test": "TestExpiredWaitProjectionIsStrict",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measure-settle-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-recovery-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/failover-primary-recovered",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "collection-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/collection-complete",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measure-expired-wait-unpublished",
+      "test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-idle-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/boundary-idle",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

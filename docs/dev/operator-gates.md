@@ -519,18 +519,25 @@ without retaining status payloads: `trial-takeover`, `trial-settled`,
 `trial-ready`, `worker-settled`, `worker-alive`, `control-reconstructed`,
 `control-reconstructed-degraded`, `restart-takeover`, `release-worker-settled`,
 `release-worker-alive`, `release-call-restored`, `relay-rejoined`,
-`relay-continuity`, `worker-empty`, `restore-worker-settled` and
-`restore-worker-alive`.
+`relay-continuity`, `worker-empty`, `restore-worker-settled`,
+`restore-worker-alive`, `calls-settled`, `failover-primary-recovered`,
+`collection-complete` and `boundary-idle`.
 
 When the gate budget ends a wait (the gate end passes, or the host-submission
-floor refuses its next read), or a `worker-empty` or restoration wait runs out
-its own window, process evidence records `expiredWait` for the latest such wait: the
+floor refuses its next read), or a `worker-empty`, restoration or
+`calls-settled` wait runs out its own window, process evidence records
+`expiredWait` for the latest such wait (measurement gates carry it on their
+measure result; admission keeps the boundary, idle or survivor one): the
 purpose, `waitedMs`, `polls` (completed reads) and `last`, the fixed state codes
 of the last read. Control codes are `control-ready`/`control-not-ready`,
 `calls-none`/`calls-one`/`calls-many`, `call-owner-w1`/`w2`/`other`, and one of
 `absent`, `recovering`, `dead-with-calls`, `dead`, `address-differs`,
 `liveness-unknown`, `draining` or `live` per worker slot (`w1-live`). Relay
-codes compare the inspection with the one before the restart. `unobserved`
+codes compare the inspection with the one before the restart. Store codes
+(`store-available`, `store-primary-same`/`changed`/`none`, `store-sync`)
+compare with the primary before failover; the boundary idle wait adds
+`w1-local-idle`/`busy`/`unknown` and `store-ownership-idle`/`busy`/`unknown`.
+`unobserved`
 means no read completed. This is a diagnostic only: verdicts, reasons,
 categories and latching are unchanged, so a wait that the submission floor
 ends still reports `precondition-failed:deadline-before-submission`. The

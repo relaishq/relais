@@ -72,6 +72,9 @@ type MeasureResult struct {
 	Reason      string           `json:"reason,omitempty"`
 	Media       *MediaSummary    `json:"media,omitempty"`
 	Measurement Measurement      `json:"measurement"`
+	// ExpiredWait names the polling wait that the gate budget or its own
+	// window ended, if any. It never changes the status or reason.
+	ExpiredWait *WaitDiagnostic `json:"expiredWait,omitempty"`
 }
 
 func liveMeasurement(s *controlplane.Status, reg *Registration, c *ProcessConfig, calls int) error {
@@ -89,40 +92,56 @@ func liveMeasurement(s *controlplane.Status, reg *Registration, c *ProcessConfig
 	}
 	return nil
 }
-func WaitBoundaryIdle(ctx context.Context, p ProcedurePorts, end time.Duration) error {
+
+// WaitBoundaryIdle records its wait into *expired when the budget ends it.
+func WaitBoundaryIdle(ctx context.Context, p ProcedurePorts, end time.Duration, expired **WaitDiagnostic) error {
+	wait := newGateWait(p, expired, "boundary-idle")
 	for p.Clock.Elapsed() < end {
+		wait.poll()
 		r, err := p.Step(ctx, "status", "shared", end, ProcessExtra{})
 		if err != nil {
-			return err
+			return wait.end(err)
 		}
 		s := r.Status
 		if s.LostCount > 0 {
 			return fault("known-call-loss")
 		}
+		state := controlState(s, nil)
 		idle := s.Ready && s.Pool.Cap == 2 && s.Pool.Reservations == 0 && len(s.Calls) == 0
 		for _, w := range []string{"w1", "w2"} {
 			r, err = p.Step(ctx, "worker-status", "shared", end, ProcessExtra{Worker: w})
 			if err != nil {
-				return err
+				return wait.end(err)
 			}
 			local := r.Local
+			state = append(state, localState(w, local))
 			idle = idle && local.InventoryKnown && !local.Truncated && local.Sessions == 0 && local.Inventory != nil && len(local.Inventory) == 0
 		}
 		r, err = p.Step(ctx, "store-status", "shared", end, ProcessExtra{})
 		if err != nil {
-			return err
+			return wait.end(err)
 		}
 		_, first := r.Ownership.Owners["w1"]
 		_, second := r.Ownership.Owners["w2"]
-		idle = idle && r.OwnershipKnown && first && second && r.Ownership.Owners["w1"] == 0 && r.Ownership.Owners["w2"] == 0 && r.Ownership.Transfers == 0
+		storeIdle := r.OwnershipKnown && first && second && r.Ownership.Owners["w1"] == 0 && r.Ownership.Owners["w2"] == 0 && r.Ownership.Transfers == 0
+		idle = idle && storeIdle
+		switch {
+		case !r.OwnershipKnown || !first || !second:
+			state = append(state, "store-ownership-unknown")
+		case storeIdle:
+			state = append(state, "store-ownership-idle")
+		default:
+			state = append(state, "store-ownership-busy")
+		}
+		wait.observe(state)
 		if idle {
 			return nil
 		}
 		if err = p.Sleep(ctx, min(500*time.Millisecond, end-p.Clock.Elapsed())); err != nil {
-			return err
+			return wait.end(err)
 		}
 	}
-	return fault("gate-deadline")
+	return wait.end(fault("gate-deadline"))
 }
 func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p MeasurePorts, end time.Duration) MeasureResult {
 	g := newProcedure(c, p.ProcedurePorts, end)
@@ -188,6 +207,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		collecting := p.Collect(collectionCtx, collectionEnd)
 		var collection MeasurementCollection
 		received := false
+		wait := g.startWait("collection-complete")
 	collect:
 		for {
 			select {
@@ -201,11 +221,16 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			}
 			if p.Clock.Elapsed() >= g.end {
 				r.Measurement.MissingSamples++
+				wait.expired()
 				break
 			}
 			if !g.unknown {
-				if _, err = observe(); err != nil {
+				wait.poll()
+				var o *MeasurementObservation
+				if o, err = observe(); err != nil {
 					r.Measurement.MissingSamples++
+				} else {
+					wait.observe(observedState(o, c.Parameters.Workers))
 				}
 			}
 			// The collection channel may finish during the sample interval. The sleep
@@ -267,6 +292,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	} else if r.Reason == "" && (procedureLate || p.Clock.Elapsed() >= collectionEnd) {
 		r.Reason = "gate-deadline"
 	}
+	r.ExpiredWait = g.evidence.ExpiredWait
 	return r
 }
 
@@ -284,14 +310,22 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 		return err
 	}
 	settle := min(g.end, p.Clock.Elapsed()+time.Minute)
+	calls := g.startWait("calls-settled")
+	calls.observe(observedState(initial, c.Parameters.Workers))
 	for initial.Status != nil && len(initial.Status.Calls) > p.Calls && p.Clock.Elapsed() < settle {
 		if err = p.Sleep(ctx, 5*time.Second); err != nil {
-			return err
+			return calls.end(err)
 		}
+		calls.poll()
 		initial, err = observe()
 		if err != nil {
-			return err
+			return calls.end(err)
 		}
+		calls.observe(observedState(initial, c.Parameters.Workers))
+	}
+	// The settling window ran out; liveMeasurement keeps its own code.
+	if initial.Status != nil && len(initial.Status.Calls) > p.Calls {
+		calls.expired()
 	}
 	if err = liveMeasurement(initial.Status, reg, c, p.Calls); err != nil {
 		return err
@@ -335,12 +369,15 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 		if err = p.Store.Failover(ctx, g.end); err != nil {
 			return err
 		}
+		recovery := g.startWait("failover-primary-recovered")
 		for p.Clock.Elapsed() < g.end {
+			recovery.poll()
 			o, err := observe()
 			if err != nil {
-				return err
+				return recovery.end(err)
 			}
 			current, err := p.Store.Observe(ctx, g.end)
+			state := append(observedState(o, c.Parameters.Workers), "store-unobserved")
 			if err != nil {
 				if code(err) == "command-result-unknown" {
 					return err
@@ -348,7 +385,9 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 				measurement.MissingSamples++
 			} else {
 				o.Store = &current
+				state = append(state[:len(state)-1], storeState(current, before.Primary)...)
 			}
+			recovery.observe(state)
 			if err == nil && current.Available && current.Primary != "" && current.Primary != before.Primary && current.Durability == "sync" {
 				if err = liveMeasurement(o.Status, reg, c, p.Calls); err != nil {
 					return err
@@ -361,11 +400,11 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 				break
 			}
 			if err = p.Sleep(ctx, min(5*time.Second, g.end-p.Clock.Elapsed())); err != nil {
-				return err
+				return recovery.end(err)
 			}
 		}
 		if measurement.RecoveredMS == nil {
-			return fault("gate-deadline")
+			return recovery.end(fault("gate-deadline"))
 		}
 		// Resource failover is never fabricated as a worker takeover receipt.
 		return g.trials(ctx, TrialTarget{1, 1}, "failover-recovered")
