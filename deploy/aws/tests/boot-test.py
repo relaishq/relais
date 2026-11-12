@@ -31,6 +31,7 @@ import traceback
 import urllib.request
 
 from template import ROOT, load, resolve
+from policy import EXPECTED_CHRONY
 
 
 PERMISSION_ERROR = re.compile(r"NOPERM|WRONGPASS|NOAUTH|no permissions|can't run this command|can't access at least one of the keys|ACL failure", re.I)
@@ -123,7 +124,7 @@ class Trial:
     def minimal_path(self):
         path = self.work / 'path'
         path.mkdir()
-        for tool in ('bash', 'curl', 'mktemp', 'rm', 'shasum', 'sha256sum', 'python3', 'mkdir', 'install', 'id', 'useradd', 'systemctl', 'sysctl'):
+        for tool in ('bash', 'cat', 'chmod', 'curl', 'mktemp', 'rm', 'shasum', 'sha256sum', 'python3', 'mkdir', 'install', 'id', 'useradd', 'systemctl', 'sysctl'):
             executable = str(Path(sys.executable).resolve()) if tool == 'python3' else shutil.which(tool)
             if executable:
                 (path / tool).symlink_to(executable)
@@ -377,6 +378,10 @@ masterauth {self.passwords['admin']}
         assert set(p.name for p in runtime.iterdir()) == {'relay.env', 'worker.env', 'control.env', 'signal.token'}
         commands = (self.work / 'manager.log').read_text()
         assert commands.index('sysctl -p ') < commands.index('enable --now relais-relay.service')
+        # Exact shared file, mode 0644 despite umask 077, written with minimal-PATH tools.
+        chrony = image / 'etc/chrony.conf'
+        assert chrony.read_text() == '\n'.join(EXPECTED_CHRONY) + '\n' and chrony.stat().st_mode & 0o777 == 0o644
+        assert commands.index('restart chronyd.service') < commands.index('enable --now relais-relay.service')
         assert 'mask amazon-ssm-agent.service' in commands and 'enable --now relais-relay-standby.service' in commands
         check_program_access(image)
         self.image, self.runtime = image, runtime
