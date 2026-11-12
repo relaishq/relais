@@ -15,6 +15,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/bindingtest"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/pkg/operator"
 	"github.com/stretchr/testify/require"
 )
@@ -89,5 +90,25 @@ func TestBindAdmission(t *testing.T) {
 			}
 			_ = r.peer.Close()
 		})
+	}
+}
+
+// Binding refuses a refused or unreadable selection before it builds an identity.
+func TestBindClockAdmissionRefusals(t *testing.T) {
+	bounds := clocks.Bounds{FrontendControlBoundNS: 120000, FrontendWorkerBoundNS: 170000, DriftPPM: 100}
+	scenario := operator.Scenario{SchemaVersion: 1, Gates: []operator.Gate{operator.Rollout}}
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "clock-selection.json"), []byte(`{"receipt":{},"sha256":"","extra":1}`), 0600))
+	for cause, status := range map[string]*ClockSelectionReport{
+		"clock-binding-missing": {Cause: "clock-select-ceiling", Bounds: &bounds},
+		"clock-binding-invalid": {Bounds: &bounds},
+	} {
+		binding, _, err := BindClockAdmission(dir, status, scenario)
+		if err == nil || err.Error() != cause || binding.PlanIdentity != "" || len(binding.ClockBinding.ReceiptGZIP) != 0 {
+			t.Fatal("MUTATION: clock-admission-binding-refusal", cause, err)
+		}
+	}
+	if _, _, err := BindClockAdmission(dir, nil, scenario); err == nil || err.Error() != "clock-binding-missing" {
+		t.Fatal("MUTATION: clock-admission-binding-refusal", err)
 	}
 }

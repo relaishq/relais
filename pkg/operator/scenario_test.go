@@ -52,3 +52,36 @@ func TestScenarioIdentityBindsReceipt(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeBindingKeepsPlanIdentity(t *testing.T) {
+	s := Scenario{SchemaVersion: 1, Gates: []Gate{Rollout}, Template: Identity{SourceCommit: "source", SHA256: "template"}}
+	plan, err := PlanIdentity(s)
+	if err != nil || plan != "92015d9a125f3452f6c6554856c3b34a45b4da80370f3ba2c657005cc1a810e0" {
+		t.Fatal("MUTATION: plan-identity-unbound", plan, err)
+	}
+	s.Digest = plan
+	a, err := BindRuntime(s, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := BindRuntime(s, strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.PlanIdentity != plan || b.PlanIdentity != plan {
+		t.Fatal("MUTATION: plan-identity-measured", a.PlanIdentity, b.PlanIdentity)
+	}
+	if a.Scenario.Digest == b.Scenario.Digest || a.Scenario.Digest == plan || a.Scenario.ClockReceiptSHA256 != strings.Repeat("a", 64) {
+		t.Fatal("MUTATION: runtime-binding-receipt", a, b)
+	}
+	// The bound scenario still names its plan: clearing the receipt returns it.
+	again, err := PlanIdentity(a.Scenario)
+	if err != nil || again != plan {
+		t.Fatal("MUTATION: plan-identity-measured", again, err)
+	}
+	for _, bad := range []string{"", "bad", strings.Repeat("A", 64)} {
+		if _, err := BindRuntime(s, bad); err == nil {
+			t.Fatal("MUTATION: runtime-binding-unmeasured", bad)
+		}
+	}
+}

@@ -37,7 +37,7 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	return clockAdmissionPorts{start: func(context.Context, time.Time) error { return nil }, read: read, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
+	return clockAdmissionPorts{policy: rehearsalClockPolicy(), leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

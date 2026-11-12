@@ -74,3 +74,34 @@ func BuildScenarioIdentity(s Scenario, receiptSHA256 string) (Scenario, error) {
 	s.Gates = slices.Clone(s.Gates)
 	return s, nil
 }
+
+// PlanIdentity is the scenario digest with no clock receipt. Every input is
+// known before a host exists, so readiness can check it before deployment.
+func PlanIdentity(s Scenario) (string, error) {
+	plan, err := BuildScenarioIdentity(s, "")
+	return plan.Digest, err
+}
+
+// RuntimeBinding joins one plan to one measured clock receipt. Scenario is the
+// plan with the receipt added; its Digest is the runtime identity Init carries.
+type RuntimeBinding struct {
+	PlanIdentity string   `json:"planIdentity"`
+	Scenario     Scenario `json:"scenario"`
+}
+
+// BindRuntime never changes the plan identity: a different receipt gives a
+// different Scenario.Digest under the same PlanIdentity.
+func BindRuntime(s Scenario, receiptSHA256 string) (RuntimeBinding, error) {
+	if receiptSHA256 == "" {
+		return RuntimeBinding{}, fmt.Errorf("invalid clock receipt digest")
+	}
+	plan, err := PlanIdentity(s)
+	if err != nil {
+		return RuntimeBinding{}, err
+	}
+	bound, err := BuildScenarioIdentity(s, receiptSHA256)
+	if err != nil {
+		return RuntimeBinding{}, err
+	}
+	return RuntimeBinding{PlanIdentity: plan, Scenario: bound}, nil
+}
