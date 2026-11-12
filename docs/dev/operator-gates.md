@@ -518,11 +518,13 @@ labels. Every gate polling wait emits a fixed wait-purpose label on each poll,
 without retaining status payloads: `trial-takeover`, `trial-settled`,
 `trial-ready`, `worker-settled`, `worker-alive`, `control-reconstructed`,
 `control-reconstructed-degraded`, `restart-takeover`, `release-worker-settled`,
-`release-worker-alive`, `release-call-restored`, `relay-rejoined` and
-`relay-continuity`.
+`release-worker-alive`, `release-call-restored`, `relay-rejoined`,
+`relay-continuity`, `worker-empty`, `restore-worker-settled` and
+`restore-worker-alive`.
 
 When the gate budget ends a wait (the gate end passes, or the host-submission
-floor refuses its next read), process evidence records `expiredWait`: the
+floor refuses its next read), or a `worker-empty` or restoration wait runs out
+its own window, process evidence records `expiredWait` for the latest such wait: the
 purpose, `waitedMs`, `polls` (completed reads) and `last`, the fixed state codes
 of the last read. Control codes are `control-ready`/`control-not-ready`,
 `calls-none`/`calls-one`/`calls-many`, `call-owner-w1`/`w2`/`other`, and one of
@@ -533,7 +535,8 @@ means no read completed. This is a diagnostic only: verdicts, reasons,
 categories and latching are unchanged, so a wait that the submission floor
 ends still reports `precondition-failed:deadline-before-submission`. The
 rehearsal report replaces any purpose or code outside the fixed set with
-`unavailable`.
+`unavailable`. The process-evidence projection refuses an `expiredWait` that
+is incomplete, has a negative count or uses any code outside the fixed set.
 The session request bound is 32,768: half-second caller polling can exceed the
 old 4,096 bound within a real campaign. Pending timeouts still have deterministic
 request order. Concurrent caller collection and host requests serialize through

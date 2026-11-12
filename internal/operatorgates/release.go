@@ -101,7 +101,7 @@ func (g *procedure) releaseWorkers(ctx context.Context) (int, error) {
 			}
 			moves++
 		}
-		if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {
+		if err = g.workerEmpty(ctx, w); err != nil {
 			return moves, err
 		}
 		if _, err = g.do(ctx, "worker-stop", w, ProcessExtra{Worker: w}); err != nil {

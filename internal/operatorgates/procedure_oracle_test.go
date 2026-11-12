@@ -337,6 +337,9 @@ func TestProcedureOracle(t *testing.T) {
 					// and add its new fixed restoration reason.
 					want.Reason = "restore-failed"
 				}
+				// expiredWait is a later diagnostic the oracle never recorded; the
+				// recorded fields must still match exactly.
+				want.Process.ExpiredWait = got.Process.ExpiredWait
 				status := string(got.Status)
 				if got.AwaitingPool {
 					status = "awaiting-pool"
@@ -503,6 +506,9 @@ func TestReleaseOracle(t *testing.T) {
 					Media    *MediaSummary   `json:"media"`
 				}
 				_ = json.Unmarshal(root.res.Value, &want)
+				// expiredWait is a later diagnostic the oracle never recorded; the
+				// recorded fields must still match exactly.
+				want.Process.ExpiredWait = got.Process.ExpiredWait
 				status := string(got.Status)
 				if got.AwaitingPool {
 					status = "awaiting-pool"

@@ -620,7 +620,12 @@
     "expired-wait-relay-unrecorded",
     "expired-wait-any-error",
     "expired-wait-purpose-free-text",
-    "expired-wait-report-unsanitized"
+    "expired-wait-report-unsanitized",
+    "restore-settle-expiry-unrecorded",
+    "restore-floor-unrecorded",
+    "worker-empty-expiry-unrecorded",
+    "expired-wait-projection-incomplete",
+    "expired-wait-projection-unvalidated"
   ],
   "killed": [
     {
@@ -5188,6 +5193,36 @@
       "id": "expired-wait-report-unsanitized",
       "test": "TestReportPublishesExpiredWaitCodesOnly",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "restore-settle-expiry-unrecorded",
+      "test": "TestRestorationWaitNamesExpiredWait/settle-budget",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restore-floor-unrecorded",
+      "test": "TestRestorationWaitNamesExpiredWait/settle-floor",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "worker-empty-expiry-unrecorded",
+      "test": "TestWorkerEmptyNamesExpiredWait/window",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-projection-incomplete",
+      "test": "TestExpiredWaitProjectionIsStrict",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-projection-unvalidated",
+      "test": "TestExpiredWaitProjectionIsStrict",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

@@ -911,7 +911,7 @@
     "GuardFingerprint": "7767969cffae87b27562c95cc24254db684d40145141de0e9e8988d64279c505",
     "File": "internal/operatorgates/processes.go",
     "Function": "process",
-    "Old": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
+    "Old": "if err = g.workerEmpty(ctx, w); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
     "New": "",
     "Test": "TestProcedureOracle/21a180fe51dc4708.json/0",
     "Marker": "MUTATION:",
@@ -1435,8 +1435,8 @@
     "GuardFingerprint": "501e558982c6f8f41117c3811cb72fc94c9e4237d8984088913f3886d4ec9f82",
     "File": "internal/operatorgates/precondition.go",
     "Function": "GatePrecondition",
-    "Old": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {",
-    "New": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); false {",
+    "Old": "if err = g.workerEmpty(ctx, w); err != nil {",
+    "New": "if err = g.workerEmpty(ctx, w); false {",
     "Test": "TestPreconditionDrainingWorkerMustBeEmpty",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -6640,5 +6640,55 @@
     "Test": "TestReportPublishesExpiredWaitCodesOnly",
     "Marker": "MUTATION: expired-wait-report-free-text",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "restore-settle-expiry-unrecorded",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "restoreWorkers",
+    "Old": "settle.expired()\n\t\t\treturn fault(\"restore-unsettled\")",
+    "New": "return fault(\"restore-unsettled\")",
+    "Test": "TestRestorationWaitNamesExpiredWait/settle-budget",
+    "Marker": "MUTATION: restore-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restore-floor-unrecorded",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "restoreWorkers",
+    "Old": "return s, wait.end(err)",
+    "New": "return s, err",
+    "Test": "TestRestorationWaitNamesExpiredWait/settle-floor",
+    "Marker": "MUTATION: restore-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "worker-empty-expiry-unrecorded",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "workerEmpty",
+    "Old": "c == \"gate-deadline\" || strings.HasPrefix(c, \"precondition-failed:\")",
+    "New": "c == \"gate-deadline\"",
+    "Test": "TestWorkerEmptyNamesExpiredWait/window",
+    "Marker": "MUTATION: worker-empty-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-projection-incomplete",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "DecodeProcessEvidence",
+    "Old": ", \"~expiredWait.purpose\", \"~expiredWait.waitedMs\", \"~expiredWait.polls\", \"~expiredWait.last\"",
+    "New": "",
+    "Test": "TestExpiredWaitProjectionIsStrict",
+    "Marker": "MUTATION: expired-wait-projection-strict",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-projection-unvalidated",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "DecodeProcessEvidence",
+    "Old": "if e.ExpiredWait != nil && !e.ExpiredWait.valid() {",
+    "New": "if false {",
+    "Test": "TestExpiredWaitProjectionIsStrict",
+    "Marker": "MUTATION: expired-wait-projection-strict",
+    "Package": "./internal/operatorgates"
   }
 ]

@@ -26,6 +26,7 @@ var waitPurposes = []string{
 	"control-reconstructed", "control-reconstructed-degraded", "restart-takeover",
 	"release-worker-settled", "release-worker-alive", "release-call-restored",
 	"relay-rejoined", "relay-continuity",
+	"worker-empty", "restore-worker-settled", "restore-worker-alive",
 }
 
 var waitStates = []string{
@@ -37,6 +38,10 @@ var waitStates = []string{
 	"w2-absent", "w2-recovering", "w2-dead-with-calls", "w2-dead", "w2-address-differs", "w2-liveness-unknown", "w2-draining", "w2-live",
 	"relay-unmeasurable", "relay-same-instance", "relay-new-instance", "relay-epoch-same", "relay-epoch-advanced",
 	"relay-workers-ready", "relay-workers-missing", "relay-routes-none", "relay-packets-none",
+}
+
+func (w WaitDiagnostic) valid() bool {
+	return slices.Contains(waitPurposes, w.Purpose) && w.WaitedMS >= 0 && w.Polls >= 0 && !slices.ContainsFunc(w.Last, func(s string) bool { return !slices.Contains(waitStates, s) })
 }
 
 // Public replaces any purpose or state outside the fixed codes.

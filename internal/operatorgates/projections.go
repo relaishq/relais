@@ -8,10 +8,10 @@ import (
 )
 
 // DecodeProcessEvidence publishes only the fixed numeric fields, the three
-// declared inconclusive relay projections and the expired wait's fixed codes.
-// Arbitrary report keys are discarded.
+// declared inconclusive relay projections and an optional expired wait, which
+// must be complete and use only fixed codes. Arbitrary report keys are discarded.
 func DecodeProcessEvidence(data json.RawMessage) (e ProcessEvidence, err error) {
-	err = observe.Decode(data, &e, observe.Contract{"completedSteps", "workerRollouts", "restarts"})
+	err = observe.Decode(data, &e, observe.Contract{"completedSteps", "workerRollouts", "restarts", "~expiredWait.purpose", "~expiredWait.waitedMs", "~expiredWait.polls", "~expiredWait.last"})
 	if err != nil {
 		return e, err
 	}
@@ -41,9 +41,8 @@ func DecodeProcessEvidence(data json.RawMessage) (e ProcessEvidence, err error) 
 			return e, fault("unsupported-relay-criterion")
 		}
 	}
-	if e.ExpiredWait != nil {
-		w := e.ExpiredWait.Public()
-		e.ExpiredWait = &w
+	if e.ExpiredWait != nil && !e.ExpiredWait.valid() {
+		return e, fault("invalid-process-measurement")
 	}
 	return e, nil
 }

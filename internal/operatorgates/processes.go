@@ -200,7 +200,7 @@ func (g *procedure) process(ctx context.Context, gate operator.Gate) error {
 					return err
 				}
 			}
-			if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {
+			if err = g.workerEmpty(ctx, w); err != nil {
 				return err
 			}
 			if _, err = g.do(ctx, "worker-stop", w, ProcessExtra{Worker: w}); err != nil {
@@ -314,7 +314,7 @@ func (g *procedure) controlRestart(ctx context.Context, before controlplane.Stat
 	if err = g.emitDrain(ctx, id, moved, false); err != nil {
 		return err
 	}
-	if err = WorkerEmpty(ctx, g.ports(), owner, g.end); err != nil {
+	if err = g.workerEmpty(ctx, owner); err != nil {
 		return err
 	}
 	if _, err = g.do(ctx, "worker-stop", owner, ProcessExtra{Worker: owner}); err != nil {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/netip"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -204,13 +203,35 @@ func TestExpiredWaitPublicRefusesFreeText(t *testing.T) {
 			t.Fatal("fixed purpose refused", purpose)
 		}
 	}
-	raw := json.RawMessage(`{"completedSteps":1,"workerRollouts":0,"restarts":0,"expiredWait":{"purpose":"free text","waitedMs":5,"polls":2,"last":["control-ready","192.0.2.3"]}}`)
-	e, err := DecodeProcessEvidence(raw)
-	if err != nil || e.ExpiredWait == nil || e.ExpiredWait.Purpose != "unavailable" || !reflect.DeepEqual(e.ExpiredWait.Last, []string{"control-ready", "unavailable"}) || e.ExpiredWait.Polls != 2 {
-		t.Fatalf("MUTATION: expired-wait-free-text projection %+v %v", e.ExpiredWait, err)
+}
+
+// A process projection may omit expiredWait. When present, every field must
+// be present with a valid value, or the evidence is refused.
+func TestExpiredWaitProjectionIsStrict(t *testing.T) {
+	base := `{"completedSteps":1,"workerRollouts":0,"restarts":0`
+	valid := `{"purpose":"worker-empty","waitedMs":5,"polls":2,"last":["control-ready","w1-live"]}`
+	if e, err := DecodeProcessEvidence(json.RawMessage(base + `}`)); err != nil || e.ExpiredWait != nil {
+		t.Fatal("omitted expired wait refused", err)
 	}
-	encoded, _ := json.Marshal(e)
-	if strings.Contains(string(encoded), "192.0.2") || strings.Contains(string(encoded), "free text") {
-		t.Fatal("free text escaped the projection", string(encoded))
+	e, err := DecodeProcessEvidence(json.RawMessage(base + `,"expiredWait":` + valid + `}`))
+	if err != nil || e.ExpiredWait == nil || !reflect.DeepEqual(*e.ExpiredWait, WaitDiagnostic{Purpose: "worker-empty", WaitedMS: 5, Polls: 2, Last: []string{"control-ready", "w1-live"}}) {
+		t.Fatal("valid expired wait refused", e.ExpiredWait, err)
+	}
+	for name, wait := range map[string]string{
+		"null":           `null`,
+		"free-purpose":   `{"purpose":"free text","waitedMs":5,"polls":2,"last":[]}`,
+		"free-state":     `{"purpose":"worker-empty","waitedMs":5,"polls":2,"last":["192.0.2.3"]}`,
+		"missing-polls":  `{"purpose":"worker-empty","waitedMs":5,"last":[]}`,
+		"missing-waited": `{"purpose":"worker-empty","polls":2,"last":[]}`,
+		"missing-last":   `{"purpose":"worker-empty","waitedMs":5,"polls":2}`,
+		"null-polls":     `{"purpose":"worker-empty","waitedMs":5,"polls":null,"last":[]}`,
+		"null-last":      `{"purpose":"worker-empty","waitedMs":5,"polls":2,"last":null}`,
+		"negative":       `{"purpose":"worker-empty","waitedMs":-1,"polls":2,"last":[]}`,
+		"fraction":       `{"purpose":"worker-empty","waitedMs":5,"polls":1.5,"last":[]}`,
+		"string-count":   `{"purpose":"worker-empty","waitedMs":"5","polls":2,"last":[]}`,
+	} {
+		if _, err := DecodeProcessEvidence(json.RawMessage(base + `,"expiredWait":` + wait + `}`)); err == nil {
+			t.Fatal("MUTATION: expired-wait-projection-strict", name)
+		}
 	}
 }
