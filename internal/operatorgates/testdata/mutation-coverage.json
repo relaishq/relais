@@ -634,7 +634,24 @@
     "boundary-row-per-call",
     "excluded-boundary-label-dropped",
     "excluded-boundary-row-phase",
-    "excluded-boundary-row-event"
+    "excluded-boundary-row-event",
+    "expired-wait-floor-unrecorded",
+    "expired-wait-relay-unrecorded",
+    "expired-wait-any-error",
+    "expired-wait-purpose-free-text",
+    "expired-wait-report-unsanitized",
+    "restore-settle-expiry-unrecorded",
+    "restore-floor-unrecorded",
+    "worker-empty-expiry-unrecorded",
+    "expired-wait-projection-incomplete",
+    "expired-wait-projection-unvalidated",
+    "measure-settle-expiry-unrecorded",
+    "failover-recovery-expiry-unrecorded",
+    "collection-expiry-unrecorded",
+    "measure-expired-wait-unpublished",
+    "boundary-idle-expiry-unrecorded",
+    "collection-sleep-deadline-unrecorded",
+    "context-deadline-wait-unrecorded"
   ],
   "killed": [
     {
@@ -5286,6 +5303,108 @@
       "id": "excluded-boundary-row-event",
       "test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
       "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-floor-unrecorded",
+      "test": "TestBudgetEndedWaitKeepsCategory",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-relay-unrecorded",
+      "test": "TestGateWaitsNameExpiredWait/relay-continuity-floor",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-any-error",
+      "test": "TestGateWaitsNameExpiredWait/restart-takeover-unknown",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-purpose-free-text",
+      "test": "TestExpiredWaitPublicRefusesFreeText",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-report-unsanitized",
+      "test": "TestReportPublishesExpiredWaitCodesOnly",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "restore-settle-expiry-unrecorded",
+      "test": "TestRestorationWaitNamesExpiredWait/settle-budget",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restore-floor-unrecorded",
+      "test": "TestRestorationWaitNamesExpiredWait/settle-floor",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "worker-empty-expiry-unrecorded",
+      "test": "TestWorkerEmptyNamesExpiredWait/window",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-projection-incomplete",
+      "test": "TestExpiredWaitProjectionIsStrict",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-projection-unvalidated",
+      "test": "TestExpiredWaitProjectionIsStrict",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measure-settle-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-recovery-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/failover-primary-recovered",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "collection-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/collection-complete",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measure-expired-wait-unpublished",
+      "test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-idle-expiry-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/boundary-idle",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "collection-sleep-deadline-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/collection-complete/sleep-deadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "context-deadline-wait-unrecorded",
+      "test": "TestGateWaitsNameExpiredWait/worker-alive-sleep-deadline",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

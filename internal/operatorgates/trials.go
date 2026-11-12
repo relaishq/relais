@@ -86,22 +86,22 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 		return r, err
 	}
 	wait := func(purpose string, test func(StepResult) bool) (StepResult, error) {
+		w := g.startWait(purpose)
 		for g.p.Clock.Elapsed() < g.end {
-			if g.p.Wait != nil {
-				g.p.Wait(purpose)
-			}
+			w.poll()
 			r, err := status()
 			if err != nil {
-				return r, err
+				return r, w.end(err)
 			}
+			w.observe(controlState(r.Status, g.c.Parameters.Workers))
 			if test(r) {
 				return r, nil
 			}
 			if err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil {
-				return r, err
+				return r, w.end(err)
 			}
 		}
-		return StepResult{}, fault("gate-deadline")
+		return StepResult{}, w.end(fault("gate-deadline"))
 	}
 	for _, batch := range []struct {
 		kind  string

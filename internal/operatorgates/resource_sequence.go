@@ -341,7 +341,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 					out = runResourceAdmission(ctx, s, runtime, caller, boundary, launchers, end, c.Token, &result)
 				case operator.Failover:
 					m := RunMeasureGate(ctx, gate, process, runtime.measurePorts(caller, 1), end)
-					out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media}
+					out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{ExpiredWait: m.ExpiredWait}}
 				default:
 					out = RunProcessGate(ctx, gate, process, p, end)
 				}

@@ -45,20 +45,23 @@ func (g *procedure) releaseStatus(ctx context.Context, allowDown string) (contro
 	}
 	return s, nil
 }
-func (g *procedure) releaseWait(ctx context.Context, allowDown string, test func(controlplane.Status) bool) error {
+func (g *procedure) releaseWait(ctx context.Context, purpose, allowDown string, test func(controlplane.Status) bool) error {
+	w := g.startWait(purpose)
 	for g.p.Clock.Elapsed() < g.end {
+		w.poll()
 		s, err := g.releaseStatus(ctx, allowDown)
 		if err != nil {
-			return err
+			return w.end(err)
 		}
+		w.observe(controlState(s, g.c.Parameters.Workers))
 		if test(s) {
 			return nil
 		}
 		if err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil {
-			return err
+			return w.end(err)
 		}
 	}
-	return fault("gate-deadline")
+	return w.end(fault("gate-deadline"))
 }
 func (g *procedure) settle(ctx context.Context) error {
 	if g.p.Clock.Elapsed()+CalibrationWarmup >= g.end {
@@ -98,13 +101,13 @@ func (g *procedure) releaseWorkers(ctx context.Context) (int, error) {
 			}
 			moves++
 		}
-		if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {
+		if err = g.workerEmpty(ctx, w); err != nil {
 			return moves, err
 		}
 		if _, err = g.do(ctx, "worker-stop", w, ProcessExtra{Worker: w}); err != nil {
 			return moves, err
 		}
-		if err = g.releaseWait(ctx, w, func(s controlplane.Status) bool { return settled(s, w) }); err != nil {
+		if err = g.releaseWait(ctx, "release-worker-settled", w, func(s controlplane.Status) bool { return settled(s, w) }); err != nil {
 			return moves, err
 		}
 		if _, err = g.do(ctx, "replace", "shared", ProcessExtra{Worker: w}); err != nil {
@@ -113,7 +116,7 @@ func (g *procedure) releaseWorkers(ctx context.Context) (int, error) {
 		if _, err = g.do(ctx, "worker-start", w, ProcessExtra{Worker: w}); err != nil {
 			return moves, err
 		}
-		if err = g.releaseWait(ctx, w, func(s controlplane.Status) bool { return alive(s, w, g.c.Parameters.Workers) }); err != nil {
+		if err = g.releaseWait(ctx, "release-worker-alive", w, func(s controlplane.Status) bool { return alive(s, w, g.c.Parameters.Workers) }); err != nil {
 			return moves, err
 		}
 		g.evidence.WorkerRollouts++
@@ -144,18 +147,26 @@ func (g *procedure) relay(ctx context.Context, strict bool, original int) error 
 		return err
 	}
 	var after StepResult
+	purpose := "relay-rejoined"
+	if strict {
+		purpose = "relay-continuity"
+	}
+	w := g.startWait(purpose)
+	rejoined := false
 	for g.p.Clock.Elapsed() < g.end {
+		w.poll()
 		r, e := g.do(ctx, "relay-inspect", "relay", ProcessExtra{})
 		// An unknown result latches even inside an observation loop. Only a
 		// definite pure-read failure may be observed again.
 		if e != nil {
 			reason, category := readFailure(e)
 			if g.unknown || reason == "" || category == "observation" {
-				return e
+				return w.end(e)
 			}
 		} else {
 			after = r
 			b := r.Inspection.Status
+			w.observe(relayState(a, b))
 			if strict {
 				if b.Stats.SelfFences > 0 {
 					return fault("known-relay-failure")
@@ -164,15 +175,22 @@ func (g *procedure) relay(ctx context.Context, strict bool, original int) error 
 					return fault("missing-relay-evidence")
 				}
 				if b.Instance != a.Instance && b.Continuity.Epoch > a.Continuity.Epoch && b.Stats.Workers == 2 && b.Stats.RoutesRestored >= 1 && b.Stats.WorkerPackets > 0 {
+					rejoined = true
 					break
 				}
 			} else if b.Stats.Workers == 2 {
+				rejoined = true
 				break
 			}
 		}
 		if err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil {
-			return err
+			return w.end(err)
 		}
+	}
+	// The gate end passed before the relay rejoined; the checks below keep
+	// their own codes.
+	if !rejoined {
+		w.expired()
 	}
 	b := after.Inspection.Status
 	if b.Stats.SelfFences > 0 {
@@ -211,7 +229,7 @@ func (g *procedure) releaseControl(ctx context.Context) error {
 	if _, err = g.do(ctx, "control-start", "shared", ProcessExtra{}); err != nil {
 		return err
 	}
-	err = g.releaseWait(ctx, "", func(s controlplane.Status) bool {
+	err = g.releaseWait(ctx, "release-call-restored", "", func(s controlplane.Status) bool {
 		return slices.ContainsFunc(s.Calls, func(c controlplane.CallStatus) bool {
 			return c.ID == before.Calls[0].ID && c.Owner == before.Calls[0].Owner && c.Epoch == before.Calls[0].Epoch
 		})

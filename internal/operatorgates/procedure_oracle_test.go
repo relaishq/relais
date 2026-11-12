@@ -337,6 +337,9 @@ func TestProcedureOracle(t *testing.T) {
 					// and add its new fixed restoration reason.
 					want.Reason = "restore-failed"
 				}
+				// expiredWait is a later diagnostic the oracle never recorded; the
+				// recorded fields must still match exactly.
+				want.Process.ExpiredWait = got.Process.ExpiredWait
 				status := string(got.Status)
 				if got.AwaitingPool {
 					status = "awaiting-pool"
@@ -503,6 +506,9 @@ func TestReleaseOracle(t *testing.T) {
 					Media    *MediaSummary   `json:"media"`
 				}
 				_ = json.Unmarshal(root.res.Value, &want)
+				// expiredWait is a later diagnostic the oracle never recorded; the
+				// recorded fields must still match exactly.
+				want.Process.ExpiredWait = got.Process.ExpiredWait
 				status := string(got.Status)
 				if got.AwaitingPool {
 					status = "awaiting-pool"
@@ -820,7 +826,8 @@ func TestBoundaryOracle(t *testing.T) {
 				var end int64
 				_ = json.Unmarshal(root.req.Inputs[1], &end)
 				o := newProcedureOracle(t, root.req, root.res, root.events, "measure.waitBoundaryIdle.arg0")
-				actual := WaitBoundaryIdle(context.Background(), o.ports(), time.Duration(end)*time.Millisecond)
+				var expired *WaitDiagnostic
+				actual := WaitBoundaryIdle(context.Background(), o.ports(), time.Duration(end)*time.Millisecond, &expired)
 				if code(actual) != code(oracleError(root.res)) {
 					t.Fatalf("MUTATION: boundary-oracle error got %v want %v", actual, oracleError(root.res))
 				}

@@ -72,7 +72,7 @@ func GatePrecondition(ctx context.Context, c *ProcessConfig, p ProcedurePorts, e
 			continue
 		}
 		if observe.Draining(s, w) {
-			if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {
+			if err = g.workerEmpty(ctx, w); err != nil {
 				if _, category := readFailure(err); category != "" {
 					return &ProcedureError{Code: "precondition-unhealthy", Category: category}
 				}
