@@ -89,6 +89,12 @@ jobs:
           if [ -d runtime/operator-report ]; then
             sudo -n chown -R "$(id -u):$(id -g)" runtime/operator-report
           fi
+      # Reads only report.json and clock-selection-status.json; never changes the job result.
+      - name: Write result summary to the run page
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 scripts/ci/rehearsal_summary.py runtime/operator-report >> "$GITHUB_STEP_SUMMARY"
       - name: Upload sanitized report, media evidence and redacted host diagnostics
         if: always()
         uses: actions/upload-artifact@v4
