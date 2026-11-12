@@ -236,6 +236,10 @@ type Config struct {
 	// LoggerFactory defaults to Pion's default logger factory.
 	LoggerFactory logging.LoggerFactory
 
+	// beforeExportDrain, when set, runs as MoveSessionAfterExport starts,
+	// before any lock. Tests use it to interleave a racing move.
+	beforeExportDrain func(sessionID string)
+
 	// beforeApply, when set, runs after a session's owner has been read and
 	// before the result is applied. Tests use it to hold a result back.
 	beforeApply func(sessionID string)
@@ -642,25 +646,33 @@ func (r *Relay) invalidateCleanup(id string) {
 // owner's legitimate output is never dropped as unrouted. A missing
 // acknowledgement waits at most OutputDrainTimeout, then moves as before.
 // Without such a hold it is MoveSessionAtEpoch. A stale epoch is refused
-// before the drain, so it leaves the hold as it was.
+// under forwardMu, which every move holds, before the drain touches a hold.
 func (r *Relay) MoveSessionAfterExport(sessionID string, from, to netip.AddrPort, epoch uint64) error {
-	if r.flows.staleMove(sessionID, epoch) {
-		return ErrStaleMove
+	if r.cfg.beforeExportDrain != nil {
+		r.cfg.beforeExportDrain(sessionID)
 	}
-	r.drainExportedOutput(sessionID, unmap(from), unmap(to))
+	if err := r.drainExportedOutput(sessionID, unmap(from), unmap(to), epoch); err != nil {
+		return err
+	}
 	return r.MoveSessionAtEpoch(sessionID, from, to, epoch)
 }
 
-func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
+// drainExportedOutput returns ErrStaleMove only; drain failures fall back to
+// the plain move.
+func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort, epoch uint64) error {
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return
+		return nil
 	}
 	r.forwardMu.Lock()
+	if r.flows.staleMove(id, epoch) {
+		r.forwardMu.Unlock()
+		return ErrStaleMove
+	}
 	h := r.holds[id]
 	if h == nil || h.replay || !h.acknowledged || !from.IsValid() || h.source != from || from == to || h.drained != nil || !r.registered(from) {
 		r.forwardMu.Unlock()
-		return
+		return nil
 	}
 	h.drainNonce = binary.BigEndian.Uint64(nonce[:])
 	drained := make(chan struct{})
@@ -668,7 +680,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), r.barrierEndpoint(from))
 	r.forwardMu.Unlock()
 	if err != nil {
-		return
+		return nil
 	}
 	timer := time.NewTimer(r.cfg.OutputDrainTimeout)
 	defer timer.Stop()
@@ -678,7 +690,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 		select {
 		case <-drained:
 			r.outputDrains.Add(1)
-			return
+			return nil
 		case <-resend.C:
 			// A lost marker or acknowledgement is resent with the same nonce.
 			r.forwardMu.Lock()
@@ -688,21 +700,23 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 			r.forwardMu.Unlock()
 		case <-timer.C:
 			r.outputDrainExpired.Add(1)
-			return
+			return nil
 		case <-h.released:
-			return
+			return nil
 		case <-r.ctx.Done():
-			return
+			return nil
 		}
 	}
 }
 
 // MoveSessionAtEpoch carries the transferred owner lease epoch. It distinguishes
 // a fresh receiver at a reused address from idempotent route confirmation.
-// Moves are ordered by epoch: one older than an epoch already applied to the
-// session returns ErrStaleMove and changes nothing; an equal epoch is
-// idempotent. Epoch zero is for in-process callers without a store and is
-// never ordered.
+// Non-zero epochs are ordered: one older than a non-zero epoch already
+// applied to the session returns ErrStaleMove and changes nothing; an equal
+// epoch is idempotent. Epoch zero is an unordered move: it is never refused
+// and never changes the recorded epoch. In-process callers without a store
+// and released control planes (v0.3.1 sends zero for planned moves) use it,
+// so the ordering guarantee covers only non-zero epochs.
 func (r *Relay) MoveSessionAtEpoch(sessionID string, from, to netip.AddrPort, epoch uint64) error {
 	from, to = unmap(from), unmap(to)
 	if sessionID == "" || from.IsValid() && !r.registered(from) || !r.registered(to) {

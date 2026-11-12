@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,4 +230,81 @@ func TestStaleMoveAfterExportLeavesHold(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, <-done)
 	require.EqualValues(t, 1, sys.relay.Stats().OutputDrains)
+}
+
+// #443 review: a move-after-export that was current when it started can
+// become stale before it reaches the hold. Pause it at entry, apply a newer
+// move and a new acknowledged hold from the same source, then resume it: it
+// must be refused without marking that hold drained, so the newer move still
+// drains the source's pre-fence output itself.
+func TestStaleMoveAfterExportCannotClaimNewerHold(t *testing.T) {
+	var armed atomic.Bool
+	reached, resume := make(chan struct{}), make(chan struct{})
+	sys := startTestRelay(t, Config{HoldTimeout: time.Hour, beforeExportDrain: func(string) {
+		if armed.CompareAndSwap(true, false) {
+			close(reached)
+			<-resume
+		}
+	}})
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	require.NoError(t, sys.relay.MoveSessionAtEpoch(sessionA, a.addr(), b.addr(), 5))
+
+	armed.Store(true)
+	stale := make(chan error, 1)
+	go func() { stale <- sys.relay.MoveSessionAfterExport(sessionA, b.addr(), a.addr(), 5) }()
+	<-reached
+	// A newer control confirms a fresh receiver at B and holds it again.
+	require.NoError(t, sys.relay.MoveSessionAtEpoch(sessionA, b.addr(), b.addr(), 6))
+	beginHold(t, sys, b, sessionA)
+	close(resume)
+	require.ErrorIs(t, <-stale, ErrStaleMove)
+	b.expectNothing(t)
+
+	done := make(chan error, 1)
+	go func() { done <- sys.relay.MoveSessionAfterExport(sessionA, b.addr(), a.addr(), 7) }()
+	datagram, ok := receive(t, b.conn, receiveTimeout)
+	require.True(t, ok, "the newer move drains the source itself")
+	nonce, ack, valid := relayleg.ParseBarrier(datagram)
+	require.True(t, valid)
+	require.False(t, ack)
+	_, err := b.conn.WriteToUDPAddrPort(relayleg.Barrier(nonce, true), sys.relay.WorkerAddr())
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	require.EqualValues(t, 1, sys.relay.Stats().OutputDrains)
+	require.Zero(t, sys.relay.Stats().OutputDrainTimeouts)
+}
+
+// #443 review: released control planes send epoch zero on planned moves.
+// Over HTTP a zero-epoch move is applied unordered and leaves the recorded
+// epoch alone, so a lower non-zero epoch is still refused afterwards.
+func TestZeroEpochHTTPMoveIsUnordered(t *testing.T) {
+	sys := startTestRelay(t, Config{})
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	require.NoError(t, sys.relay.MoveSessionAtEpoch(sessionA, a.addr(), b.addr(), 3))
+	server := httptest.NewServer(sys.relay.PrivateHandler())
+	defer server.Close()
+	move := func(path string, body RouteRequest) error {
+		return privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/sessions/"+sessionA+"/"+path, body, nil, RemoteErrors)
+	}
+	recorded := func() uint64 {
+		sys.relay.flows.mu.Lock()
+		defer sys.relay.flows.mu.Unlock()
+		return sys.relay.flows.moveEpochs[sessionA]
+	}
+	require.NoError(t, move("move", RouteRequest{From: b.addr(), To: a.addr()}), "a released control's zero-epoch move")
+	caller.send(t, media, sys.relay.PublicAddr())
+	a.expect(t, caller.addr(), media)
+	require.EqualValues(t, 3, recorded())
+	require.NoError(t, move("move-after-export", RouteRequest{From: a.addr(), To: b.addr()}))
+	caller.send(t, media, sys.relay.PublicAddr())
+	b.expect(t, caller.addr(), media)
+	require.EqualValues(t, 3, recorded())
+	require.ErrorIs(t, move("move", RouteRequest{From: b.addr(), To: a.addr(), Epoch: 2}), ErrStaleMove)
+	caller.send(t, media, sys.relay.PublicAddr())
+	b.expect(t, caller.addr(), media)
+	a.expectNothing(t)
 }

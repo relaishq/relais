@@ -301,6 +301,11 @@ Control error classes (codes preserve the existing HTTP status):
 | definite | `relay_switched`, `relay_change_rolled_back`, `restart_mismatch`, `relay_unsupported`, `relay_conflict`, `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `bridge_revoked`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `dtls_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. bridge_revoked requires a replacement generation; pending activation uses retryable export_not_flushed. |
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 
+`stale_move` means the relay refused a call route move because a newer move
+already applied to the call; the call stays where the newer move put it. Route
+moves are ordered only by a non-zero lease epoch. A move from a released
+control plane carries epoch zero and is applied unordered.
+
 `control_order` is retryable while an earlier sequence from this controller is
 unconfirmed (neither a checkpointed 200 nor `control_stale`). A takeover can
 lose a 202-only start/stop pair and receive the stop retry first. Retry both

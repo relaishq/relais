@@ -188,9 +188,15 @@ func TestControlStaleMoveIsDefiniteRefusal(t *testing.T) {
 		id, _, err := p.Create(ctx, "offer", "a")
 		require.NoError(t, err)
 		b.resumeError = true
-		res, err := p.Move(ctx, id, "b")
+		// Through the operator move route: the serialized codes must name the
+		// refusal and the rolled-back move must not read as uncertain.
+		server := httptest.NewServer(p.Handler())
+		defer server.Close()
+		var res MoveResult
+		err = privateapi.DoResult(ctx, server.Client(), server.URL, http.MethodPost, "/calls/"+id+"/move?to=b", nil, &res, RemoteErrors)
 		require.ErrorContains(t, err, "relay restore failed")
-		require.ErrorContains(t, err, relay.ErrStaleMove.Error())
+		require.ErrorContains(t, err, "injected resume failure", "the move failure cause is kept")
+		require.ErrorIs(t, err, relay.ErrStaleMove)
 		require.NotErrorIs(t, err, privateapi.ErrUncertain)
 		require.True(t, res.Result.RolledBack)
 		require.True(t, a.runs(id))
