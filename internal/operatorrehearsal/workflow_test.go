@@ -20,6 +20,8 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 			RunsOn string `yaml:"runs-on"`
 			Steps  []struct {
 				Name, Run, Uses string
+				If              string `yaml:"if"`
+				ContinueOnError bool   `yaml:"continue-on-error"`
 				Env             map[string]string
 				With            map[string]any
 			}
@@ -45,7 +47,16 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		t.Fatal(job.RunsOn)
 	}
 	tokens, uploads, execute := 0, 0, false
+	chowned, summaries := false, 0
 	for _, step := range job.Steps {
+		chowned = chowned || strings.Contains(step.Run, "chown -R") && strings.Contains(step.Run, "runtime/operator-report")
+		if strings.Contains(step.Run, "scripts/ci/rehearsal_summary.py") {
+			summaries++
+			// The summary reads the chowned report on every outcome and never changes the job result.
+			if !chowned || step.If != "always()" || !step.ContinueOnError || !strings.Contains(step.Run, `>> "$GITHUB_STEP_SUMMARY"`) {
+				t.Fatal("summary step must follow chown, run always and not change the job result", step.Name)
+			}
+		}
 		for key, value := range step.Env {
 			if strings.Contains(value, "github.token") {
 				tokens++
@@ -63,8 +74,8 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		}
 		execute = execute || strings.Contains(step.Run, "make operator-rehearsal OPERATOR_REHEARSAL_RUNNER=") && strings.Contains(step.Run, "-prepared")
 	}
-	if tokens != 1 || uploads != 1 || !execute || strings.Contains(string(raw), "secrets.") {
-		t.Fatal(tokens, uploads, execute)
+	if tokens != 1 || uploads != 1 || !execute || summaries != 1 || strings.Contains(string(raw), "secrets.") {
+		t.Fatal(tokens, uploads, execute, summaries)
 	}
 	paths := w.On["pull_request"].(map[string]any)["paths"].([]any)
 	for _, expected := range []string{"internal/operator*/**", "deploy/aws/**", "cmd/relais-gates/**", "pkg/operator/**", "scripts/ci/gate-mutation/**", ".github/workflows/operator-rehearsal.yml"} {

@@ -18,14 +18,9 @@ func PublicPhaseCause(s string) string {
 // PublicDiagnostics copies diagnostic inventories and removes arbitrary labels.
 func (p Summary) PublicDiagnostics() Summary {
 	copy := p
-	copy.UndecidedMetrics = append([]UndecidedMetric{}, p.UndecidedMetrics...)
-	for i := range copy.UndecidedMetrics {
-		row := &copy.UndecidedMetrics[i]
-		row.Metric = PublicMetric(row.Metric)
-		row.Causes = append([]string{}, row.Causes...)
-		for j, cause := range row.Causes {
-			row.Causes[j] = PublicTimingCause(cause)
-		}
+	copy.UndecidedMetrics = publicMetricRows(p.UndecidedMetrics)
+	if p.BoundaryMetrics != nil {
+		copy.BoundaryMetrics = publicMetricRows(p.BoundaryMetrics)
 	}
 	copy.PhaseDiagnostics = append([]PhaseDiagnostic{}, p.PhaseDiagnostics...)
 	for i := range copy.PhaseDiagnostics {
@@ -36,4 +31,17 @@ func (p Summary) PublicDiagnostics() Summary {
 		copy.PhaseDiagnostics[i].Issue = copy.PhaseDiagnostics[i].Issue.Public(reflect.TypeFor[MediaInput](), reflect.TypeFor[loadgen.Message]())
 	}
 	return copy
+}
+
+func publicMetricRows(rows []UndecidedMetric) []UndecidedMetric {
+	out := append([]UndecidedMetric{}, rows...)
+	for i := range out {
+		row := &out[i]
+		row.Metric = PublicMetric(row.Metric)
+		row.Causes = append([]string{}, row.Causes...)
+		for j, cause := range row.Causes {
+			row.Causes[j] = PublicTimingCause(cause)
+		}
+	}
+	return out
 }

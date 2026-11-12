@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+	"net"
 	"net/netip"
 	"os"
 	"strings"
@@ -62,4 +64,33 @@ func TestProcessEnvDropsInheritedRedisSettings(t *testing.T) {
 	}
 	require.Equal(t, map[string]string{"RELAIS_REDIS_ADDR": "127.0.0.1:16379", "RELAIS_REDIS_PREFIX": "owned-prefix:"}, redisSettings)
 	require.Contains(t, env, "RELAIS_TEST_CHILD_MARKER=preserved")
+}
+
+// #413: control failed to bind because its pre-picked port equalled the relay
+// HTTP port the relay had already bound. Every fixed endpoint must bind while
+// the earlier ones are held. The deterministic check is in clusterprocess.
+func TestPairTopologyEndpointsBindTogether(t *testing.T) {
+	topology, err := newPairTopology(nil, t.TempDir(), nil, "", 0, 0)
+	require.NoError(t, err)
+	ports := map[string]bool{}
+	bind := func(network, addr string) {
+		_, port, err := net.SplitHostPort(addr)
+		require.NoError(t, err)
+		require.False(t, ports[port], "port %s picked twice", port)
+		ports[port] = true
+		var socket io.Closer
+		if network == "udp" {
+			socket, err = net.ListenPacket(network, addr)
+		} else {
+			socket, err = net.Listen(network, addr)
+		}
+		require.NoError(t, err, "%s %s", network, addr)
+		t.Cleanup(func() { _ = socket.Close() })
+	}
+	for _, addr := range []string{topology.relayMedia, topology.relayLeg, topology.workerMedia[0], topology.workerMedia[1]} {
+		bind("udp", addr)
+	}
+	for _, addr := range []string{topology.relayHTTP, topology.controlAddr, topology.signalAddr, topology.workerHTTP[0], topology.workerHTTP[1]} {
+		bind("tcp", addr)
+	}
 }

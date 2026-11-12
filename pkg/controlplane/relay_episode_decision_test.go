@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -622,17 +623,258 @@ func TestFailedProposalCleanupIsRetried(t *testing.T) {
 	c, err := p.lookup(id)
 	require.NoError(t, err)
 	first := armEpisode(t, p, c, 10*time.Second)
+	// Cleanup follows a decided episode. A record left open under the first
+	// token would be adopted by the next watcher, which journals that token
+	// again (issue #436).
+	a, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+	require.NoError(t, err)
+	done := rec
+	episode := *rec.Episode
+	episode.Seq, episode.Outcome = episode.Seq+1, sessionstore.RelayEpisodeCompleted
+	done.Episode = &episode
+	require.NoError(t, confirmations(store).CASRelayConfirmation(context.Background(), id, a, rec, done, time.Time{}, time.Time{}))
 	store.fail.Store(true)
 	p.cleanupRelayEpisode(context.Background(), c, first)
 	store.fail.Store(false)
 	next, err := p.relayRecoveryEpisode(context.Background(), c, time.Now())
 	require.NoError(t, err, "one failed delete must not block every later recovery")
 	require.NotSame(t, first, next)
+	require.NotEqual(t, first.proposal().Token, next.proposal().Token, "the old proposal is not reloaded")
+	select { // the next watcher has made its begin decision
+	case <-next.armed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("next episode never armed")
+	}
 	records, err := store.ControlIntents(context.Background())
 	require.NoError(t, err)
-	for _, r := range records {
-		require.NotEqual(t, first.proposal().Token, r.Token, "the old proposal is deleted")
+	require.Len(t, records, 1, "the old proposal is deleted")
+	require.Equal(t, next.proposal().Token, records[0].Token)
+}
+
+// beginGate holds an episode's begin until release closes; passed closes once
+// that write returned. With holdRead, the first record read made while begin
+// is held releases it and returns only once the episode armed.
+type beginGate struct {
+	*sessionstore.Memory
+	on, holdRead                 atomic.Bool
+	held, release, passed, armed chan struct{}
+	holdOnce, releaseOnce        sync.Once
+}
+
+func (s *beginGate) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	if s.on.Load() && to.Episode.Open() && !from.Episode.Open() {
+		held := false
+		s.holdOnce.Do(func() { close(s.held); held = true })
+		if held {
+			<-s.release
+			defer close(s.passed)
+		}
 	}
+	return s.Memory.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+}
+
+func (s *beginGate) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	a, rec, err := s.Memory.RelayConfirmation(ctx, id)
+	select {
+	case <-s.held:
+		if s.holdRead.Load() {
+			s.releaseOnce.Do(func() {
+				close(s.release)
+				<-s.armed
+			})
+		}
+	default:
+	}
+	return a, rec, err
+}
+
+// confirmedRelayCall returns a call whose planned relay change to r2 is
+// confirmed with no episode open (seq advanced).
+func confirmedRelayCall(t *testing.T, store sessionstore.Store) (*Plane, *call) {
+	t.Helper()
+	p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+	stopRelayRecoveries(t, p)
+	c, err := p.lookup(id)
+	require.NoError(t, err)
+	now := time.Now()
+	lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
+		Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+	committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
+	require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, committed))
+	_, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+	require.NoError(t, err)
+	require.NoError(t, p.confirmRelaySuccess(context.Background(), id, committed, rec))
+	return p, c
+}
+
+// onWatchEvents closes the returned channel at the call's first named event.
+func onWatchEvents(t *testing.T, c *call, names ...string) chan struct{} {
+	t.Helper()
+	seen := make(chan struct{})
+	var once sync.Once
+	hook := func(from *call, name string) {
+		if from == c && slices.Contains(names, name) {
+			once.Do(func() { close(seen) })
+		}
+	}
+	relayWatchHooks.Store(&hook)
+	t.Cleanup(func() { relayWatchHooks.Store(nil) })
+	return seen
+}
+
+// completionRace sets up R2 review of #436: a planned change's settlement
+// confirms with no episode open (seq advances), then its recovery episode is
+// proposed and its watcher's begin write is held in flight by the gate.
+func completionRace(t *testing.T, holdRead bool) (*beginGate, *Plane, *call, *relayEpisode) {
+	t.Helper()
+	store := &beginGate{Memory: sessionstore.NewMemory(), held: make(chan struct{}), release: make(chan struct{}), passed: make(chan struct{})}
+	store.holdRead.Store(holdRead)
+	p, c := confirmedRelayCall(t, store)
+	store.armed = onWatchEvents(t, c, "armed")
+	store.on.Store(true)
+	e, err := p.relayRecoveryEpisode(context.Background(), c, time.Now())
+	require.NoError(t, err)
+	<-store.held
+	return store, p, c, e
+}
+
+// Completion reads the record before the episode begins; the episode then
+// begins and arms before completion acts. Completion must not close an open
+// episode: its watcher keeps it.
+func TestCompletionNeverClosesEpisodeThatBeganMeanwhile(t *testing.T) {
+	store, p, c, e := completionRace(t, true)
+	err := p.completeRelayEpisode(context.Background(), c, e)
+	require.ErrorIs(t, err, ErrMoveInProgress)
+	require.True(t, episodeOf(t, store, c.id).Open())
+	require.False(t, e.completed.Load(), "an open episode keeps its watcher")
+}
+
+// Completion that acts before the episode begins fences its proposal: the
+// begin is refused, and no episode opens after the confirmed change.
+func TestCompletionFencesUnbegunProposal(t *testing.T) {
+	store, p, c, e := completionRace(t, false)
+	require.NoError(t, p.completeRelayEpisode(context.Background(), c, e))
+	close(store.release)
+	<-store.passed
+	require.False(t, episodeOf(t, store, c.id).Open(), "the fenced proposal never begins")
+	records, err := store.ControlIntents(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, records)
+}
+
+// #464's order, as on main: an episode whose begin committed before completion
+// keeps the call (ErrMoveInProgress) and its watcher. Completion never
+// completes it: the earlier confirmation is not its own.
+func TestCompletionLeavesEpisodeBegunBeforeIt(t *testing.T) {
+	store, p, c, e := completionRace(t, false)
+	close(store.release)
+	<-store.armed
+	require.ErrorIs(t, p.completeRelayEpisode(context.Background(), c, e), ErrMoveInProgress)
+	require.True(t, episodeOf(t, store, c.id).Open())
+	require.False(t, e.completed.Load(), "an open episode keeps its watcher")
+}
+
+// watcherGate parks an episode's watcher before its first begin read (parked
+// closes) until release closes; moved closes once the released watcher took
+// its step. With holdRead, completion's record read releases the watcher and
+// returns after that step. With holdFence, completion's fence write commits
+// and its reply waits the same way.
+type watcherGate struct {
+	*sessionstore.Memory
+	on, holdRead, holdFence atomic.Bool
+	reads                   atomic.Int32
+	parked, release, moved  chan struct{}
+	releaseOnce             sync.Once
+}
+
+func (s *watcherGate) step() {
+	s.releaseOnce.Do(func() { close(s.release) })
+	<-s.moved
+}
+
+func (s *watcherGate) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	if s.on.Load() && s.reads.Add(1) == 2 { // 1 reads the proposal's seq; 2 is the watcher's begin
+		close(s.parked)
+		<-s.release
+	} else if s.holdRead.CompareAndSwap(true, false) {
+		defer s.step()
+	}
+	return s.Memory.RelayConfirmation(ctx, id)
+}
+
+func (s *watcherGate) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	err := s.Memory.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+	if !to.Episode.Open() && s.holdFence.CompareAndSwap(true, false) {
+		s.step()
+	}
+	return err
+}
+
+// parkedWatcher proposes a recovery episode after a confirmed change and
+// parks its watcher before the first begin. With lost, the call's current
+// slot is lost, so a refused proposal would be re-proposed. The watcher's
+// step is the first of the named events.
+func parkedWatcher(t *testing.T, lost bool, step ...string) (*watcherGate, *Plane, *call, *relayEpisode) {
+	t.Helper()
+	store := &watcherGate{Memory: sessionstore.NewMemory(), parked: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { store.releaseOnce.Do(func() { close(store.release) }) })
+	p, c := confirmedRelayCall(t, store)
+	store.moved = onWatchEvents(t, c, step...)
+	if lost {
+		p.mu.Lock()
+		slot := p.relaySet["r2"]
+		slot.lost = true
+		p.relaySet["r2"] = slot
+		p.mu.Unlock()
+	}
+	store.on.Store(true)
+	e, err := p.relayRecoveryEpisode(context.Background(), c, time.Now())
+	require.NoError(t, err)
+	<-store.parked
+	return store, p, c, e
+}
+
+func requireRetired(t *testing.T, store *watcherGate, c *call, e *relayEpisode, token string) {
+	t.Helper()
+	require.False(t, episodeOf(t, store, c.id).Open(), "no episode opens after the confirmed change")
+	require.True(t, e.completed.Load())
+	require.Equal(t, token, e.proposal().Token, "completion cleans up the proposal it decided on")
+	records, err := store.ControlIntents(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, records)
+}
+
+// Completion has read the record; the watcher then tries its first begin.
+// The begin is held, not issued: completion never loses the call to an
+// episode that had not begun when it decided (#464 is no more reachable).
+func TestCompletionHoldsBeginNotYetIssued(t *testing.T) {
+	store, p, c, e := parkedWatcher(t, false, "armed", "held")
+	token := e.proposal().Token
+	store.holdRead.Store(true)
+	require.NoError(t, p.completeRelayEpisode(context.Background(), c, e))
+	requireRetired(t, store, c, e, token)
+}
+
+// Completion's fence commits but its reply is delayed. The current slot is
+// lost, so the watcher finds its proposal stale and would re-propose, begin
+// and arm before the reply returns. The re-proposal is held: cleanup never
+// closes an open episode or deletes a newer proposal.
+func TestCompletionHoldsReproposalWhileFenceReplyIsDelayed(t *testing.T) {
+	store, p, c, e := parkedWatcher(t, true, "armed", "held")
+	token := e.proposal().Token
+	store.holdFence.Store(true)
+	require.NoError(t, p.completeRelayEpisode(context.Background(), c, e))
+	requireRetired(t, store, c, e, token)
+}
+
+// A watcher that finds its proposal stale only after completion cleaned up
+// does not journal a replacement for the closed episode.
+func TestClosedEpisodeIsNotReproposed(t *testing.T) {
+	store, p, c, e := parkedWatcher(t, true, "armed", "held", "reproposed")
+	token := e.proposal().Token
+	require.NoError(t, p.completeRelayEpisode(context.Background(), c, e))
+	store.step()
+	requireRetired(t, store, c, e, token)
 }
 
 // seqFault fails confirmation-record reads while fail is set.

@@ -6,6 +6,11 @@ local Redis setup, see [Redis and tests](../../CONTRIBUTING.md#redis-and-tests).
 `make check` runs the PR `quality` and `unit-tests` jobs locally
 ([local PR checks](../../scripts/dev/README.md)).
 
+Final validation is CI on the exact revision that merges: the PR head, or the
+batch head when several PRs are tested and merged as one batch. Before handover,
+run `make check-quality` and the changed packages' tests locally; the full race
+suites count as final from that CI run.
+
 ## Pull requests
 
 PR CI runs lint (v2.14.0), build, vet, race tests for every package except
@@ -58,3 +63,7 @@ The separate `operator-rehearsal.yml` job adds a clock admission step (152 secon
 after negative controls restore. It archives sanitized evidence, policy, receipt
 and status; report/log print bounds/counts or refusal. Selection is recorded only
 ([admission details](operator-gates.md#rehearsal-admission-receipt-slice-5c)).
+On every outcome, `scripts/ci/rehearsal_summary.py` writes the verdict, gate and
+media statuses, timing-undecided rows, untrusted caller event counts and the clock
+selection cause to the run page. It reads only `report.json` and
+`clock-selection-status.json` and never changes the job result.
