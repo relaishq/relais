@@ -470,6 +470,7 @@ var controlErrors = map[string]controlErrorPolicy{
 	"replay_in_progress":       {"retryable", "route replay in progress; retry the identical message"},
 	"replay_not_ready":         {"retryable", "route replay not ready; retry the identical message"},
 	"replay_target_changed":    {"retryable", "route replay target changed; retry the identical message"},
+	"stale_move":               {"retryable", "call route changed by a newer move; retry the identical message"},
 	"uncertain":                {"uncertain", "control outcome uncertain; retry the identical message"},
 	"internal":                 {"uncertain", "control outcome uncertain; retry the identical message"},
 }

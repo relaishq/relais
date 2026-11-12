@@ -112,7 +112,7 @@ func TestFlowRouteStickiness(t *testing.T) {
 	t.Run("trusted move retains stickiness and fences old checks", func(t *testing.T) {
 		table := newTable(t)
 		request := check(t, table, sessionA, now.Add(100*time.Millisecond), false)
-		table.moveSession(sessionA, a, b)
+		table.moveSession(sessionA, a, b, 0)
 		allowed, _ := table.answer(caller, a, bindingSuccess(t, request), now.Add(900*time.Millisecond))
 		require.False(t, allowed)
 		require.Equal(t, now, table.callers[caller].lastAuthenticated)

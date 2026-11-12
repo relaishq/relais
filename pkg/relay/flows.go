@@ -72,6 +72,12 @@ type flowTable struct {
 	evicted     uint64
 	rejected    uint64
 	promoted    uint64
+
+	// moveEpochs is the highest non-zero lease epoch a trusted move applied
+	// to each indexed session. It is dropped with the session's index entry,
+	// so it is bounded by callers. Route epochs are reset by address-only
+	// moves; this is not.
+	moveEpochs map[string]uint64
 }
 
 // callerFlows is one caller's confirmed route and pending candidate.
@@ -152,6 +158,7 @@ func newFlowTable(limits flowLimits) *flowTable {
 		maxPending:       limits.maxPending,
 		callers:          make(map[netip.AddrPort]*callerFlows),
 		sessions:         make(map[string]map[netip.AddrPort]*callerFlows),
+		moveEpochs:       make(map[string]uint64),
 		routes:           list.New(),
 		pending:          list.New(),
 	}
@@ -244,12 +251,21 @@ func (t *flowTable) reroute(caller, owner netip.AddrPort, session string, now ti
 	return ok
 }
 
+// staleMove reports whether a move's non-zero epoch is older than one
+// already applied to the session. Epoch zero is never ordered.
+func (t *flowTable) staleMove(session string, epoch uint64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return epoch != 0 && epoch < t.moveEpochs[session]
+}
+
 // moveSession re-points existing authenticated routes without admitting or
 // evicting any route. Pending candidates and unanswered route requests for
 // the moved session are discarded: their old owner's late answer must not
 // undo the trusted move. A moved route keeps its last answered request
-// time, so it stays exactly as active as it was.
-func (t *flowTable) moveSession(session string, from, to netip.AddrPort) {
+// time, so it stays exactly as active as it was. A non-zero epoch raises
+// the session's applied move epoch.
+func (t *flowTable) moveSession(session string, from, to netip.AddrPort, epoch uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, c := range t.sessions[session] {
@@ -261,6 +277,9 @@ func (t *flowTable) moveSession(session string, from, to netip.AddrPort) {
 			c.route.epoch = 0 // address-only moves re-read the authoritative generation
 			c.routeChecks = bindingChecks{}
 		}
+	}
+	if t.sessions[session] != nil && epoch > t.moveEpochs[session] {
+		t.moveEpochs[session] = epoch
 	}
 }
 
@@ -403,6 +422,7 @@ func (t *flowTable) unindex(c *callerFlows, session string) {
 	delete(t.sessions[session], c.caller)
 	if len(t.sessions[session]) == 0 {
 		delete(t.sessions, session)
+		delete(t.moveEpochs, session)
 		if t.emptyWatch[session] {
 			t.emptyEvents[session] = true
 		}
