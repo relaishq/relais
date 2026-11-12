@@ -514,8 +514,26 @@ new terminal entries published after streaming (normally it is empty), avoiding
 a duplicate trace that could exceed the unchanged 256 KiB frame limit. Clients
 append that terminal tail to the streamed trace.
 Request and result traces include allow-listed operation, target and action
-labels. Trial polling emits fixed `trial-takeover`, `trial-settled` and
-`trial-ready` wait-purpose labels, without retaining status payloads.
+labels. Every gate polling wait emits a fixed wait-purpose label on each poll,
+without retaining status payloads: `trial-takeover`, `trial-settled`,
+`trial-ready`, `worker-settled`, `worker-alive`, `control-reconstructed`,
+`control-reconstructed-degraded`, `restart-takeover`, `release-worker-settled`,
+`release-worker-alive`, `release-call-restored`, `relay-rejoined` and
+`relay-continuity`.
+
+When the gate budget ends a wait (the gate end passes, or the host-submission
+floor refuses its next read), process evidence records `expiredWait`: the
+purpose, `waitedMs`, `polls` (completed reads) and `last`, the fixed state codes
+of the last read. Control codes are `control-ready`/`control-not-ready`,
+`calls-none`/`calls-one`/`calls-many`, `call-owner-w1`/`w2`/`other`, and one of
+`absent`, `recovering`, `dead-with-calls`, `dead`, `address-differs`,
+`liveness-unknown`, `draining` or `live` per worker slot (`w1-live`). Relay
+codes compare the inspection with the one before the restart. `unobserved`
+means no read completed. This is a diagnostic only: verdicts, reasons,
+categories and latching are unchanged, so a wait that the submission floor
+ends still reports `precondition-failed:deadline-before-submission`. The
+rehearsal report replaces any purpose or code outside the fixed set with
+`unavailable`.
 The session request bound is 32,768: half-second caller polling can exceed the
 old 4,096 bound within a real campaign. Pending timeouts still have deterministic
 request order. Concurrent caller collection and host requests serialize through

@@ -615,7 +615,12 @@
     "excluded-takeover-kill-timed-resume",
     "excluded-takeover-row-count",
     "excluded-bracket-unchecked-drops-exclusion",
-    "release-replacement-not-deferred"
+    "release-replacement-not-deferred",
+    "expired-wait-floor-unrecorded",
+    "expired-wait-relay-unrecorded",
+    "expired-wait-any-error",
+    "expired-wait-purpose-free-text",
+    "expired-wait-report-unsanitized"
   ],
   "killed": [
     {
@@ -5153,6 +5158,36 @@
       "id": "release-replacement-not-deferred",
       "test": "TestReleaseReplacementWaitsForRollback/short",
       "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-floor-unrecorded",
+      "test": "TestBudgetEndedWaitKeepsCategory",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-relay-unrecorded",
+      "test": "TestGateWaitsNameExpiredWait/relay-continuity-floor",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-any-error",
+      "test": "TestGateWaitsNameExpiredWait/restart-takeover-unknown",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-purpose-free-text",
+      "test": "TestExpiredWaitPublicRefusesFreeText",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "expired-wait-report-unsanitized",
+      "test": "TestReportPublishesExpiredWaitCodesOnly",
+      "package": "./internal/operatorrehearsal",
       "evidence": "killed"
     }
   ],

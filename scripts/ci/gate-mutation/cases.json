@@ -1578,7 +1578,7 @@
     "GuardFingerprint": "",
     "File": "internal/operatorgates/processes.go",
     "Function": "controlRestart",
-    "Old": "\trecovered, err := g.waitStep(ctx, func(r StepResult) bool {\n\t\tc, ok := findCall(r.Status, call.ID)\n\t\treturn ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, r, call.ID, to)) > 0\n\t})\n\tif err != nil {\n\t\treturn err\n\t}\n",
+    "Old": "\trecovered, err := g.waitStep(ctx, \"restart-takeover\", func(r StepResult) bool {\n\t\tc, ok := findCall(r.Status, call.ID)\n\t\treturn ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, r, call.ID, to)) > 0\n\t})\n\tif err != nil {\n\t\treturn err\n\t}\n",
     "New": "\tvar recovered StepResult\n\tfor g.p.Clock.Elapsed() < g.end {\n\t\trecovered, err = g.do(ctx, \"status\", \"shared\", ProcessExtra{})\n\t\tif err != nil { return err }\n\t\tc, ok = findCall(recovered.Status, call.ID)\n\t\tif ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, recovered, call.ID, to)) > 0 { break }\n\t\tif err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil { return err }\n\t}\n",
     "Test": "TestControlTakeoverRequiresOwnershipBeforeDeadline",
     "Marker": "MUTATION:",
@@ -6590,5 +6590,55 @@
     "Test": "TestReleaseReplacementWaitsForRollback/short",
     "Marker": "MUTATION: release-replacement-deferred",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-floor-unrecorded",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "end",
+    "Old": "case \"gate-deadline\", \"precondition-failed:deadline-before-submission\":",
+    "New": "case \"gate-deadline\":",
+    "Test": "TestBudgetEndedWaitKeepsCategory",
+    "Marker": "MUTATION: expired-wait-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-relay-unrecorded",
+    "File": "internal/operatorgates/release.go",
+    "Function": "relay",
+    "Old": "if !rejoined {\n\t\tw.expired()\n\t}",
+    "New": "if !rejoined {\n\t}",
+    "Test": "TestGateWaitsNameExpiredWait/relay-continuity-floor",
+    "Marker": "MUTATION: expired-wait-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-any-error",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "end",
+    "Old": "switch code(err) {\n\tcase \"gate-deadline\", \"precondition-failed:deadline-before-submission\":\n\t\tw.expired()\n\t}",
+    "New": "w.expired()",
+    "Test": "TestGateWaitsNameExpiredWait/restart-takeover-unknown",
+    "Marker": "MUTATION: expired-wait-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-purpose-free-text",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "Public",
+    "Old": "if !slices.Contains(waitPurposes, w.Purpose) {\n\t\tw.Purpose = \"unavailable\"\n\t}",
+    "New": "",
+    "Test": "TestExpiredWaitPublicRefusesFreeText",
+    "Marker": "MUTATION: expired-wait-free-text",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-report-unsanitized",
+    "File": "internal/operatorrehearsal/sanitize.go",
+    "Function": "sanitizeGates",
+    "Old": "if w := g.Process.ExpiredWait; w != nil {\n\t\t\tpublic := w.Public()\n\t\t\tg.Process.ExpiredWait = &public\n\t\t}",
+    "New": "",
+    "Test": "TestReportPublishesExpiredWaitCodesOnly",
+    "Marker": "MUTATION: expired-wait-report-free-text",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

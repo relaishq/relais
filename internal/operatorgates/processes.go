@@ -261,7 +261,7 @@ func (g *procedure) controlRestart(ctx context.Context, before controlplane.Stat
 		return err
 	}
 	g.evidence.ControlReadyMS = normal.ReadyMS
-	if _, err = g.wait(ctx, reconstructed); err != nil {
+	if _, err = g.wait(ctx, "control-reconstructed", reconstructed); err != nil {
 		return err
 	}
 	g.evidence.Restarts++
@@ -287,7 +287,7 @@ func (g *procedure) controlRestart(ctx context.Context, before controlplane.Stat
 	g.evidence.ControlReadyNormalMS = normal.ReadyMS
 	g.evidence.ControlReadyDegradedMS = started.ReadyMS
 	g.evidence.ControlReadyTargetMet = &met
-	if _, err = g.wait(ctx, reconstructed); err != nil {
+	if _, err = g.wait(ctx, "control-reconstructed-degraded", reconstructed); err != nil {
 		return err
 	}
 	// Restore the empty second worker before any move of the original call.
@@ -342,7 +342,7 @@ func (g *procedure) controlRestart(ctx context.Context, before controlplane.Stat
 	// An excluded gate-owned takeover still counts as run; trials owe its replacement.
 	g.excludeKill(killed)
 	// New ownership and a fresh receipt must describe this fault, not a prior kill.
-	recovered, err := g.waitStep(ctx, func(r StepResult) bool {
+	recovered, err := g.waitStep(ctx, "restart-takeover", func(r StepResult) bool {
 		c, ok := findCall(r.Status, call.ID)
 		return ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, r, call.ID, to)) > 0
 	})

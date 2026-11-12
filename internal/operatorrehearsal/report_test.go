@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -271,6 +272,31 @@ func TestReportSanitizesEveryTextSurface(t *testing.T) {
 	}
 	if strings.Contains(out.String(), secret) {
 		t.Fatal(out.String())
+	}
+}
+
+// An expired gate wait reaches the public report with its fixed codes; any
+// free text in it is replaced.
+func TestReportPublishesExpiredWaitCodesOnly(t *testing.T) {
+	r := passingReport()
+	secret := "private-secret 192.0.2.7"
+	r.Gates[1].Process.ExpiredWait = &operatorgates.WaitDiagnostic{Purpose: "control-reconstructed", WaitedMS: 1702000, Polls: 3404, Last: []string{"control-not-ready", "calls-none", "w1-live", secret}}
+	r.Gates[2].Process.ExpiredWait = &operatorgates.WaitDiagnostic{Purpose: secret, Last: []string{}}
+	var out bytes.Buffer
+	if e := r.Write(&out); e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(out.String(), "private-secret") || strings.Contains(out.String(), "192.0.2.7") {
+		t.Fatal("MUTATION: expired-wait-report-free-text", out.String())
+	}
+	var saved Report
+	if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	got, other := saved.Gates[1].Process.ExpiredWait, saved.Gates[2].Process.ExpiredWait
+	want := operatorgates.WaitDiagnostic{Purpose: "control-reconstructed", WaitedMS: 1702000, Polls: 3404, Last: []string{"control-not-ready", "calls-none", "w1-live", "unavailable"}}
+	if got == nil || !reflect.DeepEqual(*got, want) || other == nil || other.Purpose != "unavailable" {
+		t.Fatalf("MUTATION: expired-wait-report-free-text got %+v and %+v", got, other)
 	}
 }
 

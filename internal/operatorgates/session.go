@@ -140,9 +140,7 @@ func (s *Session) record(event, id string, c operator.Certainty, code string) {
 
 // recordWait retains only fixed purpose labels, never predicates or status payloads.
 func (s *Session) recordWait(purpose string) {
-	switch purpose {
-	case "trial-takeover", "trial-settled", "trial-ready":
-	default:
+	if !slices.Contains(waitPurposes, purpose) {
 		return
 	}
 	s.mu.Lock()
