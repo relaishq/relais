@@ -7,10 +7,11 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-// DecodeProcessEvidence publishes only the fixed numeric fields and the three
-// declared inconclusive relay projections. Arbitrary report keys are discarded.
+// DecodeProcessEvidence publishes only the fixed numeric fields, the three
+// declared inconclusive relay projections and an optional expired wait, which
+// must be complete and use only fixed codes. Arbitrary report keys are discarded.
 func DecodeProcessEvidence(data json.RawMessage) (e ProcessEvidence, err error) {
-	err = observe.Decode(data, &e, observe.Contract{"completedSteps", "workerRollouts", "restarts"})
+	err = observe.Decode(data, &e, observe.Contract{"completedSteps", "workerRollouts", "restarts", "~expiredWait.purpose", "~expiredWait.waitedMs", "~expiredWait.polls", "~expiredWait.last"})
 	if err != nil {
 		return e, err
 	}
@@ -39,6 +40,9 @@ func DecodeProcessEvidence(data json.RawMessage) (e ProcessEvidence, err error) 
 		if v != "" && v != "inconclusive" {
 			return e, fault("unsupported-relay-criterion")
 		}
+	}
+	if e.ExpiredWait != nil && !e.ExpiredWait.valid() {
+		return e, fault("invalid-process-measurement")
 	}
 	return e, nil
 }

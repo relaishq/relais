@@ -54,26 +54,61 @@ func WorkerEmpty(ctx context.Context, p ProcedurePorts, w string, end time.Durat
 	return last
 }
 
+// workerEmpty runs WorkerEmpty as a named gate wait. WorkerEmpty returns a
+// precondition code or gate-deadline only after its window or the gate budget
+// ran out, so either records the expired wait; the error is unchanged.
+func (g *procedure) workerEmpty(ctx context.Context, w string) error {
+	wait := g.startWait("worker-empty")
+	p := g.ports()
+	p.Step = func(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
+		if op != "status" {
+			return g.step(ctx, op, slot, end, extra)
+		}
+		wait.poll()
+		r, err := g.step(ctx, op, slot, end, extra)
+		if err == nil {
+			wait.observe(controlState(r.Status, g.c.Parameters.Workers))
+		}
+		return r, err
+	}
+	err := WorkerEmpty(ctx, p, w, g.end)
+	if strings.HasPrefix(code(err), "precondition-failed:") {
+		wait.expired()
+	}
+	return wait.end(err)
+}
+
 // restoreWorkers never runs after uncertainty. A settled death uses the same
 // replace/start path; an alive worker needs no mutation.
 func (g *procedure) restoreWorkers(ctx context.Context) error {
 	if g.unknown {
 		return fault("command-result-unknown")
 	}
+	// A restoration wait that runs out its window or the gate budget is
+	// recorded as the expired wait; its own error code is unchanged.
+	read := func(wait *gateWait) (controlplane.Status, error) {
+		wait.poll()
+		s, err := g.status(ctx)
+		if err == nil {
+			wait.observe(controlState(s, g.c.Parameters.Workers))
+		}
+		return s, wait.end(err)
+	}
 	for _, w := range slices.Clone(g.down) {
 		// A confirmed stop has no running predecessor even while control still
 		// reports its last live heartbeat. Wait for death before replace/start.
 		stopped := slices.Contains(g.stopped, w)
 		until := min(g.end-30*time.Second, g.p.Clock.Elapsed()+90*time.Second)
-		s, err := g.status(ctx)
+		settle := g.startWait("restore-worker-settled")
+		s, err := read(settle)
 		if err != nil {
 			return err
 		}
 		for (stopped || !alive(s, w, g.c.Parameters.Workers)) && !settled(s, w) && g.p.Clock.Elapsed() < until {
 			if err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil {
-				return err
+				return settle.end(err)
 			}
-			s, err = g.status(ctx)
+			s, err = read(settle)
 			if err != nil {
 				return err
 			}
@@ -83,6 +118,7 @@ func (g *procedure) restoreWorkers(ctx context.Context) error {
 			continue
 		}
 		if !settled(s, w) {
+			settle.expired()
 			return fault("restore-unsettled")
 		}
 		if _, err = g.do(ctx, "replace", "shared", ProcessExtra{Worker: w}); err != nil {
@@ -92,14 +128,16 @@ func (g *procedure) restoreWorkers(ctx context.Context) error {
 			return err
 		}
 		until = min(g.end-30*time.Second, g.p.Clock.Elapsed()+120*time.Second)
+		ready := g.startWait("restore-worker-alive")
 		for !alive(s, w, g.c.Parameters.Workers) {
 			if g.p.Clock.Elapsed() >= until {
+				ready.expired()
 				return fault("restore-unconfirmed")
 			}
 			if err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil {
-				return err
+				return ready.end(err)
 			}
-			s, err = g.status(ctx)
+			s, err = read(ready)
 			if err != nil {
 				return err
 			}

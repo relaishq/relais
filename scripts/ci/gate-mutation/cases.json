@@ -911,7 +911,7 @@
     "GuardFingerprint": "7767969cffae87b27562c95cc24254db684d40145141de0e9e8988d64279c505",
     "File": "internal/operatorgates/processes.go",
     "Function": "process",
-    "Old": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
+    "Old": "if err = g.workerEmpty(ctx, w); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
     "New": "",
     "Test": "TestProcedureOracle/21a180fe51dc4708.json/0",
     "Marker": "MUTATION:",
@@ -1435,8 +1435,8 @@
     "GuardFingerprint": "501e558982c6f8f41117c3811cb72fc94c9e4237d8984088913f3886d4ec9f82",
     "File": "internal/operatorgates/precondition.go",
     "Function": "GatePrecondition",
-    "Old": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {",
-    "New": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); false {",
+    "Old": "if err = g.workerEmpty(ctx, w); err != nil {",
+    "New": "if err = g.workerEmpty(ctx, w); false {",
     "Test": "TestPreconditionDrainingWorkerMustBeEmpty",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -1578,7 +1578,7 @@
     "GuardFingerprint": "",
     "File": "internal/operatorgates/processes.go",
     "Function": "controlRestart",
-    "Old": "\trecovered, err := g.waitStep(ctx, func(r StepResult) bool {\n\t\tc, ok := findCall(r.Status, call.ID)\n\t\treturn ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, r, call.ID, to)) > 0\n\t})\n\tif err != nil {\n\t\treturn err\n\t}\n",
+    "Old": "\trecovered, err := g.waitStep(ctx, \"restart-takeover\", func(r StepResult) bool {\n\t\tc, ok := findCall(r.Status, call.ID)\n\t\treturn ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, r, call.ID, to)) > 0\n\t})\n\tif err != nil {\n\t\treturn err\n\t}\n",
     "New": "\tvar recovered StepResult\n\tfor g.p.Clock.Elapsed() < g.end {\n\t\trecovered, err = g.do(ctx, \"status\", \"shared\", ProcessExtra{})\n\t\tif err != nil { return err }\n\t\tc, ok = findCall(recovered.Status, call.ID)\n\t\tif ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, recovered, call.ID, to)) > 0 { break }\n\t\tif err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil { return err }\n\t}\n",
     "Test": "TestControlTakeoverRequiresOwnershipBeforeDeadline",
     "Marker": "MUTATION:",
@@ -3313,7 +3313,7 @@
     "ID": "resource-admission-skips-idle",
     "File": "internal/operatorgates/resource_admission.go",
     "Function": "runResourceAdmission",
-    "Old": "return WaitBoundaryIdle(ctx, ports.ProcedurePorts, end)",
+    "Old": "return WaitBoundaryIdle(ctx, ports.ProcedurePorts, end, &idle)",
     "New": "return nil",
     "Test": "TestSessionBinaryOwnsAdmission/offered",
     "Marker": "MUTATION: optional-session",
@@ -6780,5 +6780,175 @@
     "Test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
     "Marker": "MUTATION: excluded-boundary-row-scope",
     "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "expired-wait-floor-unrecorded",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "budgetEnded",
+    "Old": "case \"gate-deadline\", \"precondition-failed:deadline-before-submission\":",
+    "New": "case \"gate-deadline\":",
+    "Test": "TestBudgetEndedWaitKeepsCategory",
+    "Marker": "MUTATION: expired-wait-diagnostic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-relay-unrecorded",
+    "File": "internal/operatorgates/release.go",
+    "Function": "relay",
+    "Old": "if !rejoined {\n\t\tw.expired()\n\t}",
+    "New": "if !rejoined {\n\t}",
+    "Test": "TestGateWaitsNameExpiredWait/relay-continuity-floor",
+    "Marker": "MUTATION: expired-wait-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-any-error",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "end",
+    "Old": "if budgetEnded(err) {\n\t\tw.expired()\n\t}",
+    "New": "w.expired()",
+    "Test": "TestGateWaitsNameExpiredWait/restart-takeover-unknown",
+    "Marker": "MUTATION: expired-wait-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-purpose-free-text",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "Public",
+    "Old": "if !slices.Contains(waitPurposes, w.Purpose) {\n\t\tw.Purpose = \"unavailable\"\n\t}",
+    "New": "",
+    "Test": "TestExpiredWaitPublicRefusesFreeText",
+    "Marker": "MUTATION: expired-wait-free-text",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-report-unsanitized",
+    "File": "internal/operatorrehearsal/sanitize.go",
+    "Function": "sanitizeGates",
+    "Old": "if w := g.Process.ExpiredWait; w != nil {\n\t\t\tpublic := w.Public()\n\t\t\tg.Process.ExpiredWait = &public\n\t\t}",
+    "New": "",
+    "Test": "TestReportPublishesExpiredWaitCodesOnly",
+    "Marker": "MUTATION: expired-wait-report-free-text",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "restore-settle-expiry-unrecorded",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "restoreWorkers",
+    "Old": "settle.expired()\n\t\t\treturn fault(\"restore-unsettled\")",
+    "New": "return fault(\"restore-unsettled\")",
+    "Test": "TestRestorationWaitNamesExpiredWait/settle-budget",
+    "Marker": "MUTATION: restore-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restore-floor-unrecorded",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "restoreWorkers",
+    "Old": "return s, wait.end(err)",
+    "New": "return s, err",
+    "Test": "TestRestorationWaitNamesExpiredWait/settle-floor",
+    "Marker": "MUTATION: restore-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "worker-empty-expiry-unrecorded",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "workerEmpty",
+    "Old": "if strings.HasPrefix(code(err), \"precondition-failed:\") {\n\t\twait.expired()\n\t}",
+    "New": "",
+    "Test": "TestWorkerEmptyNamesExpiredWait/window",
+    "Marker": "MUTATION: worker-empty-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-projection-incomplete",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "DecodeProcessEvidence",
+    "Old": ", \"~expiredWait.purpose\", \"~expiredWait.waitedMs\", \"~expiredWait.polls\", \"~expiredWait.last\"",
+    "New": "",
+    "Test": "TestExpiredWaitProjectionIsStrict",
+    "Marker": "MUTATION: expired-wait-projection-strict",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "expired-wait-projection-unvalidated",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "DecodeProcessEvidence",
+    "Old": "if e.ExpiredWait != nil && !e.ExpiredWait.valid() {",
+    "New": "if false {",
+    "Test": "TestExpiredWaitProjectionIsStrict",
+    "Marker": "MUTATION: expired-wait-projection-strict",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-settle-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "if initial.Status != nil && len(initial.Status.Calls) > p.Calls {\n\t\tcalls.expired()\n\t}",
+    "New": "",
+    "Test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-recovery-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "return recovery.end(fault(\"gate-deadline\"))",
+    "New": "return fault(\"gate-deadline\")",
+    "Test": "TestMeasurementWaitsNameExpiredWait/failover-primary-recovered",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "collection-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "wait.expired()\n\t\t\t\tbreak",
+    "New": "break",
+    "Test": "TestMeasurementWaitsNameExpiredWait/collection-complete",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-expired-wait-unpublished",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.ExpiredWait = g.evidence.ExpiredWait",
+    "New": "",
+    "Test": "TestMeasurementWaitsNameExpiredWait/calls-settled",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-idle-expiry-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "WaitBoundaryIdle",
+    "Old": "return wait.end(fault(\"gate-deadline\"))",
+    "New": "return fault(\"gate-deadline\")",
+    "Test": "TestMeasurementWaitsNameExpiredWait/boundary-idle",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "collection-sleep-deadline-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "_ = wait.end(err)\n\t\t\t\tbreak",
+    "New": "break",
+    "Test": "TestMeasurementWaitsNameExpiredWait/collection-complete/sleep-deadline",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "context-deadline-wait-unrecorded",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "budgetEnded",
+    "Old": "return errors.Is(err, context.DeadlineExceeded)",
+    "New": "return errors.Is(err, context.Canceled)",
+    "Test": "TestGateWaitsNameExpiredWait/worker-alive-sleep-deadline",
+    "Marker": "MUTATION: expired-wait-scope",
+    "Package": "./internal/operatorgates"
   }
 ]

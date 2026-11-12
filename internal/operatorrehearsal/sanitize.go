@@ -156,6 +156,10 @@ func sanitizeGates(gates []GateReport) []GateReport {
 				*s = "unavailable"
 			}
 		}
+		if w := g.Process.ExpiredWait; w != nil {
+			public := w.Public()
+			g.Process.ExpiredWait = &public
+		}
 		if g.Media != nil {
 			m := *g.Media
 			m.Status = publicVerdict(m.Status)

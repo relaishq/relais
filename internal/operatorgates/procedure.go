@@ -168,6 +168,8 @@ type ProcessEvidence struct {
 	ExcludedKills             int     `json:"excludedKills,omitempty"`
 	KillReplacements          int     `json:"killReplacements,omitempty"`
 	KillReplacementSkipped    string  `json:"killReplacementSkipped,omitempty"`
+	// ExpiredWait names the polling wait that the gate budget ended, if any.
+	ExpiredWait *WaitDiagnostic `json:"expiredWait,omitempty"`
 }
 type ProcedureResult struct {
 	ProcedureReason    string `json:"-"`
@@ -275,16 +277,19 @@ func (g *procedure) status(ctx context.Context) (controlplane.Status, error) {
 	r, err := g.do(ctx, "status", "shared", ProcessExtra{})
 	return r.Status, err
 }
-func (g *procedure) wait(ctx context.Context, test func(controlplane.Status) bool) (controlplane.Status, error) {
-	r, err := g.waitStep(ctx, func(r StepResult) bool { return test(r.Status) })
+func (g *procedure) wait(ctx context.Context, purpose string, test func(controlplane.Status) bool) (controlplane.Status, error) {
+	r, err := g.waitStep(ctx, purpose, func(r StepResult) bool { return test(r.Status) })
 	return r.Status, err
 }
-func (g *procedure) waitStep(ctx context.Context, test func(StepResult) bool) (StepResult, error) {
+func (g *procedure) waitStep(ctx context.Context, purpose string, test func(StepResult) bool) (StepResult, error) {
+	w := g.startWait(purpose)
 	for g.p.Clock.Elapsed() < g.end {
+		w.poll()
 		r, err := g.do(ctx, "status", "shared", ProcessExtra{})
 		if err != nil {
-			return r, err
+			return r, w.end(err)
 		}
+		w.observe(controlState(r.Status, g.c.Parameters.Workers))
 		if g.p.Clock.Elapsed() >= g.end {
 			break
 		}
@@ -292,10 +297,10 @@ func (g *procedure) waitStep(ctx context.Context, test func(StepResult) bool) (S
 			return r, nil
 		}
 		if err = g.p.Sleep(ctx, min(500*time.Millisecond, g.end-g.p.Clock.Elapsed())); err != nil {
-			return r, err
+			return r, w.end(err)
 		}
 	}
-	return StepResult{}, fault("gate-deadline")
+	return StepResult{}, w.end(fault("gate-deadline"))
 }
 
 func alive(s controlplane.Status, w string, workers map[string]WorkerEndpoint) bool {
@@ -405,7 +410,7 @@ func (g *procedure) emitDrain(ctx context.Context, id Identity, r StepResult, st
 	return nil
 }
 func (g *procedure) replace(ctx context.Context, w string) error {
-	if _, err := g.wait(ctx, func(s controlplane.Status) bool { return settled(s, w) }); err != nil {
+	if _, err := g.wait(ctx, "worker-settled", func(s controlplane.Status) bool { return settled(s, w) }); err != nil {
 		return err
 	}
 	if _, err := g.do(ctx, "replace", "shared", ProcessExtra{Worker: w}); err != nil {
@@ -414,7 +419,7 @@ func (g *procedure) replace(ctx context.Context, w string) error {
 	if _, err := g.do(ctx, "worker-start", w, ProcessExtra{Worker: w}); err != nil {
 		return err
 	}
-	_, err := g.wait(ctx, func(s controlplane.Status) bool { return alive(s, w, g.c.Parameters.Workers) })
+	_, err := g.wait(ctx, "worker-alive", func(s controlplane.Status) bool { return alive(s, w, g.c.Parameters.Workers) })
 	return err
 }
 

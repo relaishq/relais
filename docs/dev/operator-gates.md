@@ -514,8 +514,39 @@ new terminal entries published after streaming (normally it is empty), avoiding
 a duplicate trace that could exceed the unchanged 256 KiB frame limit. Clients
 append that terminal tail to the streamed trace.
 Request and result traces include allow-listed operation, target and action
-labels. Trial polling emits fixed `trial-takeover`, `trial-settled` and
-`trial-ready` wait-purpose labels, without retaining status payloads.
+labels. Every gate wait that polls control, worker, relay or store status emits
+a fixed wait-purpose label on each poll, without retaining status payloads.
+Loops that read clocks are excluded: clock lease refresh, the fault quiet gap
+and coverage drain. The named purposes are `trial-takeover`, `trial-settled`,
+`trial-ready`, `worker-settled`, `worker-alive`, `control-reconstructed`,
+`control-reconstructed-degraded`, `restart-takeover`, `release-worker-settled`,
+`release-worker-alive`, `release-call-restored`, `relay-rejoined`,
+`relay-continuity`, `worker-empty`, `restore-worker-settled`,
+`restore-worker-alive`, `calls-settled`, `failover-primary-recovered`,
+`collection-complete` and `boundary-idle`.
+
+When the gate budget ends a wait (the gate end passes, the host-submission
+floor refuses its next read, or the gate context's deadline ends a read or
+sleep), or a `worker-empty`, restoration or
+`calls-settled` wait runs out its own window, process evidence records
+`expiredWait` for the latest such wait (measurement gates carry it on their
+measure result; admission keeps the boundary, idle or survivor one): the
+purpose, `waitedMs`, `polls` (completed reads) and `last`, the fixed state codes
+of the last read. Control codes are `control-ready`/`control-not-ready`,
+`calls-none`/`calls-one`/`calls-many`, `call-owner-w1`/`w2`/`other`, and one of
+`absent`, `recovering`, `dead-with-calls`, `dead`, `address-differs`,
+`liveness-unknown`, `draining` or `live` per worker slot (`w1-live`). Relay
+codes compare the inspection with the one before the restart. Store codes
+(`store-available`, `store-primary-same`/`changed`/`none`, `store-sync`)
+compare with the primary before failover; the boundary idle wait adds
+`w1-local-idle`/`busy`/`unknown` and `store-ownership-idle`/`busy`/`unknown`.
+`unobserved`
+means no read completed. This is a diagnostic only: verdicts, reasons,
+categories and latching are unchanged, so a wait that the submission floor
+ends still reports `precondition-failed:deadline-before-submission`. The
+rehearsal report replaces any purpose or code outside the fixed set with
+`unavailable`. The process-evidence projection refuses an `expiredWait` that
+is incomplete, has a negative count or uses any code outside the fixed set.
 The session request bound is 32,768: half-second caller polling can exceed the
 old 4,096 bound within a real campaign. Pending timeouts still have deterministic
 request order. Concurrent caller collection and host requests serialize through
