@@ -55,13 +55,24 @@ var selectionRunPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // column 14. It returns an exact rational, before any policy scaling/rounding.
 func Column14MaximumNS(raw string) (*big.Rat, error) { return observe.ClockMaximumNS(raw) }
 
+// CheckPolicy is the selector's only policy rule. It needs no evidence, so a
+// launcher can refuse a bad policy before it touches a host. It returns the
+// declared dispersion-growth maximum.
+func CheckPolicy(policy SelectionPolicy) (*big.Rat, error) {
+	declared, err := exact(policy.MaxDispersionGrowthPPM)
+	if err != nil || declared.Sign() < 0 || policy.WindowSeconds < 120 || policy.FloorNS < 0 || policy.ScaleNumerator <= 0 || policy.ScaleDenominator <= 0 || policy.AllowanceNS < 0 || policy.SignalReserveNS < 0 || policy.ControlCeilingNS < 0 || policy.WorkerCeilingNS < 0 {
+		return nil, fmt.Errorf("clock-select-policy")
+	}
+	return declared, nil
+}
+
 // Select only records a decision. It neither changes fixed bounds nor invokes
 // a judge, caller, process, clock, or transport.
 func Select(input SelectionEvidence, policy SelectionPolicy) (ClockSelection, error) {
 	var out ClockSelection
-	declared, err := exact(policy.MaxDispersionGrowthPPM)
-	if err != nil || declared.Sign() < 0 || policy.WindowSeconds < 120 || policy.FloorNS < 0 || policy.ScaleNumerator <= 0 || policy.ScaleDenominator <= 0 || policy.AllowanceNS < 0 || policy.SignalReserveNS < 0 || policy.ControlCeilingNS < 0 || policy.WorkerCeilingNS < 0 {
-		return out, fmt.Errorf("clock-select-policy")
+	declared, err := CheckPolicy(policy)
+	if err != nil {
+		return out, err
 	}
 	if !selectionRunPattern.MatchString(input.RunID) || !slices.Contains(selectionSlots, input.FrontendSlot) || !slices.Contains(selectionSlots, input.ControlSlot) || len(input.Hosts) != 4 || input.StartUnixSeconds < 3 || input.EndUnixSeconds <= input.StartUnixSeconds || input.EndUnixSeconds > math.MaxInt64/1000000000-3 || input.EndUnixSeconds-input.StartUnixSeconds != policy.WindowSeconds {
 		return out, fmt.Errorf("clock-select-admission")

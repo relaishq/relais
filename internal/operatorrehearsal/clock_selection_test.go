@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,7 +38,7 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	return clockAdmissionPorts{start: func(context.Context, time.Time) error { return nil }, read: read, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
+	return clockAdmissionPorts{policy: rehearsalClockPolicy(), leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -306,51 +307,74 @@ func TestClockSelectionStickyProbe(t *testing.T) {
 }
 
 // A lease aged just above the 5-poll budget names the slot, aged age and budget.
+// With two expired slots the refusal names the lowest slot name, as the selector
+// does: "shared" sorts before "w1" but is read after it.
 func TestClockSelectionLeaseRefusalNamesSlot(t *testing.T) {
 	const referenceAgeNS = 5200000000
-	p := admissionFixture(t, false, func(_ context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
-		s, err := clocks.Select(e, policy)
-		if err != nil {
-			return s, err.Error()
-		}
-		return s, ""
-	})
-	read := p.read
-	var elapsed int64
-	p.read = func(ctx context.Context, slot, script string) (string, error) {
-		out, err := read(ctx, slot, script)
-		if err != nil || slot != "w2" || p.now().Unix() < 1792886525 {
-			return out, err
-		}
-		raw, err := host.Unpack(out, 256000)
-		require.NoError(t, err)
-		var doc map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(raw, &doc))
-		var o clocks.LeaseObservation
-		require.NoError(t, json.Unmarshal(doc["lease"], &o))
-		var measured int64
-		_, err = fmt.Sscan(o.MeasuredUnixNS, &measured)
-		require.NoError(t, err)
-		o.ReferenceAgeNS, o.ReferenceUnixNS = referenceAgeNS, fmt.Sprint(measured-referenceAgeNS)
-		elapsed = o.HostElapsedNS
-		doc["lease"], err = json.Marshal(o)
-		require.NoError(t, err)
-		raw, err = json.Marshal(doc)
-		require.NoError(t, err)
-		var packed bytes.Buffer
-		z := gzip.NewWriter(&packed)
-		_, err = z.Write(raw)
-		require.NoError(t, err)
-		require.NoError(t, z.Close())
-		return base64.StdEncoding.EncodeToString(packed.Bytes()), nil
+	for named, expired := range map[string][]string{"w2": {"w2"}, "shared": {"w1", "shared"}} {
+		t.Run(strings.Join(expired, "+"), func(t *testing.T) {
+			p := admissionFixture(t, false, func(_ context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+				s, err := clocks.Select(e, policy)
+				if err != nil {
+					return s, err.Error()
+				}
+				return s, ""
+			})
+			// Every pause after the first admitting read steps past the admission
+			// deadline: one attempt and one refresh poll, with no wall-time budget.
+			// The retry and refresh loops have their own tests.
+			pause := p.pause
+			p.pause = func(ctx context.Context, d time.Duration) error {
+				if p.now().Unix() >= 1792886525 {
+					d = max(d, 30*time.Second)
+				}
+				return pause(ctx, d)
+			}
+			read := p.read
+			var mu sync.Mutex
+			elapsed := map[string]int64{}
+			p.read = func(ctx context.Context, slot, script string) (string, error) {
+				out, err := read(ctx, slot, script)
+				if err != nil || !slices.Contains(expired, slot) || p.now().Unix() < 1792886525 {
+					return out, err
+				}
+				raw, err := host.Unpack(out, 256000)
+				require.NoError(t, err)
+				var doc map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal(raw, &doc))
+				var o clocks.LeaseObservation
+				require.NoError(t, json.Unmarshal(doc["lease"], &o))
+				var measured int64
+				_, err = fmt.Sscan(o.MeasuredUnixNS, &measured)
+				require.NoError(t, err)
+				o.ReferenceAgeNS, o.ReferenceUnixNS = referenceAgeNS, fmt.Sprint(measured-referenceAgeNS)
+				mu.Lock()
+				elapsed[slot] = o.HostElapsedNS
+				mu.Unlock()
+				doc["lease"], err = json.Marshal(o)
+				require.NoError(t, err)
+				raw, err = json.Marshal(doc)
+				require.NoError(t, err)
+				var packed bytes.Buffer
+				z := gzip.NewWriter(&packed)
+				_, err = z.Write(raw)
+				require.NoError(t, err)
+				require.NoError(t, z.Close())
+				return base64.StdEncoding.EncodeToString(packed.Bytes()), nil
+			}
+			r := collectClockSelection(context.Background(), "refusal-test", "shared", "shared", p)
+			require.Equal(t, "clock-lease-expired", r.Cause)
+			require.Nil(t, r.Bounds)
+			require.Len(t, elapsed, len(expired))
+			if r.LeaseRefusal == nil || r.LeaseRefusal.Slot != named {
+				t.Fatal("MUTATION: lease-refusal-lowest-slot", r.LeaseRefusal)
+			}
+			require.Equal(t, &ClockLeaseRefusal{Slot: named, AgedLeaseAgeNS: referenceAgeNS + elapsed[named], BudgetNS: 5000000000}, r.LeaseRefusal)
+			raw, err := json.Marshal(r)
+			require.NoError(t, err)
+			require.Contains(t, string(raw), `"leaseRefusal":{"slot":"`+named+`","agedLeaseAgeNs":`)
+		})
 	}
-	r := collectClockSelection(context.Background(), "refusal-test", "shared", "shared", p)
-	require.Equal(t, "clock-lease-expired", r.Cause)
-	require.Nil(t, r.Bounds)
-	require.Equal(t, &ClockLeaseRefusal{Slot: "w2", AgedLeaseAgeNS: referenceAgeNS + elapsed, BudgetNS: 5000000000}, r.LeaseRefusal)
-	raw, err := json.Marshal(r)
-	require.NoError(t, err)
-	require.Contains(t, string(raw), `"leaseRefusal":{"slot":"w2","agedLeaseAgeNs":`)
 }
 
 // The admitted status file keeps its exact bytes; refusal fields are absent.

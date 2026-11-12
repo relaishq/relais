@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,6 +66,8 @@ type clockAdmissionPorts struct {
 	selectBounds func(context.Context, clocks.SelectionEvidence, clocks.SelectionPolicy) (clocks.ClockSelection, string)
 	pause        func(context.Context, time.Duration) error
 	now          func() time.Time
+	policy       clocks.SelectionPolicy
+	leapMode     string
 }
 
 func rehearsalClockPolicy() clocks.SelectionPolicy {
@@ -76,29 +77,26 @@ func rehearsalClockPolicy() clocks.SelectionPolicy {
 // This step deliberately bypasses Session/Peer: diagnostic failures cannot
 // latch the session, add policy clock samples or change the fixed caller flags.
 func (r *rehearsal) recordClockSelection(ctx context.Context) {
-	components := map[string][]string{}
+	components, addresses := map[string][]string{}, map[string]string{}
 	for _, slot := range Slots {
 		var node struct {
 			Components []string `json:"components"`
 		}
 		_ = json.Unmarshal([]byte(r.topology.Hosts[slot].Metadata.Files["/etc/relais/node.json"].Content), &node)
 		components[slot] = node.Components
+		addresses[slot] = r.topology.Hosts[slot].IP
 	}
-	front, f := inventory.ComponentSlot(components, "signal")
-	control, c := inventory.ComponentSlot(components, "control")
-	r.recordClockSelectionReport(collectClockSelection(ctx, r.run, front, control, clockAdmissionPorts{
-		read: r.readAdmissionClock, selectBounds: r.selectClockBounds, pause: pause, now: time.Now,
-		start: func(ctx context.Context, end time.Time) error {
-			if !f || !c {
-				return errors.New("clock-selection-helper")
-			}
-			until, _ := strconv.ParseInt(r.boundInit.EndUnixMS, 10, 64)
-			if until == 0 {
-				return errors.New("clock-selection-helper")
-			}
-			return r.startClockHelpers(ctx, front, control, time.UnixMilli(until))
-		},
-	}))
+	// An unresolved role leaves its slot empty, which refuses helper startup.
+	front, _ := inventory.ComponentSlot(components, "signal")
+	control, _ := inventory.ComponentSlot(components, "control")
+	a := ClockAdmission{RunID: r.run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: addresses, Output: r.c.Output, Host: r.clockHostCommand}
+	if until, _ := strconv.ParseInt(r.boundInit.EndUnixMS, 10, 64); until != 0 {
+		a.HelpersUntil = time.UnixMilli(until)
+	}
+	p := a.ports()
+	// The rehearsal also proves the clock-select CLI against the in-process selector.
+	p.selectBounds = r.selectClockBounds
+	r.recordClockSelectionReport(collectClockSelection(ctx, a.RunID, front, control, p))
 }
 
 func (r *rehearsal) recordClockSelectionReport(result *ClockSelectionReport) {
@@ -110,8 +108,12 @@ func (r *rehearsal) recordClockSelectionReport(result *ClockSelectionReport) {
 	}
 }
 
-func (r *rehearsal) clockHostCommand(ctx context.Context, slot string, options []string, input []byte, args ...string) (string, error) {
-	command, err := r.deployment.execArgs(slot, options, args...)
+func (r *rehearsal) clockHostCommand(ctx context.Context, slot string, detach bool, input []byte, args ...string) (string, error) {
+	option := "-i"
+	if detach {
+		option = "-d"
+	}
+	command, err := r.deployment.execArgs(slot, []string{option}, args...)
 	if err != nil {
 		return "", err
 	}
@@ -120,50 +122,6 @@ func (r *rehearsal) clockHostCommand(ctx context.Context, slot string, options [
 		return "", errors.New("clock-selection-read")
 	}
 	return string(result.Stdout), nil
-}
-
-func (r *rehearsal) startClockHelpers(ctx context.Context, front, control string, end time.Time) error {
-	source, err := host.Assets.ReadFile("clock_probe.py")
-	if err != nil {
-		return err
-	}
-	// Start every endpoint before starting the frontend's three probe loops.
-	order := []string{}
-	for _, slot := range Slots {
-		if slot != front {
-			order = append(order, slot)
-		}
-	}
-	order = append(order, front)
-	for _, slot := range order {
-		_, err = r.clockHostCommand(ctx, slot, []string{"-i"}, source, "python3", "-c", "import sys; open('/run/relais-clock-helper.py','x').write(sys.stdin.read())")
-		if err != nil {
-			return err
-		}
-		seconds := int(time.Until(end) / time.Second)
-		if seconds < 1 {
-			return errors.New("clock-selection-helper")
-		}
-		args := []string{"python3", "/run/relais-clock-helper.py", "--listen", r.topology.Hosts[slot].IP + ":24891", "--seconds", strconv.Itoa(seconds), "--until-unix-ns", strconv.FormatInt(end.UnixNano(), 10)}
-		if slot == front {
-			args = append(args, "--output", clockProbePath)
-			for _, target := range []string{"control", "w1", "w2"} {
-				peer := target
-				if peer == "control" {
-					peer = control
-				}
-				args = append(args, "--peer", target+"=http://"+r.topology.Hosts[peer].IP+":24891")
-			}
-		}
-		if _, err = r.clockHostCommand(ctx, slot, []string{"-d"}, nil, args...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *rehearsal) readAdmissionClock(ctx context.Context, slot, script string) (string, error) {
-	return r.clockHostCommand(ctx, slot, []string{"-i"}, []byte(script), "sh", "-eu")
 }
 
 func collectClockSelection(parent context.Context, run, front, control string, p clockAdmissionPorts) *ClockSelectionReport {
@@ -187,7 +145,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 	var probeCursor json.RawMessage
 	for (end.IsZero() || p.now().Before(end)) && ctx.Err() == nil {
 		batch := map[string]clocks.Sample{}
-		e := clocks.SelectionEvidence{RunID: run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: "unsmeared", EndUnixSeconds: 1 << 62}
+		e := clocks.SelectionEvidence{RunID: run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: p.leapMode, EndUnixSeconds: 1 << 62}
 		admitting := !end.IsZero() && !p.now().Before(started.Add(123*time.Second))
 		samples, failed := make([]clocks.Sample, len(Slots)), make([]error, len(Slots))
 		var readers sync.WaitGroup
@@ -262,7 +220,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			if len(log.Rows) > 0 {
 				e.EndUnixSeconds = min(e.EndUnixSeconds, log.Rows[len(log.Rows)-1].UnixSeconds-1)
 			}
-			h := clocks.SelectionHost{Slot: slot, LeapMode: "unsmeared", Tracking: log}
+			h := clocks.SelectionHost{Slot: slot, LeapMode: p.leapMode, Tracking: log}
 			if sample.Lease != nil {
 				h.Lease = *sample.Lease
 			}
@@ -300,12 +258,12 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		e.Falsification = *probes.Snapshot(front, map[string]string{"control": control, "w1": "w1", "w2": "w2"})
 		records = mergeClockProbeRecords(records, e.Falsification.Records)
 		e.Falsification.Records = records
-		e.StartUnixSeconds = e.EndUnixSeconds - 120
+		e.StartUnixSeconds = e.EndUnixSeconds - clockAdmissionWindowSeconds
 		if admitting && complete {
 			if time.Unix(e.StartUnixSeconds, 0).Before(started) {
 				result.Cause = "clock-select-admission"
 			} else {
-				selection, cause := p.selectBounds(ctx, e, rehearsalClockPolicy())
+				selection, cause := p.selectBounds(ctx, e, p.policy)
 				result.Cause = clockSelectionCause(cause)
 				if refusal := leaseRefusal(result.Cause, e.Hosts); refusal != nil || result.Cause != "clock-lease-expired" {
 					result.LeaseRefusal = refusal
@@ -344,10 +302,9 @@ func saveClockJSON(path string, value any) error {
 }
 
 func (r *rehearsal) selectClockBounds(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
-	sort.Slice(e.Hosts, func(i, j int) bool { return e.Hosts[i].Slot < e.Hosts[j].Slot })
-	evidence, config := filepath.Join(r.c.Output, "clock-admission-evidence.json"), filepath.Join(r.c.Output, "clock-selection-policy.json")
 	var selected clocks.ClockSelection
-	if saveClockJSON(evidence, e) != nil || saveClockJSON(config, policy) != nil {
+	evidence, config, err := saveClockSelectionInput(r.c.Output, e, policy)
+	if err != nil {
 		return selected, "clock-selection-artifact"
 	}
 	result := r.runner.Run(ctx, Command{Label: "clock-select", Args: []string{r.bridge, "clock-select", "-evidence", evidence, "-policy", config}})

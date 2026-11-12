@@ -138,6 +138,102 @@ It runs before media in calibration, the resource sequence and the head phase.
 A missing receipt refuses; bound/drift disagreement returns
 `gate-caller-bounds-differ`. Unbound sessions are for setup only.
 
+### `relais-gates clock-admit`
+
+`clock-admit` runs the whole admission for a launcher: it seeds tracking
+cursors, starts the probe helpers, collects for the fixed 150 s admission
+deadline (first selection at 123 s), selects bounds with the supplied policy and
+binds the receipt to the plan. The rehearsal runs the same Go path
+(`operatorrehearsal.ClockAdmission`, `collectClockSelection`,
+`BindClockAdmission`); it additionally cross-checks the `clock-select` CLI.
+
+```bash
+relais-gates clock-admit -plan plan.json -policy policy.json \
+  -host-command /abs/host-command -output /abs/admission
+```
+
+All four flags are required. `-output` must be an existing directory.
+`policy.json` is the launcher policy shown below; there is no default.
+`plan.json` is a closed schema that holds only values known before measurement:
+
+```json
+{
+  "runId": "run-1",
+  "frontendSlot": "shared",
+  "controlSlot": "shared",
+  "callerLeapMode": "unsmeared",
+  "helpersUntilUnixMs": "1792890000000",
+  "addresses": {"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"},
+  "scenario": {"schemaVersion": 1, "digest": "<plan identity>", "gates": ["rollout"], "template": {}, "releaseA": {}, "releaseB": {}, "judge": {}, "caller": {}}
+}
+```
+
+`addresses` are the private IPv4 addresses the probe helpers listen on and
+probe; they never reach an output file. `helpersUntilUnixMs` is the session
+deadline: helpers stay available until then. `scenario` is the unbound plan.
+
+The host command is the launcher's own executable. The gate calls it as
+`PROGRAM SLOT run ARG...` (run `ARG...` on that host with the given stdin, print
+its stdout, exit with its status) and `PROGRAM SLOT detach ARG...` (start
+`ARG...` on that host and return at once). The gate sends only its fixed lease
+reader (`sh -eu` with a script on stdin) and the embedded `clock_probe.py`
+helper. Host stderr is discarded.
+
+Plan identity and runtime binding are separate:
+
+- `operator.PlanIdentity(scenario)` is the scenario digest with no clock
+  receipt. Every input is known before a host exists, so a readiness check can
+  compare it before deployment. `plan.json` must carry it as `scenario.digest`.
+- `operator.BindRuntime(scenario, receiptSha256)` returns the same
+  `planIdentity` plus the bound scenario: the plan with `clockReceiptSha256`
+  added and `digest` recomputed over both. A different receipt changes the
+  bound digest and never the plan identity
+  (`TestRuntimeBindingKeepsPlanIdentity`). Init carries the bound scenario;
+  `BindClock` recomputes its digest from the receipt as before.
+
+Outputs, all in `-output`:
+
+| File | Content |
+| --- | --- |
+| `clock-selection.json` | The receipt and its `sha256`, as `clock-select` prints it. |
+| `clock-binding.json` | `planIdentity`, the bound `scenario`, and `clockBinding` (the `operator.ClockBindingArtifacts` for Init). Written only on exit 0. |
+| `clock-selection-status.json` | The rehearsal status record: `cause`, bounds, update counts, digests, and `leaseRefusal` on `clock-lease-expired`. |
+| `clock-admission-evidence.json`, `clock-selection-policy.json` | The sanitized selector inputs. |
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Admitted. Receipt and binding are written. |
+| 1 | Admission ran and refused. Stderr is one fixed cause; the status file records a selection refusal, but not a binding refusal (see below). |
+| 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, or no output directory), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule, or its `windowSeconds` is not 120, the only window collection builds) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
+
+`clock-selection-status.json` describes selection only. A binding refusal
+exits 1 with its cause on stderr while the status file keeps `cause` `""` and
+the selected bounds. Callers must check the exit status and stderr, and must
+not treat an admitted status file as a usable binding; only
+`clock-binding.json` is.
+
+Both pre-host rules are shared code, not CLI copies.
+`operator.BindRuntime` itself refuses a scenario that is already bound or that
+changed after its digest was fixed (`operator.CheckPlan`,
+`TestRuntimeBindingRefusesUnapprovedPlan`), so the rehearsal gets the same
+`clock-binding-digest-differ` refusal (`TestBindAdmission`). A host command is
+killed at its deadline and its pipes are closed one second later, so a child
+that keeps stdout open cannot hold admission past its deadline
+(`TestClockAdmitHostReadEndsWithDeadline`).
+
+Exit 1 causes keep their existing meanings: the selector's `clock-select-*`
+causes, `clock-lease-missing` and `clock-lease-expired` from admission reads,
+`clock-selection-read` (a host command failed), `clock-selection-helper` (a
+helper did not start), `clock-selection-artifact` (an output file could not be
+written), `clock-selection-unavailable` (no complete read before the deadline),
+`clock-binding-missing` (the admitted receipt or its evidence is no longer in
+the output directory) and `clock-binding-invalid` (the receipt cannot be decoded
+or packed for Init). `TestClockAdmitWritesReceiptAndBinding`,
+`TestClockAdmitRefusesWithNamedCause`, `TestClockAdmitRefusesUnboundReceipt` and
+`TestClockAdmitRefusesBeforeHostCommands` cover the command with a fake host
+command and a virtual clock. The other `clock-binding-*` causes are still raised
+by `BindClock` when the session starts.
+
 The launcher supplies `clocks.SelectionEvidence`: a run ID, inventory-resolved
 `frontendSlot` and `controlSlot`, `callerLeapMode`, admission start/end in Unix
 seconds, four `hosts` (`relay`, `shared`, `w1`, `w2`), and frontend
