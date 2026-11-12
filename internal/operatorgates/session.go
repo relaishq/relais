@@ -80,6 +80,7 @@ type Session struct {
 	clockProbeHistory         clocks.ProbeHistory
 	inventoryComponents       map[string][]string
 	observationFailureSink    func(string, string, error)
+	timing                    timingBudget
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
@@ -98,7 +99,7 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{exchange: make(chan struct{}, 1), digest: init.Scenario.Digest, ID: id, Budget: budget, clock: clock, capabilities: map[operator.Operation]bool{}, requests: map[string]*pending{}, gates: append([]operator.Gate{}, init.Scenario.Gates...)}
+	s := &Session{exchange: make(chan struct{}, 1), digest: init.Scenario.Digest, ID: id, Budget: budget, clock: clock, capabilities: map[operator.Operation]bool{}, requests: map[string]*pending{}, gates: append([]operator.Gate{}, init.Scenario.Gates...), timing: referenceTiming}
 	if init.ClockBinding != nil {
 		s.clockArtifacts = *init.ClockBinding
 	}

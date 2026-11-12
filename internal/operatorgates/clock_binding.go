@@ -102,18 +102,6 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 	return nil
 }
 
-// leaseReadAttempt bounds a whole observation, including send-lock queueing.
-// Four sequential lease helpers measured 1.2–1.57 s including process startup.
-// Two attempts and two 100 ms polls fit inside 10P when P is one second.
-const leaseReadAttempt = 1800 * time.Millisecond
-
-// Reserve a complete serial read: observed warm reads were 300–390 ms,
-// with a 526 ms first-process maximum in the local measurement.
-const leaseReadMinimum = 550 * time.Millisecond
-
-// A queued batch needs the measured four-host service time before submission.
-const leaseReadBatchMinimum = 1600 * time.Millisecond
-
 func (s *Session) BoundLeaseGuard(p Peer, pause func(context.Context, time.Duration) error) (*LeaseGuard, error) {
 	if s.clockBinding == nil {
 		return nil, &clocks.BindingError{Cause: "clock-binding-missing"}

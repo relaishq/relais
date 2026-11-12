@@ -287,8 +287,9 @@ func (a *Adapter) executeHost(bounded context.Context, req operator.Request) (re
 
 // readCoverageClock uses the adapter directly, outside the session's mutation
 // transport and fatal latch. Only the fixed read-only clock script is supplied.
-func (a *Adapter) readCoverageClock(ctx context.Context, slot, script string) (string, error) {
-	reply := a.executeHost(ctx, operator.Request{ID: "coverage", Operation: operator.HostExecute, Target: slot, Action: "clock", Script: []byte(script)})
+func (a *Adapter) readCoverageClock(ctx context.Context, input operator.HostLeaseReadInput) (string, error) {
+	script := host.ClockWithLease(input.Cursor, input.RunStartUnixMS, "", nil)
+	reply := a.executeHost(ctx, operator.Request{ID: "coverage", Operation: operator.HostExecute, Target: input.Target, Action: "clock", Script: []byte(script)})
 	if reply.Transport != operator.Succeeded || reply.ExitCode == nil || *reply.ExitCode != 0 || reply.NotSubmitted {
 		return "", errors.New("clock-coverage-read-unavailable")
 	}
