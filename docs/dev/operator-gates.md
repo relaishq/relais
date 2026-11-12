@@ -141,8 +141,8 @@ A missing receipt refuses; bound/drift disagreement returns
 ### `relais-gates clock-admit`
 
 `clock-admit` runs the whole admission for a launcher: it seeds tracking
-cursors, starts the probe helpers, collects for the fixed 150 s admission
-deadline (first selection at 123 s), selects bounds with the supplied policy and
+cursors, starts the probe helpers, collects for the 150 s admission
+deadline (first selection at 123 s; longer for a slow transport, see below), selects bounds with the supplied policy and
 binds the receipt to the plan. The rehearsal runs the same Go path
 (`operatorrehearsal.ClockAdmission`, `collectClockSelection`,
 `BindClockAdmission`); it additionally cross-checks the `clock-select` CLI.
@@ -153,6 +153,8 @@ relais-gates clock-admit -plan plan.json -policy policy.json \
 ```
 
 All four flags are required. `-output` must be an existing directory.
+`-host-read-latency-ms MS` and `-poll-seconds S` are optional; see
+[Helper setup budget and admission window](#helper-setup-budget-and-admission-window).
 `policy.json` is the launcher policy shown below; there is no default.
 `plan.json` is a closed schema that holds only values known before measurement:
 
@@ -204,7 +206,7 @@ Outputs, all in `-output`:
 | --- | --- |
 | 0 | Admitted. Receipt and binding are written. |
 | 1 | Admission ran and refused. Stderr is one fixed cause; the status file records a selection refusal, but not a binding refusal (see below). |
-| 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, or no output directory), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule, or its `windowSeconds` is not 120, the only window collection builds) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
+| 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, no output directory, a latency outside 0–150000 ms or a poll period outside 0–300 s), `clock-admit-poll` (tracking rows too sparse for the selector; see below), `clock-admit-budget` (the derived seed and admission window exceed 300 s; see below), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule, or its `windowSeconds` is not 120, the only window collection builds) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
 
 `clock-selection-status.json` describes selection only. A binding refusal
 exits 1 with its cause on stderr while the status file keeps `cause` `""` and
@@ -220,6 +222,58 @@ changed after its digest was fixed (`operator.CheckPlan`,
 killed at its deadline and its pipes are closed one second later, so a child
 that keeps stdout open cannot hold admission past its deadline
 (`TestClockAdmitHostReadEndsWithDeadline`).
+
+#### Helper setup budget and admission window
+
+Admission starts the probe helpers with eight host commands, one after
+another: each slot writes its helper, then starts it. Two optional flags size
+the seed, helper setup and the admission window:
+
+- `-host-read-latency-ms MS` (L): the p99 latency of one host command, as
+  `clockTiming.hostReadLatencyMs`.
+- `-poll-seconds S` (P): the hosts' tracking-row period, as
+  `clockTiming.pollSeconds`; 0 is one second. P is configured, not measured.
+
+| Value | Derivation | No flags | L = 2.5 s, P = 8 s | L = 4 s, P = 8 s | L = P = 10 s |
+|---|---|---|---|---|---|
+| Seed | max(10 s, 2L + 5 s) | 10 s | 10 s | 13 s | 25 s |
+| Helper setup | max(10 s, 8L + 2 s) | 10 s | 22 s | 34 s | 82 s |
+| Admission window | max(150 s, setup + 122 s + P + 2L) | 150 s | 157 s | 172 s | 234 s |
+
+The seed drains old tracking history before setup. An oversized history takes
+one read that skips it and one that completes, with the 2 s retry pause
+between them and the 2 s seed pause after; one second is left for the rest.
+
+Probes start only after setup, and the selector accepts a first probe at most
+2 s after its window start. The 120 s window therefore starts at setup − 2 s
+at the earliest. It ends one second before a tracking row, which can come up
+to P later. Attempts start at 123 s and repeat after each read and a 2 s
+pause, so an attempt that just misses that row is followed by the pause and
+one more read of L. One second is left for selection. Without flags the
+values stay 10 s, 10 s and 150 s and the rehearsal is unchanged; the first
+selection stays at 123 s.
+
+Two timings are refused before any host command:
+
+- `clock-admit-poll`: P × `clocks.SelectionMinimumUpdates` (10) exceeds the
+  120 s window, so a host could have fewer tracking updates in the window
+  than the selector requires. P must be at most 12 s.
+- `clock-admit-budget`: seed plus admission window exceeds 300 s. A timing
+  that admission can select (P ≤ 12 s) and that the session timing budget
+  accepts (L ≤ P and 2P + 4L ≤ 60 s) needs at most 259 s, at L = P = 10 s, so
+  every such timing fits.
+
+`TestClockAdmissionTiming` checks the table and both refusals.
+`TestClockAdmissionDerivedWindow` runs admission on a virtual clock whose
+timeouts fire on virtual time: every host command takes L, the four reads of
+an attempt are issued together and see the tracking log at issue time, rows
+come every P at each phase, and probes start when the frontend helper's
+start command returns. L = 2.5 s and L = 4 s with P = 8 s, and L = 9 s and
+L = 10 s with P = 10 s, all admit inside their windows; at L = 2.5 s the
+latest admission is at 152.5 s, past the fixed 150 s, and at L = 9 s a fixed
+10 s seed would end during the seed pause. `TestClockAdmissionFixedSetupBudget`
+shows that without flags the fixed 10 s setup still stops 2.5 s helper
+commands at the fourth.
 
 Exit 1 causes keep their existing meanings: the selector's `clock-select-*`
 causes, `clock-lease-missing` and `clock-lease-expired` from admission reads,

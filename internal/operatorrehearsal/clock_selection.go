@@ -68,6 +68,9 @@ type clockAdmissionPorts struct {
 	now          func() time.Time
 	policy       clocks.SelectionPolicy
 	leapMode     string
+	timeout      func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	// latency and poll size helper setup and the admission window.
+	latency, poll time.Duration
 }
 
 func rehearsalClockPolicy() clocks.SelectionPolicy {
@@ -126,7 +129,8 @@ func (r *rehearsal) clockHostCommand(ctx context.Context, slot string, detach bo
 
 func collectClockSelection(parent context.Context, run, front, control string, p clockAdmissionPorts) *ClockSelectionReport {
 	// Seed/drain old history before helper startup or the admission deadline.
-	ctx, seedDone := context.WithTimeout(parent, 10*time.Second)
+	seedBudget, setupBudget, window := clockAdmissionTiming(p.latency, p.poll)
+	ctx, seedDone := p.timeout(parent, seedBudget)
 	defer seedDone()
 	var started, end time.Time
 	defer func() {
@@ -237,11 +241,11 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			}
 			seedDone()
 			started = p.now()
-			end = started.Add(150 * time.Second)
-			admission, admissionDone := context.WithTimeout(parent, 150*time.Second)
+			end = started.Add(window)
+			admission, admissionDone := p.timeout(parent, window)
 			defer admissionDone()
 			ctx = admission
-			setup, setupDone := context.WithTimeout(ctx, 10*time.Second)
+			setup, setupDone := p.timeout(ctx, setupBudget)
 			err := p.start(setup, end)
 			setupDone()
 			if err != nil {
@@ -279,7 +283,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 				}
 			}
 		}
-		delay := 2 * time.Second
+		delay := clockRetryPause
 		if !end.IsZero() {
 			delay = min(delay, end.Sub(p.now()))
 		}
