@@ -189,6 +189,51 @@ func TestExcludedKillNeedsSoleCause(t *testing.T) {
 	}
 }
 
+// excludedBracketPool qualifies replacementPoolSample from real timelines with
+// 0.1 ms error per host. Phase 1 event 5 gets a bracket from midpoint-below to
+// midpoint+above that the gate marked wide; every other kill bracket is 2 ns.
+func excludedBracketPool(t *testing.T, below, above int64, change func(e *clocks.CoverageEvidence, n int64)) (previewPoolInput, []string) {
+	t.Helper()
+	input := replacementPoolSample()
+	input.PreCoverageEvidence = false
+	raw, _ := json.Marshal(input)
+	var pool operatorevidence.Pool
+	if err := json.Unmarshal(raw, &pool); err != nil {
+		t.Fatal(err)
+	}
+	windows := operatorevidence.CoverageWindows(pool)
+	e := &clocks.CoverageEvidence{Version: 2, FrontendSlot: "relay", ControlSlot: "shared", Bounds: clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, Windows: windows}
+	start, _ := observe.CoverageNS(windows[0].StartUnixNS)
+	timelines := map[string]observe.CoverageTimeline{}
+	for _, slot := range []string{"relay", "shared", "w1", "w2"} {
+		timeline := observe.CoverageTimeline{ReadComplete: true}
+		for sec := start/1e9 - 5; sec <= start/1e9+100; sec++ {
+			timeline.Rows = append(timeline.Rows, observe.CoverageRow{UnixSeconds: sec, MaxErrorSeconds: .0001, LeapStatus: "N"})
+		}
+		timelines[slot] = timeline
+	}
+	e.Attempts = []clocks.CoverageAttempt{{Version: 2, Clocks: timelines}}
+	var excluded int64
+	for _, w := range windows {
+		n, _ := observe.CoverageNS(w.StartUnixNS)
+		b := observe.CoverageBracket{Worker: w.Worker, MidpointUnixNS: w.StartUnixNS, BeforeUnixNS: clocks.TimestampNS(n - 1), AfterUnixNS: clocks.TimestampNS(n + 1)}
+		if w.Kind != "takeover" {
+			continue
+		}
+		if w.Phase == 1 && w.Event == 5 {
+			excluded = n
+			b.LeaseExcluded, b.BeforeUnixNS, b.AfterUnixNS = true, clocks.TimestampNS(n-below), clocks.TimestampNS(n+above)
+		}
+		e.KillBrackets = append(e.KillBrackets, b)
+	}
+	if change != nil {
+		change(e, excluded)
+	}
+	q := e.Qualification()
+	input.ClockCoverage = &q
+	return input, q.WindowCauses(1, 5, false)
+}
+
 // Real timelines and brackets: phase 1 event 5 has a well-formed 6 ms bracket the
 // gate marked wide. Only a clean takeover may leave the pool.
 func TestExcludedKillTimelineCauseIsNotDropped(t *testing.T) {
@@ -217,44 +262,7 @@ func TestExcludedKillTimelineCauseIsNotDropped(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input := replacementPoolSample()
-			input.PreCoverageEvidence = false
-			raw, _ := json.Marshal(input)
-			var pool operatorevidence.Pool
-			if err := json.Unmarshal(raw, &pool); err != nil {
-				t.Fatal(err)
-			}
-			windows := operatorevidence.CoverageWindows(pool)
-			e := &clocks.CoverageEvidence{Version: 2, FrontendSlot: "relay", ControlSlot: "shared", Bounds: clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}, Windows: windows}
-			start, _ := observe.CoverageNS(windows[0].StartUnixNS)
-			timelines := map[string]observe.CoverageTimeline{}
-			for _, slot := range []string{"relay", "shared", "w1", "w2"} {
-				timeline := observe.CoverageTimeline{ReadComplete: true}
-				for sec := start/1e9 - 5; sec <= start/1e9+100; sec++ {
-					timeline.Rows = append(timeline.Rows, observe.CoverageRow{UnixSeconds: sec, MaxErrorSeconds: .0001, LeapStatus: "N"})
-				}
-				timelines[slot] = timeline
-			}
-			e.Attempts = []clocks.CoverageAttempt{{Version: 2, Clocks: timelines}}
-			var excluded int64
-			for _, w := range windows {
-				n, _ := observe.CoverageNS(w.StartUnixNS)
-				b := observe.CoverageBracket{Worker: w.Worker, MidpointUnixNS: w.StartUnixNS, BeforeUnixNS: clocks.TimestampNS(n - 1), AfterUnixNS: clocks.TimestampNS(n + 1)}
-				if w.Kind != "takeover" {
-					continue
-				}
-				if w.Phase == 1 && w.Event == 5 {
-					excluded = n
-					b.LeaseExcluded, b.BeforeUnixNS, b.AfterUnixNS = true, clocks.TimestampNS(n-3000000), clocks.TimestampNS(n+3000000)
-				}
-				e.KillBrackets = append(e.KillBrackets, b)
-			}
-			if tc.change != nil {
-				tc.change(e, excluded)
-			}
-			q := e.Qualification()
-			input.ClockCoverage = &q
-			causes := q.WindowCauses(1, 5, false)
+			input, causes := excludedBracketPool(t, 3000000, 3000000, tc.change)
 			got := pooledPreviewMedia(&input)
 			if tc.name == "clean" {
 				if !slices.Equal(causes, []string{"clock-coverage-kill-excluded"}) || got.Status != "passed" || got.ExcludedKills != 1 {
