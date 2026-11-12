@@ -222,6 +222,22 @@ sleep 3
 		clockCheck(false) + "chronyc -n waitsync 240 0 20 1\n" + ClockCheck() + sharedRoot + probe, nil
 }
 
+// TemplateChronyScript proves the template's user data wrote its exact
+// chrony.conf block (from the verified install.sh copy) before the rehearsal
+// replaces it; the rehearsal cannot reach the platform time source.
+func (t *Topology) TemplateChronyScript() (string, error) {
+	_, rest, found := strings.Cut(t.Common.Files["/opt/relais/boot/install.sh"].Content, "cat > \"$root/etc/chrony.conf\" <<'CHRONY'\n")
+	body, _, closed := strings.Cut(rest, "\nCHRONY\n")
+	if !found || !closed {
+		return "", errors.New("template-chrony-missing")
+	}
+	return "python3 - <<'PY'\nfrom pathlib import Path\nif Path('/etc/chrony.conf').read_text() != " + strconv.Quote(body+"\n") + ":\n    raise SystemExit('template-chrony-mismatch')\nPY\n", nil
+}
+
+// ClockResyncScript restores the local reference after the template boot
+// restarted chronyd, and waits at most 240 one-second tries for selection.
+const ClockResyncScript = "set -eu\ninstall -m 0644 /rehearsal/chrony.conf /etc/chrony.conf\nsystemctl restart chronyd\nchronyc -n waitsync 240 0 20 1\n"
+
 func (t *Topology) VerifyScript(slot string) (string, error) {
 	units, err := t.Units(slot)
 	if err != nil {

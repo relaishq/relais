@@ -20,6 +20,22 @@ PY
 python3 "$boot/prepare.py" "$config" "$root/run/relais"
 "${RELAIS_TEST_SYSCTL:-sysctl}" -p "$root/etc/sysctl.d/60-relais-udp.conf"
 manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+# Every host gets this exact time-sync file before any component starts. Only the
+# platform time source (link-local, leap-smeared) is used: an 8 s poll gives about
+# 15 tracking-log updates per 120 s; clock admission needs at least 10.
+cat > "$root/etc/chrony.conf" <<'CHRONY'
+server 169.254.169.123 prefer iburst minpoll 3 maxpoll 3
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+maxclockerror 1
+leapsecmode system
+logdir /var/log/chrony
+log tracking
+CHRONY
+chmod 0644 "$root/etc/chrony.conf"
+"$manager" enable chronyd.service
+"$manager" restart chronyd.service
 if [[ ${settings[4]} == false ]]; then
   "$manager" disable --now amazon-ssm-agent.service
   "$manager" mask amazon-ssm-agent.service

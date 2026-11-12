@@ -101,6 +101,9 @@ correction and frequency uncertainty. Self-consistency records a break when
 `abs(offset_k) > maxerror_k`; the reader does not age a previous row or parse
 `maxclockerror` from configuration. The rehearsal config enables `log tracking`
 in `/var/log/chrony`, sets `maxclockerror 1`, and retains `chronyd -x`.
+The AWS preview template sets the same tracking log and `maxclockerror 1` with
+an 8 s poll, about 15 updates per 120 s
+([time sync](../../deploy/aws/README.md#time-sync-for-clock-admission)).
 
 Rows and breaks have `beforeRun`: true only when the row's entire timestamp
 second, or a break's entire interval, precedes the session armed time. A second
