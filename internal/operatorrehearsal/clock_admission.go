@@ -53,26 +53,32 @@ type ClockAdmissionBinding struct {
 // Collection always freezes this trailing window, so no other policy window can be admitted.
 const clockAdmissionWindowSeconds = 120
 
-// Helper setup and the admission window never drop below the fixed values
-// the rehearsal has always used.
+// Seed, helper setup and the admission window never drop below the fixed
+// values the rehearsal has always used.
+const clockSeedMinimum = 10 * time.Second
 const clockSetupMinimum = 10 * time.Second
 const clockAdmissionMinimum = 150 * time.Second
 
-// No derived admission may exceed this: twice the fixed window. A session's
-// timing budget accepts only L ≤ P and 2P + 4L ≤ 60 s, whose largest window
-// is 234 s (L = P = 10 s), so every timing a session accepts fits.
+// No seed plus admission window may exceed this. An admissible timing that a
+// session's budget also accepts has L ≤ P ≤ 12 s and 2P + 4L ≤ 60 s; the
+// largest, L = P = 10 s, needs 25 s + 234 s = 259 s.
 const clockAdmissionMaximum = 300 * time.Second
 
 // The selector accepts a first probe up to 2 s after the window start.
 const clockProbeAllowance = 2 * time.Second
 
-// Each admitting attempt is one parallel read, then this pause.
+// Each admitting attempt is one parallel read, then this pause. The seed
+// keeps the same pause after its last read.
 const clockRetryPause = 2 * time.Second
 
-// clockAdmissionTiming derives helper setup and the admission window from
-// the host command latency L and the tracking-row period P.
-func clockAdmissionTiming(latency, poll time.Duration) (setup, window time.Duration) {
+// clockAdmissionTiming derives the seed, helper setup and the admission
+// window from the host command latency L and the tracking-row period P.
+func clockAdmissionTiming(latency, poll time.Duration) (seed, setup, window time.Duration) {
 	poll = max(poll, time.Second)
+	// An oversized history takes one read that skips it and one that
+	// completes, with the retry pause between them and the seed pause after;
+	// one second is left for the rest.
+	seed = max(clockSeedMinimum, latency+clockRetryPause+latency+clockRetryPause+time.Second)
 	// Eight commands run one after another: each slot writes its helper, then
 	// starts it. Two seconds let the frontend helper send its first probes.
 	setup = max(clockSetupMinimum, 2*time.Duration(len(Slots))*latency+2*time.Second)
@@ -82,13 +88,17 @@ func clockAdmissionTiming(latency, poll time.Duration) (setup, window time.Durat
 	// followed by the retry pause and one more read; one second is left for
 	// selection.
 	needed := setup - clockProbeAllowance + clockAdmissionWindowSeconds*time.Second + time.Second + poll + latency + clockRetryPause + latency + time.Second
-	return setup, max(clockAdmissionMinimum, needed)
+	return seed, setup, max(clockAdmissionMinimum, needed)
 }
 
-// CheckClockAdmissionTiming refuses a latency and poll period whose derived
-// admission window exceeds the maximum.
+// CheckClockAdmissionTiming refuses, before any host command, a poll period
+// whose rows cannot give the selector its minimum updates in the window, and
+// a timing whose seed and admission window exceed the maximum.
 func CheckClockAdmissionTiming(latency, poll time.Duration) error {
-	if _, window := clockAdmissionTiming(latency, poll); window > clockAdmissionMaximum {
+	if poll*clocks.SelectionMinimumUpdates > clockAdmissionWindowSeconds*time.Second {
+		return errors.New("clock-admit-poll")
+	}
+	if seed, _, window := clockAdmissionTiming(latency, poll); seed+window > clockAdmissionMaximum {
 		return errors.New("clock-admit-budget")
 	}
 	return nil

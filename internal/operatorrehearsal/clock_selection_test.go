@@ -557,6 +557,10 @@ func TestClockAdmissionDerivedWindow(t *testing.T) {
 		"reference":  {0, 0, 10 * time.Second, 150 * time.Second, 1},
 		"L=2.5s,P=8": {2500 * time.Millisecond, 8 * time.Second, 22 * time.Second, 157 * time.Second, 8},
 		"L=4s,P=8":   {4 * time.Second, 8 * time.Second, 34 * time.Second, 172 * time.Second, 8},
+		// The seed needs 2L + 5 s: a fixed 10 s ends before the first read and pause.
+		"L=9s,P=10": {9 * time.Second, 10 * time.Second, 74 * time.Second, 224 * time.Second, 10},
+		// The largest timing a session accepts that admission can select.
+		"L=10s,P=10": {10 * time.Second, 10 * time.Second, 82 * time.Second, 234 * time.Second, 10},
 	} {
 		for phase := range c.phases {
 			t.Run(fmt.Sprintf("%s/phase=%d", name, phase), func(t *testing.T) {
@@ -582,24 +586,31 @@ func TestClockAdmissionFixedSetupBudget(t *testing.T) {
 	}
 }
 
-// The derivation table, and the up-front refusal above the 300 s maximum.
+// The derivation table, and the up-front refusals: rows too sparse for the
+// selector's minimum updates, and a seed plus window above 300 s.
 func TestClockAdmissionTiming(t *testing.T) {
+	s := func(seconds float64) time.Duration { return time.Duration(seconds * float64(time.Second)) }
 	for _, c := range []struct {
-		latency, poll, setup, window time.Duration
-		cause                        string
+		latency, poll, seed, setup, window time.Duration
+		cause                              string
 	}{
-		{0, 0, 10 * time.Second, 150 * time.Second, ""},
-		{0, time.Second, 10 * time.Second, 150 * time.Second, ""},
-		{2500 * time.Millisecond, 8 * time.Second, 22 * time.Second, 157 * time.Second, ""},
-		{4 * time.Second, 8 * time.Second, 34 * time.Second, 172 * time.Second, ""},
-		{10 * time.Second, 10 * time.Second, 82 * time.Second, 234 * time.Second, ""},
-		{16 * time.Second, 16 * time.Second, 130 * time.Second, 300 * time.Second, ""},
-		{16 * time.Second, 17 * time.Second, 130 * time.Second, 301 * time.Second, "clock-admit-budget"},
+		{0, 0, s(10), s(10), s(150), ""},
+		{0, s(1), s(10), s(10), s(150), ""},
+		{s(2.5), s(8), s(10), s(22), s(157), ""},
+		{s(4), s(8), s(13), s(34), s(172), ""},
+		{s(9), s(10), s(23), s(74), s(224), ""},
+		{s(10), s(10), s(25), s(82), s(234), ""},
+		// Exactly 300 s, then 12 ms over.
+		{s(13.25), s(12), s(31.5), s(108), s(268.5), ""},
+		{s(13.251), s(12), s(31.502), s(108.008), s(268.51), "clock-admit-budget"},
+		// Twelve-second rows still give the selector ten updates in 120 s.
+		{s(1), s(13), s(10), s(10), s(150), "clock-admit-poll"},
+		{s(4), s(16), s(13), s(34), s(180), "clock-admit-poll"},
 	} {
-		setup, window := clockAdmissionTiming(c.latency, c.poll)
+		seed, setup, window := clockAdmissionTiming(c.latency, c.poll)
 		err := CheckClockAdmissionTiming(c.latency, c.poll)
-		if setup != c.setup || window != c.window || c.cause == "" != (err == nil) || err != nil && err.Error() != c.cause {
-			t.Fatal("MUTATION: admission-timing", c.latency, c.poll, setup, window, err)
+		if seed != c.seed || setup != c.setup || window != c.window || c.cause == "" != (err == nil) || err != nil && err.Error() != c.cause {
+			t.Fatal("MUTATION: admission-timing", c.latency, c.poll, seed, setup, window, err)
 		}
 	}
 }

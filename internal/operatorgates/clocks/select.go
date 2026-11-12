@@ -47,6 +47,9 @@ type ClockSelection struct {
 	SHA256  string           `json:"sha256"`
 }
 
+// SelectionMinimumUpdates is the fewest tracking updates each host needs inside the window.
+const SelectionMinimumUpdates = 10
+
 var selectionSlots = []string{"relay", "shared", "w1", "w2"}
 var column14Pattern = regexp.MustCompile(`^[0-9]\.[0-9]{3}e([+-][0-9]{2,3})$`)
 var selectionRunPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -106,7 +109,7 @@ func Select(input SelectionEvidence, policy SelectionPolicy) (ClockSelection, er
 		if e != nil {
 			return out, e
 		}
-		if count < 10 {
+		if count < SelectionMinimumUpdates {
 			return out, fmt.Errorf("clock-select-updates")
 		}
 		latest = min(latest, h.Tracking.Rows[len(h.Tracking.Rows)-1].UnixSeconds)

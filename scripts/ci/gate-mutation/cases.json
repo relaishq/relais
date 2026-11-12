@@ -4144,6 +4144,56 @@
     "Package": "./internal/operatorrehearsal"
   },
   {
+    "ID": "clock-admission-seed-fixed",
+    "File": "internal/operatorrehearsal/clock_admission.go",
+    "Function": "clockAdmissionTiming",
+    "Old": "seed = max(clockSeedMinimum, latency+clockRetryPause+latency+clockRetryPause+time.Second)",
+    "New": "seed = clockSeedMinimum",
+    "Test": "TestClockAdmissionDerivedWindow/L=9s,P=10/phase=0",
+    "Marker": "MUTATION: admission-derived-window",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-seed-one-read",
+    "File": "internal/operatorrehearsal/clock_admission.go",
+    "Function": "clockAdmissionTiming",
+    "Old": "latency+clockRetryPause+latency+clockRetryPause+time.Second",
+    "New": "latency+clockRetryPause+clockRetryPause+time.Second",
+    "Test": "TestClockAdmissionTiming",
+    "Marker": "MUTATION: admission-timing",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-seed-unused",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "p.timeout(parent, seedBudget)",
+    "New": "p.timeout(parent, min(seedBudget, 10*time.Second))",
+    "Test": "TestClockAdmissionDerivedWindow/L=9s,P=10/phase=0",
+    "Marker": "MUTATION: admission-derived-window",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-cap-ignores-seed",
+    "File": "internal/operatorrehearsal/clock_admission.go",
+    "Function": "CheckClockAdmissionTiming",
+    "Old": "seed+window > clockAdmissionMaximum",
+    "New": "seed+window > clockAdmissionMaximum+seed",
+    "Test": "TestClockAdmissionTiming",
+    "Marker": "MUTATION: admission-timing",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "clock-admission-sparse-poll-accepted",
+    "File": "internal/operatorrehearsal/clock_admission.go",
+    "Function": "CheckClockAdmissionTiming",
+    "Old": "poll*clocks.SelectionMinimumUpdates > clockAdmissionWindowSeconds*time.Second",
+    "New": "false",
+    "Test": "TestClockAdmissionTiming",
+    "Marker": "MUTATION: admission-timing",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
     "ID": "clock-select-ignore-post-window-leap",
     "File": "internal/operatorgates/clocks/select.go",
     "Function": "selectionMaximum",

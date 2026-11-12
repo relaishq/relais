@@ -129,8 +129,8 @@ func (r *rehearsal) clockHostCommand(ctx context.Context, slot string, detach bo
 
 func collectClockSelection(parent context.Context, run, front, control string, p clockAdmissionPorts) *ClockSelectionReport {
 	// Seed/drain old history before helper startup or the admission deadline.
-	ctx, seedDone := p.timeout(parent, 10*time.Second)
-	setupBudget, window := clockAdmissionTiming(p.latency, p.poll)
+	seedBudget, setupBudget, window := clockAdmissionTiming(p.latency, p.poll)
+	ctx, seedDone := p.timeout(parent, seedBudget)
 	defer seedDone()
 	var started, end time.Time
 	defer func() {

@@ -248,10 +248,12 @@ func TestClockAdmitRefusesBeforeHostCommands(t *testing.T) {
 		"latency-huge":     {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-host-read-latency-ms", "9223372036854775807") }},
 		"poll-negative":    {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-poll-seconds", "-1") }},
 		"poll-huge":        {"clock-admit-input", func(f *clockAdmitFixture) { f.args = append(f.args, "-poll-seconds", "301") }},
-		// L = 16 s, P = 17 s derives a 301 s admission, above the 300 s maximum.
+		// L = 13.251 s, P = 12 s derives a seed and window just above 300 s.
 		"timing-over-cap": {"clock-admit-budget", func(f *clockAdmitFixture) {
-			f.args = append(f.args, "-host-read-latency-ms", "16000", "-poll-seconds", "17")
+			f.args = append(f.args, "-host-read-latency-ms", "13251", "-poll-seconds", "12")
 		}},
+		// 13 s rows give fewer than the selector's ten updates in 120 s.
+		"poll-sparse":      {"clock-admit-poll", func(f *clockAdmitFixture) { f.args = append(f.args, "-poll-seconds", "13") }},
 		"relative-command": {"usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR [-host-read-latency-ms MS] [-poll-seconds S]", func(f *clockAdmitFixture) { f.args[5] = "host-command" }},
 	} {
 		t.Run(name, func(t *testing.T) {
