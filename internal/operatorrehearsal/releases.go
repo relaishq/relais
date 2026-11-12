@@ -78,7 +78,7 @@ func PrepareReleases(ctx context.Context, directory, token string) error {
 }
 func validatePair(p artifacts.Plan) error {
 	if p.Version != 1 || p.Arch != "x86_64" || p.From.Version != "0.3.0" || p.To.Version != "0.3.1" || p.From.Commit != ReleaseACommit || p.To.Commit != ReleaseBCommit || p.From.ArchiveSHA256 != ReleaseASHA256 || p.To.ArchiveSHA256 != ReleaseBSHA256 || p.From.Archive != "relais_0.3.0_linux_amd64.tar.gz" || p.To.Archive != "relais_0.3.1_linux_amd64.tar.gz" {
-		return errors.New("release-profile-differs")
+		return &artifacts.Refusal{Code: "release-profile-differs", Detail: "planned release pair differs from the pinned rehearsal pair"}
 	}
 	return nil
 }

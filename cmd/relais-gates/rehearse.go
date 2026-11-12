@@ -17,6 +17,8 @@ import (
 	"github.com/relaishq/relais/internal/operatorrehearsal"
 )
 
+var prepareReleases = operatorrehearsal.PrepareReleases
+
 func rehearse(args []string) int {
 	return rehearseWithReadiness(args, operatorgates.CheckReadiness, os.Stderr)
 }
@@ -52,19 +54,16 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 		return v
 	}
 	if *prepare || !*prepared {
-		if e := operatorrehearsal.PrepareReleases(ctx, abs(*assets), token); e != nil {
-			r := operatorrehearsal.Report{SchemaVersion: 1, Commit: *commit, HeadCommit: *head, Event: *event, Cleanup: true, Errors: []string{"release-read-failed"}}
+		if e := prepareReleases(ctx, abs(*assets), token); e != nil {
+			// The minimal report has no scenario identity, so Report.Write would refuse it.
+			// Print only the public refusal code, never free-form error text.
+			code := "unclassified"
 			var refusal *artifacts.Refusal
 			if errors.As(e, &refusal) {
-				r.Errors = append(r.Errors, refusal.Code)
-			}
-			if os.MkdirAll(abs(*output), 0700) == nil {
-				_ = r.Save(filepath.Join(abs(*output), "report.json"))
+				code = refusal.Code
 			}
 			fmt.Fprintln(diagnostics, "release-read-failed")
-			if writeErr := r.Write(diagnostics); writeErr != nil {
-				fmt.Fprintln(diagnostics, "report refused:", writeErr)
-			}
+			fmt.Fprintln(diagnostics, "release-refusal:", operatorrehearsal.PublicCode(code))
 			return 1
 		}
 	}
