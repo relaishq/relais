@@ -514,8 +514,10 @@ new terminal entries published after streaming (normally it is empty), avoiding
 a duplicate trace that could exceed the unchanged 256 KiB frame limit. Clients
 append that terminal tail to the streamed trace.
 Request and result traces include allow-listed operation, target and action
-labels. Every gate polling wait emits a fixed wait-purpose label on each poll,
-without retaining status payloads: `trial-takeover`, `trial-settled`,
+labels. Every gate wait that polls control, worker, relay or store status emits
+a fixed wait-purpose label on each poll, without retaining status payloads.
+Loops that read clocks are excluded: clock lease refresh, the fault quiet gap
+and coverage drain. The named purposes are `trial-takeover`, `trial-settled`,
 `trial-ready`, `worker-settled`, `worker-alive`, `control-reconstructed`,
 `control-reconstructed-degraded`, `restart-takeover`, `release-worker-settled`,
 `release-worker-alive`, `release-call-restored`, `relay-rejoined`,
@@ -523,8 +525,9 @@ without retaining status payloads: `trial-takeover`, `trial-settled`,
 `restore-worker-alive`, `calls-settled`, `failover-primary-recovered`,
 `collection-complete` and `boundary-idle`.
 
-When the gate budget ends a wait (the gate end passes, or the host-submission
-floor refuses its next read), or a `worker-empty`, restoration or
+When the gate budget ends a wait (the gate end passes, the host-submission
+floor refuses its next read, or the gate context's deadline ends a read or
+sleep), or a `worker-empty`, restoration or
 `calls-settled` wait runs out its own window, process evidence records
 `expiredWait` for the latest such wait (measurement gates carry it on their
 measure result; admission keeps the boundary, idle or survivor one): the

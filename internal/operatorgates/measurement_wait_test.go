@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +95,31 @@ func measurementScenarios() map[string]func(*testing.T) *WaitDiagnostic {
 			}
 			return r.ExpiredWait
 		},
+		// Production sleeps under the gate context, which can end the last
+		// sleep with context.DeadlineExceeded at the deadline.
+		"collection-complete/sleep-deadline": func(t *testing.T) *WaitDiagnostic {
+			g, clock := testProcedure(t)
+			var reads []time.Duration
+			g.p.Sleep = func(_ context.Context, d time.Duration) error {
+				clock.Advance(d)
+				if clock.Elapsed() >= g.end {
+					return context.DeadlineExceeded
+				}
+				return nil
+			}
+			p := measureFixture(g, clock, 1, &reads)
+			p.Collect = func(ctx context.Context, _ time.Duration) <-chan MeasurementCollection {
+				ch := make(chan MeasurementCollection)
+				go func() { <-ctx.Done(); close(ch) }()
+				return ch
+			}
+			r := RunMeasureGate(context.Background(), operator.Load, g.c, p, g.end)
+			intervals(t, reads[1:], 15*time.Second)
+			if r.Status != operator.Inconclusive || r.Reason != "gate-deadline" || r.Measurement.MissingSamples != 82 {
+				t.Fatalf("collection sleep-deadline result changed %+v", r)
+			}
+			return r.ExpiredWait
+		},
 		"boundary-idle": func(t *testing.T) *WaitDiagnostic {
 			g, clock := testProcedure(t)
 			var reads []time.Duration
@@ -128,15 +154,17 @@ func TestMeasurementWaitsKeepResult(t *testing.T) {
 func TestMeasurementWaitsNameExpiredWait(t *testing.T) {
 	live := []string{"control-ready", "calls-one", "call-owner-w1", "w1-live", "w2-live"}
 	want := map[string][]string{
-		"calls-settled":              {"control-ready", "calls-many", "w1-live", "w2-live"},
-		"failover-primary-recovered": append(slices.Clone(live), "store-available", "store-primary-same", "store-sync"),
-		"collection-complete":        live,
-		"boundary-idle":              {"control-ready", "calls-one", "call-owner-w1", "w1-live", "w2-live", "w1-local-unknown", "w2-local-unknown", "store-ownership-unknown"},
+		"calls-settled":                      {"control-ready", "calls-many", "w1-live", "w2-live"},
+		"failover-primary-recovered":         append(slices.Clone(live), "store-available", "store-primary-same", "store-sync"),
+		"collection-complete":                live,
+		"collection-complete/sleep-deadline": live,
+		"boundary-idle":                      {"control-ready", "calls-one", "call-owner-w1", "w1-live", "w2-live", "w1-local-unknown", "w2-local-unknown", "store-ownership-unknown"},
 	}
 	for name, run := range measurementScenarios() {
 		t.Run(name, func(t *testing.T) {
 			got := run(t)
-			if got == nil || got.Purpose != name || got.Polls < 2 || got.WaitedMS <= 0 || !reflect.DeepEqual(got.Last, want[name]) || !got.valid() {
+			purpose, _, _ := strings.Cut(name, "/")
+			if got == nil || got.Purpose != purpose || got.Polls < 2 || got.WaitedMS <= 0 || !reflect.DeepEqual(got.Last, want[name]) || !got.valid() {
 				t.Fatalf("MUTATION: measurement-expired-wait %+v", got)
 			}
 		})

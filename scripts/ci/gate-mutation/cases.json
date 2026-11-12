@@ -6594,7 +6594,7 @@
   {
     "ID": "expired-wait-floor-unrecorded",
     "File": "internal/operatorgates/wait_diagnostics.go",
-    "Function": "end",
+    "Function": "budgetEnded",
     "Old": "case \"gate-deadline\", \"precondition-failed:deadline-before-submission\":",
     "New": "case \"gate-deadline\":",
     "Test": "TestBudgetEndedWaitKeepsCategory",
@@ -6615,7 +6615,7 @@
     "ID": "expired-wait-any-error",
     "File": "internal/operatorgates/wait_diagnostics.go",
     "Function": "end",
-    "Old": "switch code(err) {\n\tcase \"gate-deadline\", \"precondition-failed:deadline-before-submission\":\n\t\tw.expired()\n\t}",
+    "Old": "if budgetEnded(err) {\n\t\tw.expired()\n\t}",
     "New": "w.expired()",
     "Test": "TestGateWaitsNameExpiredWait/restart-takeover-unknown",
     "Marker": "MUTATION: expired-wait-scope",
@@ -6665,8 +6665,8 @@
     "ID": "worker-empty-expiry-unrecorded",
     "File": "internal/operatorgates/restore.go",
     "Function": "workerEmpty",
-    "Old": "c == \"gate-deadline\" || strings.HasPrefix(c, \"precondition-failed:\")",
-    "New": "c == \"gate-deadline\"",
+    "Old": "if strings.HasPrefix(code(err), \"precondition-failed:\") {\n\t\twait.expired()\n\t}",
+    "New": "",
     "Test": "TestWorkerEmptyNamesExpiredWait/window",
     "Marker": "MUTATION: worker-empty-expired-wait",
     "Package": "./internal/operatorgates"
@@ -6739,6 +6739,26 @@
     "New": "return fault(\"gate-deadline\")",
     "Test": "TestMeasurementWaitsNameExpiredWait/boundary-idle",
     "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "collection-sleep-deadline-unrecorded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "_ = wait.end(err)\n\t\t\t\tbreak",
+    "New": "break",
+    "Test": "TestMeasurementWaitsNameExpiredWait/collection-complete/sleep-deadline",
+    "Marker": "MUTATION: measurement-expired-wait",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "context-deadline-wait-unrecorded",
+    "File": "internal/operatorgates/wait_diagnostics.go",
+    "Function": "budgetEnded",
+    "Old": "return errors.Is(err, context.DeadlineExceeded)",
+    "New": "return errors.Is(err, context.Canceled)",
+    "Test": "TestGateWaitsNameExpiredWait/worker-alive-sleep-deadline",
+    "Marker": "MUTATION: expired-wait-scope",
     "Package": "./internal/operatorgates"
   }
 ]

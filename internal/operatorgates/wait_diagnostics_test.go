@@ -158,6 +158,22 @@ func TestGateWaitsNameExpiredWait(t *testing.T) {
 			}
 			return g.relay(context.Background(), true, 1)
 		}, "gate-deadline", &WaitDiagnostic{Purpose: "relay-continuity", Last: []string{"relay-same-instance", "relay-epoch-same", "relay-workers-ready"}}},
+		{"worker-alive-sleep-deadline", func(g *procedure, clock *FakeClock) error {
+			g.p.Step = func(context.Context, string, string, time.Duration, ProcessExtra) (StepResult, error) {
+				s := liveStatus(g, call)
+				s.Workers[0].Dead = true
+				return StepResult{Status: s}, nil
+			}
+			g.p.Sleep = func(_ context.Context, d time.Duration) error {
+				clock.Advance(d)
+				if clock.Elapsed() >= g.end {
+					return context.DeadlineExceeded
+				}
+				return nil
+			}
+			_, err := g.wait(context.Background(), "worker-alive", func(s controlplane.Status) bool { return alive(s, "w1", g.c.Parameters.Workers) })
+			return err
+		}, "command-result-unknown", &WaitDiagnostic{Purpose: "worker-alive", Last: []string{"control-ready", "calls-one", "call-owner-w1", "w1-dead-with-calls", "w2-live"}}},
 		{"worker-alive-satisfied", func(g *procedure, _ *FakeClock) error {
 			g.p.Step = func(context.Context, string, string, time.Duration, ProcessExtra) (StepResult, error) {
 				return StepResult{Status: liveStatus(g, call)}, nil

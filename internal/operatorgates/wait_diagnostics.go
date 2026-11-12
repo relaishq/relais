@@ -1,6 +1,8 @@
 package operatorgates
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -216,9 +218,18 @@ func (w *gateWait) expired() {
 
 // end returns err unchanged and records the wait when err is a budget end.
 func (w *gateWait) end(err error) error {
-	switch code(err) {
-	case "gate-deadline", "precondition-failed:deadline-before-submission":
+	if budgetEnded(err) {
 		w.expired()
 	}
 	return err
+}
+
+// budgetEnded reports a gate-end refusal, a submission-floor refusal, or the
+// gate context's deadline ending a read or sleep.
+func budgetEnded(err error) bool {
+	switch code(err) {
+	case "gate-deadline", "precondition-failed:deadline-before-submission":
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }

@@ -236,6 +236,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			// The collection channel may finish during the sample interval. The sleep
 			// is bounded by the original gate deadline, never a renewed wait budget.
 			if err = p.Sleep(ctx, min(15*time.Second, max(time.Duration(0), g.end-p.Clock.Elapsed()))); err != nil {
+				_ = wait.end(err)
 				break
 			}
 		}

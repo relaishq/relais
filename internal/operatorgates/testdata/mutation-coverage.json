@@ -630,7 +630,9 @@
     "failover-recovery-expiry-unrecorded",
     "collection-expiry-unrecorded",
     "measure-expired-wait-unpublished",
-    "boundary-idle-expiry-unrecorded"
+    "boundary-idle-expiry-unrecorded",
+    "collection-sleep-deadline-unrecorded",
+    "context-deadline-wait-unrecorded"
   ],
   "killed": [
     {
@@ -5257,6 +5259,18 @@
     {
       "id": "boundary-idle-expiry-unrecorded",
       "test": "TestMeasurementWaitsNameExpiredWait/boundary-idle",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "collection-sleep-deadline-unrecorded",
+      "test": "TestMeasurementWaitsNameExpiredWait/collection-complete/sleep-deadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "context-deadline-wait-unrecorded",
+      "test": "TestGateWaitsNameExpiredWait/worker-alive-sleep-deadline",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

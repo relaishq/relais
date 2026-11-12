@@ -72,10 +72,10 @@ func (g *procedure) workerEmpty(ctx context.Context, w string) error {
 		return r, err
 	}
 	err := WorkerEmpty(ctx, p, w, g.end)
-	if c := code(err); c == "gate-deadline" || strings.HasPrefix(c, "precondition-failed:") {
+	if strings.HasPrefix(code(err), "precondition-failed:") {
 		wait.expired()
 	}
-	return err
+	return wait.end(err)
 }
 
 // restoreWorkers never runs after uncertainty. A settled death uses the same
