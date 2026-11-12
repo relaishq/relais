@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -197,4 +198,87 @@ func TestOrdinaryFaultWaitsAfterCachedLeaseInventoryBatch(t *testing.T) {
 	require.Equal(t, operator.HostReadBatch, timing.Operation, "MUTATION: host-read-diagnostic")
 	require.Equal(t, int64(time.Second), timing.StartedNS, "MUTATION: host-read-diagnostic")
 	require.Equal(t, int64(1500*time.Millisecond), timing.CompletedNS, "MUTATION: host-read-diagnostic")
+}
+
+// exitPeer ends a submitted exchange through one chosen exit path.
+type exitPeer struct {
+	clock   *leaseTestClock
+	sendErr error
+	receive func(operator.Request) (operator.Frame, error)
+	request operator.Request
+}
+
+func (p *exitPeer) Send(_ context.Context, frame operator.Frame) error {
+	p.request = *frame.Request
+	p.clock.advance(400 * time.Millisecond)
+	return p.sendErr
+}
+func (p *exitPeer) Receive(context.Context) (operator.Frame, error) { return p.receive(p.request) }
+func (p *exitPeer) Poll() (operator.Frame, error, bool)             { return operator.Frame{}, nil, false }
+func (p *exitPeer) Close() error                                    { return nil }
+func (p *exitPeer) Finish(context.Context, func(error) operator.Frame) error {
+	return nil
+}
+
+// A submitted host read counts as completed for the fault quiet gap on every
+// exit, including a failed send and an Unknown result; the uncertainty rule
+// and latch stay as they are.
+func TestHostReadCompletionOnUnknownExit(t *testing.T) {
+	reads := []struct {
+		name, kind string
+		op         operator.Operation
+		action     string
+	}{
+		{"status", "status.read", operator.HostExecute, "status"},
+		{"read-batch", "host.read-batch", operator.HostReadBatch, "inventory"},
+	}
+	exits := []struct {
+		name, rule, code string
+		accepted         bool // Accept settles Unknown without an exchange error.
+		sendErr          error
+		receive          func(operator.Request) (operator.Frame, error)
+	}{
+		{name: "send-failed", rule: "send-failed", code: "command-result-unknown", sendErr: errors.New("pipe closed")},
+		{name: "lost-reply", rule: "lost-reply", code: "command-result-unknown", receive: func(operator.Request) (operator.Frame, error) {
+			return operator.Frame{}, errors.New("pipe closed")
+		}},
+		{name: "malformed-reply", rule: "malformed-reply", code: "protocol-error", receive: func(operator.Request) (operator.Frame, error) {
+			return operator.Frame{Type: "trace", Session: "session"}, nil
+		}},
+		{name: "unknown-result", rule: "transport-unknown", code: "command-result-unknown", accepted: true, receive: func(q operator.Request) (operator.Frame, error) {
+			return operator.Frame{Type: "result", Session: "session", Result: &operator.Reply{ID: q.ID, Transport: operator.Unknown}}, nil
+		}},
+	}
+	for _, read := range reads {
+		for _, exit := range exits {
+			t.Run(read.name+"-"+exit.name, func(t *testing.T) {
+				s, _ := fixtureSession(t)
+				s.capabilities[operator.HostReadBatch] = true
+				c := &leaseTestClock{tick: time.Second}
+				s.clock, s.Budget.clock = c, c
+				var output bytes.Buffer
+				recorder := TimingRecorder{Writer: &output}
+				s.hostReadObserved = recorder.RecordHostRead
+				peer := &exitPeer{clock: c, sendErr: exit.sendErr, receive: exit.receive}
+				certainty, err := s.Exchange(context.Background(), peer, read.op, "shared", read.action, nil, nil, time.Minute, func(operator.Reply) operator.Certainty { return operator.Succeeded })
+				require.Equal(t, exit.accepted, err == nil, "exchange error: %v", err)
+				require.Equal(t, operator.Unknown, certainty)
+
+				require.Equal(t, 1400*time.Millisecond, s.hostReadCompleted(), "MUTATION: host-read-unknown-completion")
+				var got HostReadTiming
+				require.NoError(t, json.Unmarshal(output.Bytes(), &got), "MUTATION: host-read-unknown-completion")
+				require.Equal(t, int64(time.Second), got.StartedNS)
+				require.Equal(t, int64(1400*time.Millisecond), got.CompletedNS)
+				require.NoError(t, recorder.Err())
+
+				uncertainties := s.Uncertainties()
+				require.Len(t, uncertainties, 1)
+				require.Equal(t, exit.rule, uncertainties[0].Rule)
+				require.Equal(t, read.kind, uncertainties[0].Kind)
+				require.Equal(t, peer.request.ID, uncertainties[0].RequestID)
+				require.True(t, s.Latched())
+				require.Equal(t, exit.code, s.code)
+			})
+		}
+	}
 }
