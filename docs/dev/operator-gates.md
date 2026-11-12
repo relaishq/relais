@@ -1253,23 +1253,33 @@ first host request; every gate is then `not_run` with that cause.
 | `clock-timing-invalid` | P and L are both positive and at most 120 s |
 | `clock-timing-lease-validity` | 5P ≥ 5L: a lease outlasts five reads |
 | `clock-timing-judge-reserve` | the drain limit leaves the judge at least 60 s |
-| `clock-timing-restore-reserve` | the reads before a restoration command, plus the 30 s host floor and 1 s, fit the 60 s `RestoreReserve` |
+| `clock-timing-restore-reserve` | the inventory reads before a restoration command, plus the 30 s host floor and 1 s, fit the 60 s `RestoreReserve` |
 
-The restoration rule counts two reads for an adapter with both batch
-capabilities and eight for a serial adapter. The check before hello assumes
-batch reads. A serial adapter therefore fits up to L = 3.625 s.
+Restoration reads inventory and no leases. The rule counts one read for an
+adapter with `host.read-batch` and four for a serial adapter. The check before
+hello assumes a batch read. A serial adapter therefore fits up to L = 7.25 s.
+
+These rules do not check that a gate's whole procedure fits its window at the
+configured latency. Every host action costs L, not only lease reads, so a
+latency that passes these rules can still end a gate at its deadline.
 
 An unknown or late lease read still latches the session; the budget only
 changes when a reply is late. `TestSlowHostReadsGateSequence` runs a rollout
 with five moves and three kills on a fake transport at P = 8 s and four seconds
 for each action, with no `clock-lease-*` or `clock-coverage-*` cause. This is a
-fake-clock test, not a measurement of a remote transport.
+fake-clock test, not a measurement of a remote transport. It gives the
+procedure the whole 20 minutes.
 
 `-coverage-adapter FILE` starts a second adapter process (absolute path, no
 arguments, the fixed adapter environment) for the trailing coverage drain. Each
-read is one `host.execute` `clock` request on that process, with session
-`clock-coverage` and its own request numbers. The gate session's pipe, request
-identities and latch are not involved. A lost, late or uncorrelated reply
+read is one typed `host.lease-read` `clock` request on that process, with
+session `clock-coverage` and its own request numbers. The adapter generates
+the fixed reader from the cursor and run start, as for a session lease read.
+`host.execute` is not used: its 30 s admission floor is longer than what
+remains after the first read of a drain. A read is not sent when less than the
+single lease-read minimum remains of the drain limit, and each request carries
+what remains as its deadline. The gate session's pipe, request identities and
+latch are not involved. A lost, late or uncorrelated reply
 closes the reader; a definite host failure fails only that read. In both cases
 the tail stays incomplete.
 Every bound preparation refusal retains its fixed `clock-lease-missing`,

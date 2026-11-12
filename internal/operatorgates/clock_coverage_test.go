@@ -12,6 +12,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 	"github.com/stretchr/testify/require"
@@ -60,9 +61,9 @@ func TestClockCoverageDrainConditionAndTimeout(t *testing.T) {
 			s.inventoryComponents = map[string][]string{"shared": {"signal", "control"}, "w1": {"w1"}, "w2": {"w2"}}
 			w := []observe.CoverageWindow{{Kind: "move", Worker: "w1", StartUnixNS: "1793930010250000000", EndUnixNS: "1793930020250000000"}}
 			reads := 0
-			reader := func(ctx context.Context, slot, script string) (string, error) {
+			reader := func(ctx context.Context, input operator.HostLeaseReadInput) (string, error) {
 				reads++
-				require.NotContains(t, script, "kill")
+				require.Equal(t, operator.HostLeaseReadInput{Target: inventory.Slots[(reads-1)%len(inventory.Slots)], Cursor: input.Cursor, RunStartUnixMS: s.Budget.armed}, input)
 				if mode == "read-error" {
 					return "", fmt.Errorf("unavailable")
 				}
@@ -172,7 +173,7 @@ func TestClockCoverageDrainsBeforeFinalJudgment(t *testing.T) {
 		require.Equal(t, operator.Passed, m.Status)
 	}
 	require.Equal(t, []string{"judge", "judge"}, order)
-	read := func(context.Context, string, string) (string, error) {
+	read := func(context.Context, operator.HostLeaseReadInput) (string, error) {
 		order = append(order, "read")
 		c.Advance(time.Second)
 		sample := clocks.Sample{MeasuredUnixNS: "1793930030000000000", TrackingLog: &clocks.TrackingLog{ReadComplete: true, Rows: []clocks.TrackingRow{{UnixSeconds: 1793930000, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}, {UnixSeconds: 1793930023, MaxErrorDecimal: "0.000e+00", LeapStatus: "N"}}}}

@@ -208,7 +208,7 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 					}
 					return operatorevidence.Summary{Status: operator.Inconclusive, InconclusiveMetrics: judgeCalls}, err
 				})
-				runner.CoverageRead = func(context.Context, string, string) (string, error) {
+				runner.CoverageRead = func(context.Context, operator.HostLeaseReadInput) (string, error) {
 					drainReads++
 					return packedCoverageSample(t, 1793930021, false), nil
 				}

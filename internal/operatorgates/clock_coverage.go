@@ -9,12 +9,15 @@ import (
 	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 // ClockCoverageReader is an isolated, read-only host adapter. It must not use
 // Session.Exchange: diagnostic transport failures cannot latch the live session.
-// The returned string is the existing packed host clock output.
-type ClockCoverageReader func(context.Context, string, string) (string, error)
+// The input is one typed lease read, so the read keeps the lease-read deadline
+// rules and never needs the 30 s floor of a host script. The context deadline
+// is the read's whole budget. The returned string is the packed host clock output.
+type ClockCoverageReader func(context.Context, operator.HostLeaseReadInput) (string, error)
 
 func (s *Session) retainClockAttempt(e clocks.Evidence)      { s.retainCoverageAttempt(e, false) }
 func (s *Session) retainDrainClockAttempt(e clocks.Evidence) { s.retainCoverageAttempt(e, true) }
@@ -154,11 +157,14 @@ func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, win
 		anyLog := false
 		attempt := clocks.Evidence{Version: clocks.EvidenceVersion, At: s.clock.Wall(), Clocks: map[string]clocks.Sample{}}
 		for _, slot := range inventory.Slots {
-			if bounded.Err() != nil || s.clock.Elapsed() >= end {
+			// A read that cannot finish inside the limit is not submitted.
+			remaining := end - s.clock.Elapsed()
+			if bounded.Err() != nil || remaining < s.timing.leaseReadMinimum() {
 				break
 			}
-			script := host.ClockWithLease(cursors[slot], s.Budget.armed, "", nil)
-			stdout, err := read(bounded, slot, script)
+			one, done := context.WithTimeout(bounded, remaining)
+			stdout, err := read(one, operator.HostLeaseReadInput{Target: slot, Cursor: cursors[slot], RunStartUnixMS: s.Budget.armed})
+			done()
 			if err != nil {
 				continue
 			}

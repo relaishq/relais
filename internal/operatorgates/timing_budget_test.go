@@ -19,12 +19,12 @@ import (
 var slowTiming = ClockTiming{PollSeconds: 8, HostReadLatencyMS: 4000}
 
 func TestTimingBudgetDerivation(t *testing.T) {
-	reference, err := ClockTiming{}.budget(8)
+	reference, err := ClockTiming{}.budget(4)
 	require.NoError(t, err)
-	stated, err := ClockTiming{PollSeconds: 1, HostReadLatencyMS: 400}.budget(8)
+	stated, err := ClockTiming{PollSeconds: 1, HostReadLatencyMS: 400}.budget(4)
 	require.NoError(t, err)
 	require.Equal(t, reference, stated)
-	slow, err := slowTiming.budget(2)
+	slow, err := slowTiming.budget(4)
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name            string
@@ -62,8 +62,10 @@ func TestTimingBudgetRefusesUnfitConfiguration(t *testing.T) {
 		reads  int
 		cause  string
 	}{
-		{"reference", ClockTiming{}, 8, ""},
-		{"slow-batch", slowTiming, 2, ""},
+		{"reference", ClockTiming{}, 4, ""},
+		{"slow-batch", slowTiming, 1, ""},
+		// Restoration reads four inventories and no leases: 4 x 4 s + 31 s = 47 s.
+		{"slow-serial", slowTiming, 4, ""},
 		{"no-poll", ClockTiming{HostReadLatencyMS: 400}, 2, "clock-timing-invalid"},
 		{"no-latency", ClockTiming{PollSeconds: 8}, 2, "clock-timing-invalid"},
 		{"negative", ClockTiming{PollSeconds: -1, HostReadLatencyMS: 400}, 2, "clock-timing-invalid"},
@@ -72,9 +74,9 @@ func TestTimingBudgetRefusesUnfitConfiguration(t *testing.T) {
 		{"validity-short", ClockTiming{PollSeconds: 4, HostReadLatencyMS: 4001}, 2, "clock-timing-lease-validity"},
 		{"judge-edge", ClockTiming{PollSeconds: 10, HostReadLatencyMS: 10000}, 2, ""},
 		{"judge-short", ClockTiming{PollSeconds: 11, HostReadLatencyMS: 10000}, 2, "clock-timing-judge-reserve"},
-		{"restore-edge", ClockTiming{PollSeconds: 4, HostReadLatencyMS: 3625}, 8, ""},
-		{"restore-short", ClockTiming{PollSeconds: 4, HostReadLatencyMS: 3626}, 8, "clock-timing-restore-reserve"},
-		{"slow-serial", slowTiming, 8, "clock-timing-restore-reserve"},
+		{"restore-edge", ClockTiming{PollSeconds: 8, HostReadLatencyMS: 7250}, 4, ""},
+		{"restore-short", ClockTiming{PollSeconds: 8, HostReadLatencyMS: 7251}, 4, "clock-timing-restore-reserve"},
+		{"restore-batch", ClockTiming{PollSeconds: 8, HostReadLatencyMS: 7251}, 1, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := tc.timing.budget(tc.reads)
@@ -91,18 +93,27 @@ func TestTimingBudgetRefusesUnfitConfiguration(t *testing.T) {
 
 // An unfit configuration stops every gate before the first host request.
 func TestUnfitTimingRefusedBeforeAnyRequest(t *testing.T) {
-	for _, batch := range []bool{false, true} {
-		t.Run(fmt.Sprintf("batch=%t", batch), func(t *testing.T) {
+	// Four serial inventory reads of 7.251 s leave less than the host floor;
+	// one batch read fits. The rest of this empty configuration is then refused.
+	serialOnly := ClockTiming{PollSeconds: 8, HostReadLatencyMS: 7251}
+	for _, tc := range []struct {
+		name   string
+		batch  bool
+		timing ClockTiming
+		cause  string
+	}{
+		{"serial-restore", false, serialOnly, "clock-timing-restore-reserve"},
+		{"batch-restore-fits", true, serialOnly, "precondition-failed"},
+		// Restoration reads no leases: 4 x 4 s + 31 s fits; eight reads would not.
+		{"serial-slow-fits", false, slowTiming, "precondition-failed"},
+		{"lease-validity", true, ClockTiming{PollSeconds: 3, HostReadLatencyMS: 4000}, "clock-timing-lease-validity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			r, p, _ := runtimeFixture(t)
-			r.Session.capabilities[operator.HostReadBatch] = batch
-			r.Session.capabilities[operator.HostLeaseReadBatch] = batch
-			timing, cause := slowTiming, "clock-timing-restore-reserve"
-			if batch {
-				timing, cause = ClockTiming{PollSeconds: 3, HostReadLatencyMS: 4000}, "clock-timing-lease-validity"
-			}
-			got := (ResourceRunner{Config: ResourceConfig{ClockTiming: timing}}).Run(context.Background(), r.Session, p)
+			r.Session.capabilities[operator.HostReadBatch] = tc.batch
+			got := (ResourceRunner{Config: ResourceConfig{ClockTiming: tc.timing}}).Run(context.Background(), r.Session, p)
 			final := r.Session.Final(got)
-			if len(final.Gates) != 1 || final.Gates[0].Status != operator.NotRun || final.Gates[0].Reason != cause || p.sent != 0 || r.Session.Latched() {
+			if len(final.Gates) != 1 || final.Gates[0].Status != operator.NotRun || final.Gates[0].Reason != tc.cause || p.sent != 0 || r.Session.Latched() {
 				t.Fatal("MUTATION: timing-refused-before-session", final.Gates, p.sent, r.Session.Latched())
 			}
 		})
@@ -135,14 +146,18 @@ func packedTracking(t *testing.T, rows []clocks.TrackingRow) string {
 // slowWorld makes every host action take four seconds and every host clock
 // update once per eight seconds, on the round-trip world's real procedures.
 func slowWorld(t *testing.T) (*roundTripWorld, ProcedurePorts, *[]time.Time) {
+	return slowWorldAt(t, slowTiming)
+}
+
+func slowWorldAt(t *testing.T, timing ClockTiming) (*roundTripWorld, ProcedurePorts, *[]time.Time) {
 	t.Helper()
 	w, p := newRoundTripWorld(t, true)
 	s := w.runtime.Session
 	var err error
-	s.timing, err = slowTiming.budget(s.restoreReads())
+	s.timing, err = timing.budget(s.restoreReads())
 	require.NoError(t, err)
-	poll := time.Duration(slowTiming.PollSeconds) * time.Second
-	latency := time.Duration(slowTiming.HostReadLatencyMS) * time.Millisecond
+	poll := time.Duration(timing.PollSeconds) * time.Second
+	latency := time.Duration(timing.HostReadLatencyMS) * time.Millisecond
 	peer := w.runtime.Peer.(*observationPeer)
 	base := peer.respond
 	moves := &[]time.Time{}
@@ -161,7 +176,7 @@ func slowWorld(t *testing.T) (*roundTripWorld, ProcedurePorts, *[]time.Time) {
 		require.NoError(t, json.Unmarshal(q.Args, &args))
 		reference := now.Truncate(poll)
 		o := bindingtest.Observation(now)
-		o.PollSeconds = fmt.Sprint(slowTiming.PollSeconds)
+		o.PollSeconds = fmt.Sprint(timing.PollSeconds)
 		o.ReferenceUnixNS, o.ReferenceAgeNS = fmt.Sprint(reference.UnixNano()), int64(now.Sub(reference))
 		out := operator.HostReadBatchOutput{}
 		for _, read := range args.Reads {
@@ -181,6 +196,9 @@ func slowWorld(t *testing.T) (*roundTripWorld, ProcedurePorts, *[]time.Time) {
 
 // With an eight-second poll and four seconds per host action, a rollout with
 // its moves and kills completes without any clock-lease or clock-coverage cause.
+// This proves the lease and coverage timing only. The procedure gets the whole
+// 20 minutes here and needs 17 min 57 s; the production procedure window is
+// shorter, and no rule yet refuses a latency whose gate work cannot fit it.
 func TestSlowHostReadsGateSequence(t *testing.T) {
 	w, p, moves := slowWorld(t)
 	s := w.runtime.Session
@@ -249,7 +267,7 @@ func TestConfiguredLeaseSendMinimum(t *testing.T) {
 		for _, short := range []bool{true, false} {
 			s, c := fixtureSession(t)
 			var err error
-			s.timing, err = slowTiming.budget(2)
+			s.timing, err = slowTiming.budget(1)
 			require.NoError(t, err)
 			s.capabilities[tc.op] = true
 			p := &observationPeer{respond: func(q operator.Request) operator.Reply { return reply(q, operator.Succeeded) }}
@@ -270,7 +288,7 @@ func TestConfiguredDrainKeepsJudgeReserve(t *testing.T) {
 	for budget, drained := range map[time.Duration]time.Duration{PoolReserve: 32 * time.Second, 100 * time.Second: 12 * time.Second, 88 * time.Second: 0} {
 		s, c, pool := finalDrainFixture(t)
 		var err error
-		s.timing, err = slowTiming.budget(2)
+		s.timing, err = slowTiming.budget(1)
 		require.NoError(t, err)
 		s.gates = nil
 		s.Budget.end = budget
@@ -281,7 +299,7 @@ func TestConfiguredDrainKeepsJudgeReserve(t *testing.T) {
 		})
 		out := s.RunSequence(context.Background(), SequencePorts{Finalize: func(ctx context.Context, end time.Duration) (*MediaSummary, error) {
 			// This tail never closes: the drain runs to its limit.
-			summary, _, err := s.finalizePool(ctx, end, pool, clocks.FixedCoverageBounds(), func(context.Context, string, string) (string, error) {
+			summary, _, err := s.finalizePool(ctx, end, pool, clocks.FixedCoverageBounds(), func(context.Context, operator.HostLeaseReadInput) (string, error) {
 				return packedCoverageSample(t, 1793930021, true), nil
 			}, func(_ context.Context, d time.Duration) error { c.Advance(d); return nil })
 			return summary, err

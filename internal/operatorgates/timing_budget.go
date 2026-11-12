@@ -54,7 +54,7 @@ func (b timingBudget) judgeReserve() time.Duration { return PoolReserve - b.drai
 
 // budget refuses a configuration that cannot fit the existing deadlines.
 // restoreReads is the number of host read actions before a restoration
-// command: one batch or four serial reads for inventory, and the same for clocks.
+// command: one batch or four serial inventory reads. Restoration reads no leases.
 func (t ClockTiming) budget(restoreReads int) (timingBudget, error) {
 	if t == (ClockTiming{}) {
 		return referenceTiming, nil
@@ -85,16 +85,13 @@ func (t ClockTiming) budget(restoreReads int) (timingBudget, error) {
 // CheckClockTiming is the check before a session starts. Capabilities are not
 // known yet, so it assumes batch reads; Run checks again with the session's own.
 func (c ResourceConfig) CheckClockTiming() error {
-	_, err := c.ClockTiming.budget(2)
+	_, err := c.ClockTiming.budget(1)
 	return err
 }
 
 func (s *Session) restoreReads() int {
-	reads := 2 * len(inventory.Slots)
-	for _, op := range []operator.Operation{operator.HostReadBatch, operator.HostLeaseReadBatch} {
-		if s.capabilities[op] {
-			reads -= len(inventory.Slots) - 1
-		}
+	if s.capabilities[operator.HostReadBatch] {
+		return 1
 	}
-	return reads
+	return len(inventory.Slots)
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
@@ -15,7 +16,9 @@ import (
 )
 
 // coveragePeer is the isolated adapter: four seconds per read, and hosts that
-// log one tracking row per eight-second poll.
+// log one tracking row per eight-second poll. It applies the adapter-side
+// admission rules: the typed lease-read contract, the 30 s floor for
+// host.execute, and no submission of a read that cannot finish in time.
 type coveragePeer struct {
 	t        *testing.T
 	clock    *FakeClock
@@ -25,14 +28,29 @@ type coveragePeer struct {
 }
 
 func (p *coveragePeer) Send(_ context.Context, f operator.Frame) error {
-	if f.Type != "request" || f.Session != CoverageSession || f.Request.Operation != operator.HostExecute || f.Request.Action != "clock" || len(f.Request.Script) == 0 || f.Request.RemainingMS <= 0 {
-		p.t.Fatal("coverage read is not one bounded host.execute clock request", f)
+	if f.Type != "request" || f.Session != CoverageSession || f.Request == nil {
+		p.t.Fatal("coverage read is not a request on the coverage session", f)
 	}
 	p.requests = append(p.requests, *f.Request)
 	return nil
 }
+
+// refused reports the adapter's refusal of a request it must not submit.
+func (p *coveragePeer) refused(q operator.Request) bool {
+	remaining := time.Duration(q.RemainingMS) * time.Millisecond
+	if q.Operation == operator.HostExecute || q.Operation == operator.HostReadBatch {
+		return remaining < operator.HostSubmissionMinimum
+	}
+	if _, err := host.LeaseReadScripts(q, nil); err != nil {
+		return true
+	}
+	return remaining < 4*time.Second
+}
 func (p *coveragePeer) Receive(context.Context) (operator.Frame, error) {
 	q := p.requests[len(p.requests)-1]
+	if p.refused(q) {
+		return operator.Frame{Type: "result", Session: CoverageSession, Result: &operator.Reply{ID: q.ID, Transport: operator.Failed, NotSubmitted: true, RefusalCode: "deadline-before-submission"}}, nil
+	}
 	p.clock.Advance(4 * time.Second)
 	poll := 8 * time.Second
 	now := p.started.Add(p.clock.Elapsed())
@@ -68,11 +86,11 @@ func lastTakeoverFixture(t *testing.T) (*Session, *coveragePeer, []observe.Cover
 }
 
 func TestProductionDrainCoversLastTakeover(t *testing.T) {
-	for _, mode := range []string{"reader", "no-reader", "reference-limit"} {
+	for _, mode := range []string{"reader", "no-reader", "reference-limit", "short-cutoff"} {
 		t.Run(mode, func(t *testing.T) {
 			s, peer, windows := lastTakeoverFixture(t)
 			var err error
-			s.timing, err = slowTiming.budget(2)
+			s.timing, err = slowTiming.budget(1)
 			require.NoError(t, err)
 			if mode == "reference-limit" {
 				s.timing = referenceTiming
@@ -82,16 +100,29 @@ func TestProductionDrainCoversLastTakeover(t *testing.T) {
 				read = nil
 			}
 			before := s.Final(nil)
-			e := s.collectCoverage(context.Background(), clocks.Bounds{}, windows, read, func(_ context.Context, d time.Duration) error { peer.clock.Advance(d); return nil }, s.Budget.end)
+			cutoff := s.Budget.end
+			if mode == "short-cutoff" {
+				// After three reads, three seconds remain: less than one read needs.
+				cutoff = peer.clock.Elapsed() + 15*time.Second
+			}
+			e := s.collectCoverage(context.Background(), clocks.Bounds{}, windows, read, func(_ context.Context, d time.Duration) error { peer.clock.Advance(d); return nil }, cutoff)
 			require.Len(t, e.Results, 1)
 			missing := slices.Contains(e.Results[0].Causes, "clock-coverage-missing")
 			if mode == "reader" {
 				// One read of all four hosts takes sixteen seconds: more than the
-				// reference limit, inside the configured one.
+				// reference limit, inside the configured one. Every read after the
+				// first has less than 30 s left, so only a typed lease read is admitted.
 				if !e.DrainComplete || len(e.Results[0].Causes) != 0 || len(peer.requests) != 4 {
 					t.Fatalf("MUTATION: production-drain-reader: complete=%t causes=%v reads=%d", e.DrainComplete, e.Results[0].Causes, len(peer.requests))
 				}
-			} else if e.DrainComplete || !missing {
+				// Each read carries what is left of the limit on the session clock.
+				for i, q := range peer.requests {
+					want := (32 - 4*time.Duration(i)) * time.Second
+					if got := time.Duration(q.RemainingMS) * time.Millisecond; got > want || got < want-time.Second {
+						t.Fatalf("MUTATION: drain-read-deadline: read %d has %s, want %s", i, got, want)
+					}
+				}
+			} else if e.DrainComplete || !missing || mode == "short-cutoff" && len(peer.requests) != 3 {
 				t.Fatalf("MUTATION: drain-limit-or-reader: %s complete=%t causes=%v", mode, e.DrainComplete, e.Results[0].Causes)
 			}
 			require.False(t, s.Latched())
@@ -127,11 +158,11 @@ func TestCoverageReaderFailuresStayIsolated(t *testing.T) {
 			if mode == "unbounded" {
 				ctx = context.Background()
 			}
-			_, err := read(ctx, "w1", "script")
+			_, err := read(ctx, operator.HostLeaseReadInput{Target: "w1"})
 			require.EqualError(t, err, "clock-coverage-read-unavailable")
 			sent := len(peer.requests)
 			peer.reply = nil
-			_, err = read(ctx, "w2", "script")
+			_, err = read(ctx, operator.HostLeaseReadInput{Target: "w2"})
 			// An uncorrelated reply may still arrive later: the peer is not reused.
 			// A read without a deadline is never sent.
 			closed := mode == "wrong-id" || mode == "wrong-session" || mode == "unbounded"

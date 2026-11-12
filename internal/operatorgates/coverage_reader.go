@@ -2,6 +2,7 @@ package operatorgates
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strconv"
@@ -24,23 +25,29 @@ type CoveragePeer interface {
 const CoverageSession = "clock-coverage"
 
 // NewCoverageReader reads trailing clock coverage through its own peer. Each
-// read is one host.execute clock request. A lost, late or malformed reply
-// closes this reader only: later reads fail and the tail stays incomplete.
+// read is one host.lease-read request: the adapter generates the fixed reader,
+// and the short lease-read deadline applies instead of the 30 s host.execute
+// floor. A lost, late or malformed reply closes this reader only: later reads
+// fail and the tail stays incomplete.
 func NewCoverageReader(p CoveragePeer, spool *os.Root) ClockCoverageReader {
 	var mu sync.Mutex
 	var next uint64
 	broken := false
 	unavailable := errors.New("clock-coverage-read-unavailable")
-	return func(ctx context.Context, slot, script string) (string, error) {
+	return func(ctx context.Context, input operator.HostLeaseReadInput) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		deadline, bounded := ctx.Deadline()
 		if broken || !bounded {
 			return "", unavailable
 		}
+		args, err := json.Marshal(operator.HostLeaseReadArgs{Reads: []operator.HostLeaseReadInput{input}})
+		if err != nil {
+			return "", unavailable
+		}
 		next++
 		id := strconv.FormatUint(next, 10)
-		request := operator.Request{ID: id, Operation: operator.HostExecute, Target: slot, Action: "clock", Script: []byte(script), DeadlineUnixMS: strconv.FormatInt(deadline.UnixMilli(), 10), RemainingMS: max(0, time.Until(deadline).Milliseconds())}
+		request := operator.Request{ID: id, Operation: operator.HostLeaseRead, Target: input.Target, Action: "clock", Args: args, DeadlineUnixMS: strconv.FormatInt(deadline.UnixMilli(), 10), RemainingMS: max(0, time.Until(deadline).Milliseconds())}
 		if err := p.Send(ctx, operator.Frame{Type: "request", Session: CoverageSession, Request: &request}); err != nil {
 			broken = true
 			return "", unavailable
