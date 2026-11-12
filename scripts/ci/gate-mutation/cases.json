@@ -6610,5 +6610,175 @@
     "Test": "TestHostReadCompletionOnUnknownExit/read-batch-unknown-result",
     "Marker": "MUTATION: host-read-unknown-completion",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-takeover-not-settled",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "metric.verdict.Trusted = true",
+    "New": "metric.verdict.Trusted = false",
+    "Test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+    "Marker": "MUTATION: boundary-takeover-undecided",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-window-stays-undecided",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "d.WindowOutcome, d.Outcome = \"pass\", \"pass\"",
+    "New": "d.Outcome = \"pass\"",
+    "Test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+    "Marker": "MUTATION: boundary-takeover-undecided",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-window-cause-raw-text",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "if !slices.Contains(boundaryCauses, timingCause(cause)) {",
+    "New": "if !slices.Contains(boundaryCauses, cause) {",
+    "Test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+    "Marker": "MUTATION: boundary-takeover-undecided",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-first-reason-unchecked",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "onlyLabelDiffers",
+    "Old": " || timingCause(v.Reasons[0]) != boundaryCauses[0] {",
+    "New": " {",
+    "Test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/evaluation-budget",
+    "Marker": "MUTATION: boundary-takeover-partial-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-reason-count-unchecked",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "onlyLabelDiffers",
+    "Old": "len(v.Reasons) > 2 || ",
+    "New": "",
+    "Test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/reason-after-duration",
+    "Marker": "MUTATION: boundary-takeover-partial-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-second-reason-unchecked",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "onlyLabelDiffers",
+    "Old": "timingCause(v.Reasons[1]) == boundaryCauses[1]",
+    "New": "true",
+    "Test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/reason-after-interval",
+    "Marker": "MUTATION: boundary-takeover-partial-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-other-verdict-ignored",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "v.Inconclusive = v.Inconclusive || !verdict.Trusted",
+    "New": "v.Inconclusive = v.Inconclusive && !verdict.Trusted",
+    "Test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/first-live",
+    "Marker": "MUTATION: boundary-takeover-partial-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-window-cause-ignored",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "if !slices.Contains(boundaryCauses, timingCause(cause)) {",
+    "New": "if cause == \"\" {",
+    "Test": "TestBoundaryTakeoverStaysUndecidedWhenAKillTimeDoesNotPass/window-cause",
+    "Marker": "MUTATION: boundary-takeover-partial-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-window-failure-cleared",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "if v.Inconclusive || d.WindowOutcome != \"inconclusive\" {",
+    "New": "if v.Inconclusive {",
+    "Test": "TestBoundaryTakeoverKeepsFailure",
+    "Marker": "MUTATION: boundary-takeover-hides-failure",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-rule-on-moves",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "if m.Kind != \"takeover\" {",
+    "New": "if false {",
+    "Test": "TestNoBoundaryTakeoverKeepsSummaryBytes",
+    "Marker": "MUTATION: boundary-rule-scope",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-label-dropped",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "previewMediaQualified",
+    "Old": "out.BoundaryMetrics = boundaryRows(r)\n",
+    "New": "",
+    "Test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+    "Marker": "MUTATION: boundary-label-dropped",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-label-not-decoded",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "DecodeSummary",
+    "Old": "s.BoundaryMetrics = boundary.BoundaryMetrics",
+    "New": "_ = boundary.BoundaryMetrics",
+    "Test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
+    "Marker": "MUTATION: boundary-label-dropped",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-row-untrusted",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "boundaryRows",
+    "Old": "if !metric.verdict.Trusted || !onlyLabelDiffers(",
+    "New": "if !onlyLabelDiffers(",
+    "Test": "TestBoundaryRowsOncePerEventAndMetric",
+    "Marker": "MUTATION: boundary-row-untrusted",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-row-per-call",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "boundaryRows",
+    "Old": " || slices.ContainsFunc(out, func(row undecidedMetric) bool { return row.Event == k && row.Metric == metric.name }) {",
+    "New": " {",
+    "Test": "TestBoundaryRowsOncePerEventAndMetric",
+    "Marker": "MUTATION: boundary-row-per-call",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-boundary-label-dropped",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "pooledPreviewMedia",
+    "Old": "excludedBoundary = excludedBoundaryRows(back)",
+    "New": "excludedBoundary = nil",
+    "Test": "TestExcludedBoundaryTakeoverKeepsItsLabel",
+    "Marker": "MUTATION: excluded-boundary-label-dropped",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-boundary-row-phase",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "excludedBoundaryRows",
+    "Old": "e.Phase == row.Phase && e.Event == row.Event",
+    "New": "e.Event == row.Event",
+    "Test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
+    "Marker": "MUTATION: excluded-boundary-row-scope",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-boundary-row-event",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "excludedBoundaryRows",
+    "Old": "e.Phase == row.Phase && e.Event == row.Event",
+    "New": "e.Phase == row.Phase",
+    "Test": "TestExcludedBoundaryRowsSkipPooledTakeovers",
+    "Marker": "MUTATION: excluded-boundary-row-scope",
+    "Package": "./internal/operatorevidence/judge-src"
   }
 ]
