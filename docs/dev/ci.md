@@ -58,3 +58,7 @@ The separate `operator-rehearsal.yml` job adds a clock admission step (152 secon
 after negative controls restore. It archives sanitized evidence, policy, receipt
 and status; report/log print bounds/counts or refusal. Selection is recorded only
 ([admission details](operator-gates.md#rehearsal-admission-receipt-slice-5c)).
+On every outcome, `scripts/ci/rehearsal_summary.py` writes the verdict, gate and
+media statuses, timing-undecided rows, untrusted caller event counts and the clock
+selection cause to the run page. It reads only `report.json` and
+`clock-selection-status.json` and never changes the job result.
