@@ -200,8 +200,8 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		return report, errors.New("setup-failed")
 	}
 	scenario := operator.Scenario{SchemaVersion: 1, Gates: CoveredGates, Template: operator.Identity{SourceCommit: r.c.Commit, SHA256: report.TemplateSHA256}, ReleaseA: operator.Identity{SourceCommit: ReleaseACommit, SHA256: ReleaseASHA256}, ReleaseB: operator.Identity{SourceCommit: ReleaseBCommit, SHA256: ReleaseBSHA256}, Judge: operator.Identity{SourceCommit: ReleaseACommit, SHA256: r.judge.pinned.SHA256}, Caller: operator.Identity{SourceCommit: ReleaseACommit, SHA256: report.CallerSHA256}}
-	raw, _ := json.Marshal(scenario)
-	scenario.Digest = hash(raw)
+	// The plan identity is fixed here, before any host is booted.
+	scenario.Digest, _ = operator.PlanIdentity(scenario)
 	report.ScenarioSHA256 = scenario.Digest
 	if e = r.deployment.Boot(ctx); e != nil {
 		r.recordError("boot-failed", e)

@@ -5,15 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorgates"
-	"github.com/relaishq/relais/internal/operatorgates/clocks"
-	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -37,35 +33,12 @@ func (r *rehearsal) bindAdmission(ctx context.Context, scenario operator.Scenari
 	if !clean() {
 		return errors.New("command-result-unknown")
 	}
-	if r.report.ClockSelection == nil || r.report.ClockSelection.Cause != "" || r.report.ClockSelection.Bounds == nil {
-		return errors.New("clock-binding-missing")
-	}
-	raw, err := os.ReadFile(filepath.Join(r.c.Output, "clock-selection.json"))
-	if err != nil {
-		return err
-	}
-	var selection clocks.ClockSelection
-	if observe.DecodeClosedLimit(raw, &selection, nil, operator.ClockArtifactLimit) != nil {
-		return errors.New("clock-binding-invalid")
-	}
-	evidence, err := os.ReadFile(filepath.Join(r.c.Output, "clock-admission-evidence.json"))
-	if err != nil {
-		return err
-	}
-	receipt, err := json.Marshal(selection.Receipt)
-	if err != nil {
-		return err
-	}
-	artifacts, err := operator.PackClockBindingArtifacts(receipt, evidence)
+	binding, selection, err := BindClockAdmission(r.c.Output, r.report.ClockSelection, scenario)
 	if err != nil {
 		return err
 	}
 	init := r.boundInit
-	init.Scenario, err = operator.BuildScenarioIdentity(scenario, selection.SHA256)
-	if err != nil {
-		return err
-	}
-	init.ClockBinding = &artifacts
+	init.Scenario, init.ClockBinding = binding.Scenario, &binding.ClockBinding
 	r.report.Bounds = selection.Receipt.Bounds
 	adapter := &Adapter{Topology: r.topology, Containers: r.deployment.ContainerIDs(), Runner: r.runner, Diagnostics: r.diagnostics, LeaseProbeFiles: r.leaseProbeFiles()}
 	init.Capabilities = adapter.Capabilities()
