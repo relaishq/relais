@@ -2293,8 +2293,8 @@
     "ID": "evidence-summary-positive-failure",
     "File": "internal/operatorevidence/pool.go",
     "Function": "DecodeSummary",
-    "Old": "if knownFailure {",
-    "New": "if false && knownFailure {",
+    "Old": "observe.Numbers(s) != nil {\n\t\tif knownFailure {",
+    "New": "observe.Numbers(s) != nil {\n\t\tif false && knownFailure {",
     "Test": "TestSummaryFailureSurvivesInvalidCounters",
     "Marker": "MUTATION: summary-positive-failure",
     "Package": "./internal/operatorevidence"
