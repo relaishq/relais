@@ -6590,5 +6590,25 @@
     "Test": "TestReleaseReplacementWaitsForRollback/short",
     "Marker": "MUTATION: release-replacement-deferred",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "host-read-completion-success-only-send",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "timing.CompletedNS, timing.CompletedAt = int64(s.completeHostRead()), s.clock.Wall()",
+    "New": "if s.Latched() { return }; timing.CompletedNS, timing.CompletedAt = int64(s.completeHostRead()), s.clock.Wall()",
+    "Test": "TestHostReadCompletionOnUnknownExit/status-send-failed",
+    "Marker": "MUTATION: host-read-unknown-completion",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "host-read-completion-success-only-unknown",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "timing.CompletedNS, timing.CompletedAt = int64(s.completeHostRead()), s.clock.Wall()",
+    "New": "if s.Latched() { return }; timing.CompletedNS, timing.CompletedAt = int64(s.completeHostRead()), s.clock.Wall()",
+    "Test": "TestHostReadCompletionOnUnknownExit/read-batch-unknown-result",
+    "Marker": "MUTATION: host-read-unknown-completion",
+    "Package": "./internal/operatorgates"
   }
 ]

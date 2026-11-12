@@ -615,7 +615,9 @@
     "excluded-takeover-kill-timed-resume",
     "excluded-takeover-row-count",
     "excluded-bracket-unchecked-drops-exclusion",
-    "release-replacement-not-deferred"
+    "release-replacement-not-deferred",
+    "host-read-completion-success-only-send",
+    "host-read-completion-success-only-unknown"
   ],
   "killed": [
     {
@@ -5152,6 +5154,18 @@
     {
       "id": "release-replacement-not-deferred",
       "test": "TestReleaseReplacementWaitsForRollback/short",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-completion-success-only-send",
+      "test": "TestHostReadCompletionOnUnknownExit/status-send-failed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "host-read-completion-success-only-unknown",
+      "test": "TestHostReadCompletionOnUnknownExit/read-batch-unknown-result",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }
