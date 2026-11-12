@@ -62,6 +62,17 @@ func TestClockSelectionRefreshLease(t *testing.T) {
 				}
 				return s, ""
 			})
+			// Every pause from admission on steps at least 5 s, so no subtest needs a
+			// wall-time budget. "late" then makes one stale refresh read at +5 s,
+			// reaches the 10 s refresh deadline at +10 s and reads the fresh lease
+			// on the retry at +15 s. RefreshLease's polling has its own tests.
+			pause := p.pause
+			p.pause = func(ctx context.Context, d time.Duration) error {
+				if p.now().Unix() >= 1792886525 {
+					d = max(d, 5*time.Second)
+				}
+				return pause(ctx, d)
+			}
 			read := p.read
 			p.read = func(ctx context.Context, slot, script string) (string, error) {
 				if slot != "w2" {
