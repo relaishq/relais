@@ -44,6 +44,21 @@ type ClockAdmissionBinding struct {
 	ClockBinding operator.ClockBindingArtifacts `json:"clockBinding"`
 }
 
+// Collection always freezes this trailing window, so no other policy window can be admitted.
+const clockAdmissionWindowSeconds = 120
+
+// CheckClockAdmissionPolicy needs no host: the selector's own policy rule plus
+// the one window that collection supports.
+func CheckClockAdmissionPolicy(policy clocks.SelectionPolicy) error {
+	if _, err := clocks.CheckPolicy(policy); err != nil {
+		return err
+	}
+	if policy.WindowSeconds != clockAdmissionWindowSeconds {
+		return errors.New("clock-select-policy")
+	}
+	return nil
+}
+
 // AdmitClock collects admission evidence, selects bounds and archives
 // clock-selection-status.json. A non-empty Cause is the fixed refusal.
 func AdmitClock(ctx context.Context, a ClockAdmission) *ClockSelectionReport {

@@ -3,6 +3,7 @@ package operator
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,32 @@ func TestRuntimeBindingKeepsPlanIdentity(t *testing.T) {
 	for _, bad := range []string{"", "bad", strings.Repeat("A", 64)} {
 		if _, err := BindRuntime(s, bad); err == nil {
 			t.Fatal("MUTATION: runtime-binding-unmeasured", bad)
+		}
+	}
+}
+
+// Binding is the shared boundary: it refuses anything that is not the checked plan.
+func TestRuntimeBindingRefusesUnapprovedPlan(t *testing.T) {
+	plan := Scenario{SchemaVersion: 1, Gates: []Gate{Rollout}, Template: Identity{SourceCommit: "source", SHA256: "template"}}
+	var err error
+	plan.Digest, err = PlanIdentity(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := BindRuntime(plan, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, claimed, undigested := plan, plan, plan
+	changed.Judge.SHA256 = "other"
+	claimed.ClockReceiptSHA256 = strings.Repeat("a", 64)
+	undigested.Digest = ""
+	for name, s := range map[string]Scenario{"already-bound": bound.Scenario, "changed-after-digest": changed, "receipt-claimed": claimed, "no-digest": undigested} {
+		if _, err := CheckPlan(s); !errors.Is(err, ErrPlanIdentity) || err.Error() != "clock-binding-digest-differ" {
+			t.Fatal("MUTATION: plan-check", name, err)
+		}
+		if got, err := BindRuntime(s, strings.Repeat("b", 64)); !errors.Is(err, ErrPlanIdentity) || got.PlanIdentity != "" || got.Scenario.Digest != "" {
+			t.Fatal("MUTATION: runtime-binding-unapproved-plan", name, got, err)
 		}
 	}
 }

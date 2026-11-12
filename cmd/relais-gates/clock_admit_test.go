@@ -233,6 +233,7 @@ func TestClockAdmitRefusesBeforeHostCommands(t *testing.T) {
 		"extra-address":    {"clock-admit-input", func(f *clockAdmitFixture) { f.plan.Addresses["w3"] = "192.0.2.5" }},
 		"output-missing":   {"clock-admit-input", func(f *clockAdmitFixture) { f.args[7] = filepath.Join(f.dir, "absent") }},
 		"policy":           {"clock-select-policy", func(f *clockAdmitFixture) { f.policy.WindowSeconds = 60 }},
+		"policy-window":    {"clock-select-policy", func(f *clockAdmitFixture) { f.policy.WindowSeconds = 121 }},
 		"policy-growth":    {"clock-select-policy", func(f *clockAdmitFixture) { f.policy.MaxDispersionGrowthPPM = "fast" }},
 		"relative-command": {"usage: relais-gates clock-admit -plan FILE -policy FILE -host-command PROGRAM -output DIR", func(f *clockAdmitFixture) { f.args[5] = "host-command" }},
 	} {
@@ -289,6 +290,37 @@ func TestClockAdmitRefusesUnboundReceipt(t *testing.T) {
 			f.read(t, "clock-selection-status.json", &status)
 			require.Empty(t, status.Cause)
 			require.NoFileExists(t, filepath.Join(f.output, "clock-binding.json"))
+		})
+	}
+}
+
+// A host command whose child keeps stdout open must not hold a read past the
+// caller's deadline, nor past its own exit.
+func TestClockAdmitHostReadEndsWithDeadline(t *testing.T) {
+	program := filepath.Join(t.TempDir(), "host-command")
+	for name, script := range map[string]string{
+		// The wrapper stays alive: the deadline kills it, the child keeps the pipe.
+		"deadline": "#!/bin/sh\nsleep 20 &\necho x\nwait\n",
+		// The wrapper exits at once and leaves the pipe to its child.
+		"orphan": "#!/bin/sh\nsleep 20 &\necho x\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(program, []byte(script), 0700))
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			began, done := time.Now(), make(chan error, 1)
+			go func() {
+				_, err := clockAdmitHost(program)(ctx, "w1", false, []byte("script"), "sh", "-eu")
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err == nil || err.Error() != "clock-selection-read" || time.Since(began) > 300*time.Millisecond+clockAdmitHostWaitDelay+2*time.Second {
+					t.Fatal("MUTATION: clock-admit-host-deadline", err, time.Since(began))
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("MUTATION: clock-admit-host-deadline", "read still blocked after 10 s")
+			}
 		})
 	}
 }

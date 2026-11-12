@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -89,13 +90,27 @@ type RuntimeBinding struct {
 	Scenario     Scenario `json:"scenario"`
 }
 
-// BindRuntime never changes the plan identity: a different receipt gives a
-// different Scenario.Digest under the same PlanIdentity.
+// ErrPlanIdentity refuses a scenario that is not the plan its digest names.
+var ErrPlanIdentity = errors.New("clock-binding-digest-differ")
+
+// CheckPlan returns the plan identity of an unbound scenario whose digest is
+// that identity. A scenario that already carries a receipt, or that changed
+// after its digest was fixed, is not a plan and must not be bound.
+func CheckPlan(s Scenario) (string, error) {
+	plan, err := PlanIdentity(s)
+	if err != nil || s.ClockReceiptSHA256 != "" || s.Digest != plan {
+		return "", ErrPlanIdentity
+	}
+	return plan, nil
+}
+
+// BindRuntime binds only a checked plan and never changes its identity: a
+// different receipt gives a different Scenario.Digest under the same PlanIdentity.
 func BindRuntime(s Scenario, receiptSHA256 string) (RuntimeBinding, error) {
 	if receiptSHA256 == "" {
 		return RuntimeBinding{}, fmt.Errorf("invalid clock receipt digest")
 	}
-	plan, err := PlanIdentity(s)
+	plan, err := CheckPlan(s)
 	if err != nil {
 		return RuntimeBinding{}, err
 	}

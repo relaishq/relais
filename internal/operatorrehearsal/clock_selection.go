@@ -258,7 +258,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		e.Falsification = *probes.Snapshot(front, map[string]string{"control": control, "w1": "w1", "w2": "w2"})
 		records = mergeClockProbeRecords(records, e.Falsification.Records)
 		e.Falsification.Records = records
-		e.StartUnixSeconds = e.EndUnixSeconds - 120
+		e.StartUnixSeconds = e.EndUnixSeconds - clockAdmissionWindowSeconds
 		if admitting && complete {
 			if time.Unix(e.StartUnixSeconds, 0).Before(started) {
 				result.Cause = "clock-select-admission"

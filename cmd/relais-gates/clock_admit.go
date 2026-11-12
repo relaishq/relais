@@ -44,6 +44,9 @@ var clockAdmitRun = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // A lease read is at most 256000 decoded bytes; base64 of incompressible gzip stays below this.
 const clockAdmitHostOutputLimit = 512 << 10
 
+// After a host command exits or is cancelled, its pipes get this long to close.
+const clockAdmitHostWaitDelay = time.Second
+
 type clockAdmitClock struct {
 	now   func() time.Time
 	pause func(context.Context, time.Duration) error
@@ -79,12 +82,14 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 		fmt.Fprintln(diagnostics, "clock-admit-input")
 		return 2
 	}
-	if _, err := clocks.CheckPolicy(policy); err != nil {
+	// Both rules belong to the shared admission and binding code. They run here
+	// too so that a refusal costs no host command.
+	if err := operatorrehearsal.CheckClockAdmissionPolicy(policy); err != nil {
 		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
-	if identity, err := operator.PlanIdentity(plan.Scenario); err != nil || plan.Scenario.ClockReceiptSHA256 != "" || plan.Scenario.Digest != identity {
-		fmt.Fprintln(diagnostics, "clock-binding-digest-differ")
+	if _, err := operator.CheckPlan(plan.Scenario); err != nil {
+		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -129,24 +134,27 @@ func clockAdmitHost(program string) operatorrehearsal.ClockHostCommand {
 		}
 		cmd := exec.CommandContext(ctx, program, append([]string{slot, mode}, args...)...)
 		cmd.Stdin = bytes.NewReader(input)
-		if detach {
-			// No pipe: a helper that inherits stdout must not hold this call open.
-			if cmd.Run() != nil {
-				return "", failed
-			}
-			return "", nil
+		// A child that keeps a pipe open cannot hold Run past exit or cancellation.
+		cmd.WaitDelay = clockAdmitHostWaitDelay
+		var out clockAdmitOutput
+		if !detach {
+			// A detached helper gets no pipe: it may inherit stdout for its lifetime.
+			cmd.Stdout = &out
 		}
-		pipe, err := cmd.StdoutPipe()
-		if err != nil || cmd.Start() != nil {
-			return "", failed
-		}
-		out, err := io.ReadAll(io.LimitReader(pipe, clockAdmitHostOutputLimit+1))
-		if len(out) > clockAdmitHostOutputLimit {
-			_ = cmd.Process.Kill()
-		}
-		if cmd.Wait() != nil || err != nil || len(out) > clockAdmitHostOutputLimit {
+		if cmd.Run() != nil {
 			return "", failed
 		}
 		return string(out), nil
 	}
+}
+
+// clockAdmitOutput refuses host output above the limit instead of buffering it.
+type clockAdmitOutput []byte
+
+func (o *clockAdmitOutput) Write(p []byte) (int, error) {
+	if len(*o)+len(p) > clockAdmitHostOutputLimit {
+		return 0, errors.New("clock-selection-read")
+	}
+	*o = append(*o, p...)
+	return len(p), nil
 }

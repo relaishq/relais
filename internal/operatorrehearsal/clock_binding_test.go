@@ -3,6 +3,7 @@ package operatorrehearsal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,14 +22,16 @@ import (
 )
 
 func TestBindAdmission(t *testing.T) {
-	for _, mode := range []string{"valid", "refused", "latched", "uncertain", "late-uncertain"} {
+	for _, mode := range []string{"valid", "refused", "latched", "uncertain", "late-uncertain", "plan-changed", "already-bound"} {
 		t.Run(mode, func(t *testing.T) {
 			fixtures, pins := idleInventory(t)
 			clock := operatorgates.NewRealClock()
 			now := clock.Wall()
 			f, err := bindingtest.New("admission", now)
 			require.NoError(t, err)
-			scenario := operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: []operator.Gate{operator.Rollout}, ReleaseA: operator.Identity{SourceCommit: pins[0].Commit, SHA256: pins[0].ArchiveSHA256}, ReleaseB: operator.Identity{SourceCommit: pins[1].Commit, SHA256: pins[1].ArchiveSHA256}}
+			scenario := operator.Scenario{SchemaVersion: 1, Gates: []operator.Gate{operator.Rollout}, ReleaseA: operator.Identity{SourceCommit: pins[0].Commit, SHA256: pins[0].ArchiveSHA256}, ReleaseB: operator.Identity{SourceCommit: pins[1].Commit, SHA256: pins[1].ArchiveSHA256}}
+			scenario.Digest, err = operator.PlanIdentity(scenario)
+			require.NoError(t, err)
 			init := operator.Init{Scenario: scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10)}
 			old, err := operatorgates.NewSession("admission", init, clock)
 			require.NoError(t, err)
@@ -75,7 +78,17 @@ func TestBindAdmission(t *testing.T) {
 			if mode == "refused" {
 				r.report.ClockSelection.Cause = "clock-lease-expired"
 			}
+			// The session was armed with the plan; binding gets a scenario that is not it.
+			if mode == "plan-changed" {
+				scenario.Judge.SHA256 = "other"
+			}
+			if mode == "already-bound" {
+				scenario.ClockReceiptSHA256 = strings.Repeat("a", 64)
+			}
 			err = r.bindAdmission(context.Background(), scenario)
+			if (mode == "plan-changed" || mode == "already-bound") && (!errors.Is(err, operator.ErrPlanIdentity) || r.boundInit.ClockBinding != nil || r.boundInit.Scenario.ClockReceiptSHA256 != "") {
+				t.Fatal("MUTATION: admission-plan-identity", mode, err)
+			}
 			if mode != "valid" {
 				if err == nil || r.session != old || mode != "late-uncertain" && calls != 0 {
 					t.Fatal("MUTATION: admission-replacement", mode, err, calls)

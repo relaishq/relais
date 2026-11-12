@@ -199,7 +199,22 @@ Outputs, all in `-output`:
 | --- | --- |
 | 0 | Admitted. Receipt and binding are written. |
 | 1 | Admission ran and refused. Stderr is one fixed cause; the status file records it. |
-| 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, or no output directory), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
+| 2 | Refused before any host command; nothing is written. Stderr is the usage line, `clock-admit-input` (unreadable or invalid plan or policy file, or no output directory), `clock-select-policy` (the policy fails `clocks.CheckPolicy`, the selector's own rule, or its `windowSeconds` is not 120, the only window collection builds) or `clock-binding-digest-differ` (the scenario is already bound, or its digest is not its plan identity). |
+
+`clock-selection-status.json` describes selection only. A binding refusal
+exits 1 with its cause on stderr while the status file keeps `cause` `""` and
+the selected bounds. Callers must check the exit status and stderr, and must
+not treat an admitted status file as a usable binding; only
+`clock-binding.json` is.
+
+Both pre-host rules are shared code, not CLI copies.
+`operator.BindRuntime` itself refuses a scenario that is already bound or that
+changed after its digest was fixed (`operator.CheckPlan`,
+`TestRuntimeBindingRefusesUnapprovedPlan`), so the rehearsal gets the same
+`clock-binding-digest-differ` refusal (`TestBindAdmission`). A host command is
+killed at its deadline and its pipes are closed one second later, so a child
+that keeps stdout open cannot hold admission past its deadline
+(`TestClockAdmitHostReadEndsWithDeadline`).
 
 Exit 1 causes keep their existing meanings: the selector's `clock-select-*`
 causes, `clock-lease-missing` and `clock-lease-expired` from admission reads,
