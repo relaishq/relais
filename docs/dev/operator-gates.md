@@ -1259,11 +1259,22 @@ summary (and the gate's media status) carries an `excluded` object:
 - `takeovers`: one row per excluded takeover, with its phase and event, each
   matching call's `windowOutcome`, `killToLive` bounds and `eventGaps` bounds
   per track, and every yardstick metric's outcome for that event.
-  `nonTimingPassed` is true when every metric other than the timing metrics
-  (`first_content`, `first_new_content`, `distributed_window`) passed.
+  `nonTimingPassed` is true when every metric other than the kill-timed
+  metrics passed. For an excluded row the kill-timed set is the rehearsal's
+  timing metrics (`first_content`, `first_new_content`, `distributed_window`)
+  plus `resume` and `first_live`, which are durations measured from the kill
+  time. The wide bracket is exactly what leaves the kill time unknown, so these
+  checks are excluded with it and neither block nor support a strict pass.
 - `countedBackIn`: the pooled status when the excluded takeovers are judged
   again with their brackets trusted (their sole cause waived). The rows above
   come from that judgment. It is a sensitivity verdict only.
+
+Every outcome and bound in an excluded row is conditional on the trusted
+bracket. The pass treats the bracket midpoint as the kill time within the
+selected worker bound, while the takeover's real uncertainty is wider. The
+content metrics sweep the event start over that narrower interval, so a
+row's `pass` (including the remaining non-timing metrics) and its
+`killToLive` and `eventGaps` bounds may not hold under the real uncertainty.
 - `ownerSignOff`: true when the pool would pass but an excluded takeover's
   non-timing checks did not all pass. The status is then `inconclusive`, not
   `passed`; the owner decides from the rows whether to accept the run.

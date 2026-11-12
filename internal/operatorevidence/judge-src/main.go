@@ -594,10 +594,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	}
 	// A strict pass needs every excluded takeover's non-timing checks to pass.
 	if e := out.Excluded; e != nil && !input.waiveExcluded && out.Status == "passed" {
-		e.OwnerSignOff = len(e.Takeovers) != out.ExcludedKills
-		for _, row := range e.Takeovers {
-			e.OwnerSignOff = e.OwnerSignOff || !row.NonTimingPassed
-		}
+		e.OwnerSignOff = e.holdsPass(out.ExcludedKills)
 		if e.OwnerSignOff {
 			out.Status = "inconclusive"
 		}

@@ -612,6 +612,9 @@
     "excluded-takeover-sign-off-skipped",
     "excluded-takeover-timing-required",
     "excluded-rows-optional",
+    "excluded-takeover-kill-timed-resume",
+    "excluded-takeover-row-count",
+    "excluded-bracket-unchecked-drops-exclusion",
     "release-replacement-not-deferred"
   ],
   "killed": [
@@ -5126,6 +5129,24 @@
       "id": "excluded-rows-optional",
       "test": "TestExcludedTakeoverReportsItsRow",
       "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-takeover-kill-timed-resume",
+      "test": "TestExcludedTakeoverNonTimingChecks/resume",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-takeover-row-count",
+      "test": "TestExcludedTakeoverMissingRowHoldsPass",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "excluded-bracket-unchecked-drops-exclusion",
+      "test": "TestClockCoverageKillExcludedKeepsTimelineChecks/worker-step",
+      "package": "./internal/operatorgates/observe",
       "evidence": "killed"
     },
     {

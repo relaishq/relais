@@ -133,6 +133,10 @@ func TestExcludedTakeoverNonTimingChecks(t *testing.T) {
 		{"audio-loss", func(m *callharness.MoveReport) { m.Measurement.AudioLoss = undecided }, "inconclusive", true, false},
 		{"video-freshness", func(m *callharness.MoveReport) { m.Measurement.Video.Verdict = undecided }, "inconclusive", true, false},
 		{"first-content", func(m *callharness.MoveReport) { m.Measurement.FirstContentVerdict = undecided }, "passed", false, true},
+		// Resume and first live are durations from the kill time, which the
+		// wide bracket does not fix, so they are timing checks here.
+		{"resume", func(m *callharness.MoveReport) { m.Measurement.ResumeVerdict = undecided }, "passed", false, true},
+		{"first-live", func(m *callharness.MoveReport) { m.Measurement.FirstLiveVerdict = undecided }, "passed", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := excludedRun(t, tc.change)
@@ -191,5 +195,24 @@ func TestExcludedTakeoverBracketRecheck(t *testing.T) {
 				t.Fatalf("wide bracket not excluded: causes=%v %+v", causes, got)
 			}
 		})
+	}
+}
+
+// Every excluded takeover needs its row before a pass can stand.
+func TestExcludedTakeoverMissingRowHoldsPass(t *testing.T) {
+	passing := excludedTakeover{NonTimingPassed: true}
+	for _, tc := range []struct {
+		rows  []excludedTakeover
+		kills int
+		want  bool
+	}{
+		{[]excludedTakeover{passing}, 1, false},
+		{[]excludedTakeover{passing}, 2, true},
+		{[]excludedTakeover{passing, {}}, 2, true},
+	} {
+		e := excludedPool{Takeovers: tc.rows}
+		if got := e.holdsPass(tc.kills); got != tc.want {
+			t.Fatal("MUTATION: excluded-takeover-row-count", len(tc.rows), tc.kills, got)
+		}
 	}
 }

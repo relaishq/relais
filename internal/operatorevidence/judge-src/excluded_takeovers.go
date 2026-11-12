@@ -43,10 +43,28 @@ type excludedMetric struct {
 
 type eventPosition struct{ phase, event int }
 
-// timingMetric mirrors operatorevidence.TimingMetric: the checks that depend on
-// mapping the kill time across hosts. Every other metric is a non-timing check.
-func timingMetric(metric string) bool {
-	return metric == "first_content" || metric == "first_new_content" || metric == "distributed_window"
+// holdsPass reports a pooled pass that needs owner sign-off: an excluded
+// takeover without its row, or one whose non-timing checks did not all pass.
+func (e *excludedPool) holdsPass(kills int) bool {
+	held := len(e.Takeovers) != kills
+	for _, row := range e.Takeovers {
+		held = held || !row.NonTimingPassed
+	}
+	return held
+}
+
+// killTimedMetric lists the checks that depend on the kill time, which an
+// excluded takeover's wide bracket does not fix: operatorevidence.TimingMetric's
+// three, plus resume and first_live, which are durations measured from the
+// kill. It is wider than TimingMetric on purpose and applies only to excluded
+// rows; rehearsal allowances keep TimingMetric. Every other metric is a
+// non-timing check.
+func killTimedMetric(metric string) bool {
+	switch metric {
+	case "first_content", "first_new_content", "distributed_window", "resume", "first_live":
+		return true
+	}
+	return false
 }
 
 // soleExcludedCause reports an event whose only clock cause is the confirmed
@@ -63,7 +81,7 @@ func excludedTakeoverRow(r *loadgen.RunReport, k int, at eventPosition) excluded
 			continue
 		}
 		row.Metrics = append(row.Metrics, excludedMetric{m.Metric, m.Outcome})
-		if !timingMetric(m.Metric) && m.Outcome != "pass" {
+		if !killTimedMetric(m.Metric) && m.Outcome != "pass" {
 			row.NonTimingPassed = false
 		}
 	}

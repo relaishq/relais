@@ -6523,10 +6523,10 @@
   },
   {
     "ID": "excluded-takeover-sign-off-skipped",
-    "File": "internal/operatorevidence/judge-src/main.go",
-    "Function": "pooledPreviewMedia",
-    "Old": "e.OwnerSignOff = e.OwnerSignOff || !row.NonTimingPassed",
-    "New": "e.OwnerSignOff = e.OwnerSignOff || row.Phase < 0",
+    "File": "internal/operatorevidence/judge-src/excluded_takeovers.go",
+    "Function": "holdsPass",
+    "Old": "held = held || !row.NonTimingPassed",
+    "New": "held = held || row.Phase < 0",
     "Test": "TestExcludedTakeoverNonTimingChecks/audio-loss",
     "Marker": "MUTATION: excluded-takeover-strict-pass",
     "Package": "./internal/operatorevidence/judge-src"
@@ -6535,7 +6535,7 @@
     "ID": "excluded-takeover-timing-required",
     "File": "internal/operatorevidence/judge-src/excluded_takeovers.go",
     "Function": "excludedTakeoverRow",
-    "Old": "if !timingMetric(m.Metric) && m.Outcome != \"pass\" {",
+    "Old": "if !killTimedMetric(m.Metric) && m.Outcome != \"pass\" {",
     "New": "if m.Outcome != \"pass\" {",
     "Test": "TestExcludedTakeoverNonTimingChecks/first-content",
     "Marker": "MUTATION: excluded-takeover-strict-pass",
@@ -6550,6 +6550,36 @@
     "Test": "TestExcludedTakeoverReportsItsRow",
     "Marker": "MUTATION: excluded-rows-optional",
     "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-takeover-kill-timed-resume",
+    "File": "internal/operatorevidence/judge-src/excluded_takeovers.go",
+    "Function": "killTimedMetric",
+    "Old": "\"distributed_window\", \"resume\", \"first_live\":",
+    "New": "\"distributed_window\":",
+    "Test": "TestExcludedTakeoverNonTimingChecks/resume",
+    "Marker": "MUTATION: excluded-takeover-strict-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-takeover-row-count",
+    "File": "internal/operatorevidence/judge-src/excluded_takeovers.go",
+    "Function": "holdsPass",
+    "Old": "held := len(e.Takeovers) != kills",
+    "New": "held := len(e.Takeovers) != kills && false",
+    "Test": "TestExcludedTakeoverMissingRowHoldsPass",
+    "Marker": "MUTATION: excluded-takeover-row-count",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "excluded-bracket-unchecked-drops-exclusion",
+    "File": "internal/operatorgates/observe/clock_coverage.go",
+    "Function": "evaluateClockCoverage",
+    "Old": "if s.excluded {\n\t\t\t\t\tadd(\"clock-coverage-kill-excluded\")\n\t\t\t\t}\n\t\t\t\tcontinue",
+    "New": "continue",
+    "Test": "TestClockCoverageKillExcludedKeepsTimelineChecks/worker-step",
+    "Marker": "MUTATION: excluded-bracket-skips-timelines",
+    "Package": "./internal/operatorgates/observe"
   },
   {
     "ID": "release-replacement-not-deferred",
