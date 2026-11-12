@@ -15,6 +15,7 @@ var RemoteErrors = map[string]error{
 	"hold_limit": ErrHoldLimit, "hold_expired": ErrHoldExpired,
 	"buffer_disabled": ErrBufferDisabled, "replay_in_progress": ErrReplayInProgress,
 	"replay_not_ready": ErrReplayNotReady, "replay_target_changed": ErrReplayTargetChanged,
+	"stale_move": ErrStaleMove,
 }
 
 type RouteRequest struct {

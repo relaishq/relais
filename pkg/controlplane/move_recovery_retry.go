@@ -979,7 +979,7 @@ func (m *moveRecovery) rebuild(ctx context.Context, intent sessionstore.ControlI
 		if ok && installed.Owner == current.Worker {
 			// Route repair/release is idempotent coordination. Never re-export or
 			// re-resume a tenure that the store and live worker both confirm.
-			if err := p.relay.MoveSession(intent.ID, netip.AddrPort{}, current.Worker); err != nil {
+			if err := moveAtEpoch(p.relay, intent.ID, netip.AddrPort{}, current.Worker, current.Epoch); err != nil {
 				return err
 			}
 			if _, err := p.relay.ReleaseSession(intent.ID, current.Worker); err != nil && !errors.Is(err, privateapi.ErrUncertain) {

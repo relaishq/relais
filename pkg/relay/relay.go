@@ -236,6 +236,10 @@ type Config struct {
 	// LoggerFactory defaults to Pion's default logger factory.
 	LoggerFactory logging.LoggerFactory
 
+	// beforeExportDrain, when set, runs just before the export drain takes
+	// forwardMu. Tests use it to interleave a racing move.
+	beforeExportDrain func(sessionID string)
+
 	// beforeApply, when set, runs after a session's owner has been read and
 	// before the result is applied. Tests use it to hold a result back.
 	beforeApply func(sessionID string)
@@ -608,6 +612,10 @@ func (r *Relay) AddWorker(worker netip.AddrPort) {
 	r.registry[unmap(worker)] = struct{}{}
 }
 
+// ErrStaleMove is a definite refusal: the move's lease epoch is older than
+// one the relay already applied to the session, so the route is unchanged.
+var ErrStaleMove = errors.New("relay: move epoch is older than an applied move")
+
 // MoveSession is a trusted control-plane notification after a lease transfer.
 // It immediately fences the old relay leg, preserves all confirmed callers,
 // and invalidates lookups that started before the move. It admits no caller
@@ -637,22 +645,34 @@ func (r *Relay) invalidateCleanup(id string) {
 // the relay read and forward that output before the route moves, so the old
 // owner's legitimate output is never dropped as unrouted. A missing
 // acknowledgement waits at most OutputDrainTimeout, then moves as before.
-// Without such a hold it is MoveSessionAtEpoch.
+// Without such a hold it is MoveSessionAtEpoch. A stale epoch is refused
+// under forwardMu, which every move holds, before the drain touches a hold.
 func (r *Relay) MoveSessionAfterExport(sessionID string, from, to netip.AddrPort, epoch uint64) error {
-	r.drainExportedOutput(sessionID, unmap(from), unmap(to))
+	if err := r.drainExportedOutput(sessionID, unmap(from), unmap(to), epoch); err != nil {
+		return err
+	}
 	return r.MoveSessionAtEpoch(sessionID, from, to, epoch)
 }
 
-func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
+// drainExportedOutput returns ErrStaleMove only; drain failures fall back to
+// the plain move.
+func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort, epoch uint64) error {
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return
+		return nil
+	}
+	if r.cfg.beforeExportDrain != nil {
+		r.cfg.beforeExportDrain(id)
 	}
 	r.forwardMu.Lock()
+	if r.flows.staleMove(id, epoch) {
+		r.forwardMu.Unlock()
+		return ErrStaleMove
+	}
 	h := r.holds[id]
 	if h == nil || h.replay || !h.acknowledged || !from.IsValid() || h.source != from || from == to || h.drained != nil || !r.registered(from) {
 		r.forwardMu.Unlock()
-		return
+		return nil
 	}
 	h.drainNonce = binary.BigEndian.Uint64(nonce[:])
 	drained := make(chan struct{})
@@ -660,7 +680,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), r.barrierEndpoint(from))
 	r.forwardMu.Unlock()
 	if err != nil {
-		return
+		return nil
 	}
 	timer := time.NewTimer(r.cfg.OutputDrainTimeout)
 	defer timer.Stop()
@@ -670,7 +690,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 		select {
 		case <-drained:
 			r.outputDrains.Add(1)
-			return
+			return nil
 		case <-resend.C:
 			// A lost marker or acknowledgement is resent with the same nonce.
 			r.forwardMu.Lock()
@@ -680,18 +700,23 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 			r.forwardMu.Unlock()
 		case <-timer.C:
 			r.outputDrainExpired.Add(1)
-			return
+			return nil
 		case <-h.released:
-			return
+			return nil
 		case <-r.ctx.Done():
-			return
+			return nil
 		}
 	}
 }
 
 // MoveSessionAtEpoch carries the transferred owner lease epoch. It distinguishes
 // a fresh receiver at a reused address from idempotent route confirmation.
-// Epoch zero keeps compatibility with callers that only identify route changes.
+// Non-zero epochs are ordered: one older than a non-zero epoch already
+// applied to the session returns ErrStaleMove and changes nothing; an equal
+// epoch is idempotent. Epoch zero is an unordered move: it is never refused
+// and never changes the recorded epoch. In-process callers without a store
+// and released control planes (v0.3.1 sends zero for planned moves) use it,
+// so the ordering guarantee covers only non-zero epochs.
 func (r *Relay) MoveSessionAtEpoch(sessionID string, from, to netip.AddrPort, epoch uint64) error {
 	from, to = unmap(from), unmap(to)
 	if sessionID == "" || from.IsValid() && !r.registered(from) || !r.registered(to) {
@@ -704,6 +729,9 @@ func (r *Relay) MoveSessionAtEpoch(sessionID string, from, to netip.AddrPort, ep
 	if r.ctx.Err() != nil {
 		return errors.New("relay: closed")
 	}
+	if r.flows.staleMove(sessionID, epoch) {
+		return ErrStaleMove
+	}
 	r.invalidateCleanup(sessionID)
 	r.lookups.mu.Lock()
 	if lookup := r.lookups.pending[sessionID]; lookup != nil {
@@ -713,7 +741,7 @@ func (r *Relay) MoveSessionAtEpoch(sessionID string, from, to netip.AddrPort, ep
 	if s := r.bufferSession(sessionID); s != nil {
 		s.noteReplayTarget(to, epoch)
 	}
-	r.flows.moveSession(sessionID, from, to)
+	r.flows.moveSession(sessionID, from, to, epoch)
 	r.flows.noteEpoch(sessionID, to, epoch)
 	for _, caller := range r.flows.sessionCallers(sessionID) {
 		r.persist(caller, true)

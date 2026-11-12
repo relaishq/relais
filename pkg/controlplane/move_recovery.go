@@ -94,7 +94,14 @@ func moveAfterExport(r Relay, id string, from, to netip.AddrPort, epoch uint64) 
 	if mover, ok := r.(ExportMoveRelay); ok && from.IsValid() {
 		return mover.MoveSessionAfterExport(id, from, to, epoch)
 	}
-	if tenure, ok := r.(TenureRelay); ok && epoch != 0 {
+	return moveAtEpoch(r, id, from, to, epoch)
+}
+
+// moveAtEpoch carries the store lease epoch the move acted on, so the relay
+// refuses an older control's late move (relay.ErrStaleMove). Relays without
+// the capability keep the address-only move.
+func moveAtEpoch(r Relay, id string, from, to netip.AddrPort, epoch uint64) error {
+	if tenure, ok := r.(TenureRelay); ok {
 		return tenure.MoveSessionAtEpoch(id, from, to, epoch)
 	}
 	return r.MoveSession(id, from, to)
@@ -297,7 +304,11 @@ func (m *moveRecovery) moveLocked(ctx context.Context, c *call, lease sessionsto
 	}
 
 	move.lease, move.transferred, move.route = transferred, true, routeAttempted
-	if err = moveAfterExport(diagnosticRelay(r, movediag.Phase(ctx, "transfer")), c.id, source.addr, target.addr, 0); err != nil {
+	if err = moveAfterExport(diagnosticRelay(r, movediag.Phase(ctx, "transfer")), c.id, source.addr, target.addr, transferred.Epoch); err != nil {
+		if errors.Is(err, relay.ErrStaleMove) {
+			// A definite refusal: the route still names the source.
+			move.route = routeAtSource
+		}
 		err = m.rollback(move, &res.Result, err)
 		return res, err
 	}
@@ -363,7 +374,7 @@ func (m *moveRecovery) rollback(move *moveTransfer, result *mediaworker.Handover
 	}
 	var routeErr error
 	if err == nil && rerouted {
-		routeErr = r.MoveSession(c.id, target.addr, source.addr)
+		routeErr = moveAtEpoch(r, c.id, target.addr, source.addr, lease.Epoch)
 	}
 	// A failed reverse notification must not prevent A from running again.
 	// B never resumed, and the next authenticated consent check follows A's
@@ -430,6 +441,11 @@ func (m *moveRecovery) rollback(move *moveTransfer, result *mediaworker.Handover
 	}
 
 	result.RolledBack = true
+	if errors.Is(routeErr, relay.ErrStaleMove) {
+		// Only the stale-move sentinel is wrapped; the route error stays text,
+		// so nothing joined to it (uncertainty) can reclassify the rollback.
+		return fmt.Errorf("controlplane: rolled back on source; relay restore failed (%v): %w: %w", routeErr, relay.ErrStaleMove, cause)
+	}
 	if routeErr != nil {
 		return fmt.Errorf("controlplane: rolled back on source; relay restore failed (%v): %w", routeErr, cause)
 	}
