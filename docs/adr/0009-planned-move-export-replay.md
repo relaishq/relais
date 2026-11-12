@@ -92,7 +92,16 @@ output from before the export fence.
    knows the routed source and cannot drain it. It uses the existing route
    repair: `MoveSessionAtEpoch` with an empty source, or `/move` with
    `repair`. It never sends an empty source to `move-after-export`, which
-   rejects one with 400.
+   rejects one with 400. Every control move, rollback and repair carries the
+   store lease epoch it acted on. The relay refuses a non-zero epoch older
+   than one it already applied to the session with a definite `stale_move`
+   (409) and leaves the route and hold unchanged; an equal epoch is
+   idempotent (#443, `TestStaleMoveIsRefusedAndLeavesRoute`,
+   `TestControlStaleMoveIsDefiniteRefusal`). The guarantee covers non-zero
+   epochs only. A zero epoch is an unordered move: the relay applies it, never
+   refuses it and never changes the recorded epoch with it. Released control
+   planes (v0.3.1) send zero for planned moves, so a mixed-version pool keeps
+   working but those moves are not ordered (`TestZeroEpochHTTPMoveIsUnordered`).
 4. **The control plane passes the export's consumed input to the relay.**
    After a successful export it reads `{High, Window, Exact}` per SSRC from the
    exact export bytes. It releases the hold with `ReleaseAfterExport(id, to,
@@ -253,7 +262,7 @@ needs all three upgraded.
 | Mixed state | Behavior |
 | --- | --- |
 | New control plane, old relay | `POST /sessions/{id}/move-after-export` and `/release-after-export` return 404 or 405 from the relay's mux. The control plane retries the existing `/move` and `/release` only for those two statuses. Every relay domain error is 409; uncertain and other errors are returned and never retried. The #127 limit remains until the relay upgrades. |
-| Old control plane, new relay | The old `/move` and `/release` are unchanged. |
+| Old control plane, new relay | The old `/move` and `/release` are unchanged. A zero-epoch move stays accepted and unordered (#443). |
 | Old source worker | No mask in the export, so input is inexact. Only ring input above `H` is recovered; held media stays unfiltered, as today. Nothing is sent twice by the release. |
 | New source, old target worker | The relay sends only unconsumed media, including held media. The old target ignores the mask: it primes only `H`, so a later live duplicate is admitted as today. It also advances a positive `ReplayFloor`, so recovered video gaps on such sessions are still dropped. |
 | New workers, old relay or control plane | Custom-agent audio that arrives during the export flush is no longer authenticated. Without recovery it is lost, as it is dropped today, but it is no longer counted as an agent input drop. Video and SRTCP are unchanged. |
