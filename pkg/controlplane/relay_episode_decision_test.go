@@ -622,17 +622,32 @@ func TestFailedProposalCleanupIsRetried(t *testing.T) {
 	c, err := p.lookup(id)
 	require.NoError(t, err)
 	first := armEpisode(t, p, c, 10*time.Second)
+	// Cleanup follows a decided episode. A record left open under the first
+	// token would be adopted by the next watcher, which journals that token
+	// again (issue #436).
+	a, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
+	require.NoError(t, err)
+	done := rec
+	episode := *rec.Episode
+	episode.Seq, episode.Outcome = episode.Seq+1, sessionstore.RelayEpisodeCompleted
+	done.Episode = &episode
+	require.NoError(t, confirmations(store).CASRelayConfirmation(context.Background(), id, a, rec, done, time.Time{}, time.Time{}))
 	store.fail.Store(true)
 	p.cleanupRelayEpisode(context.Background(), c, first)
 	store.fail.Store(false)
 	next, err := p.relayRecoveryEpisode(context.Background(), c, time.Now())
 	require.NoError(t, err, "one failed delete must not block every later recovery")
 	require.NotSame(t, first, next)
+	require.NotEqual(t, first.proposal().Token, next.proposal().Token, "the old proposal is not reloaded")
+	select { // the next watcher has made its begin decision
+	case <-next.armed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("next episode never armed")
+	}
 	records, err := store.ControlIntents(context.Background())
 	require.NoError(t, err)
-	for _, r := range records {
-		require.NotEqual(t, first.proposal().Token, r.Token, "the old proposal is deleted")
-	}
+	require.Len(t, records, 1, "the old proposal is deleted")
+	require.Equal(t, next.proposal().Token, records[0].Token)
 }
 
 // seqFault fails confirmation-record reads while fail is set.
