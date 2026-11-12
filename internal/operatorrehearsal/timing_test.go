@@ -145,3 +145,24 @@ func TestRehearsalExcludedKillCounts(t *testing.T) {
 		})
 	}
 }
+
+// A pass held for owner sign-off on an excluded takeover is not eligible.
+func TestRehearsalRejectsOwnerSignOff(t *testing.T) {
+	r := passingReport()
+	r.Pool.ExcludedKills = 1
+	r.Pool.PhaseDiagnostics[1].EventCount++
+	r.Pool.Excluded = &operatorevidence.ExcludedPool{Takeovers: []operatorevidence.ExcludedTakeover{{Phase: 1}}, CountedBackIn: operator.Inconclusive}
+	r.Evaluate()
+	if r.Verdict != operator.Passed {
+		t.Fatal("excluded kill control", r.Failures)
+	}
+	r = passingReport()
+	r.Pool.ExcludedKills = 1
+	r.Pool.PhaseDiagnostics[1].EventCount++
+	r.Pool.Status = operator.Inconclusive
+	r.Pool.Excluded = &operatorevidence.ExcludedPool{Takeovers: []operatorevidence.ExcludedTakeover{{Phase: 1}}, CountedBackIn: operator.Inconclusive, OwnerSignOff: true}
+	r.Evaluate()
+	if r.Verdict != operator.Failure {
+		t.Fatal("owner sign-off passed the rehearsal", r.Verdict)
+	}
+}

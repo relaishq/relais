@@ -33,6 +33,7 @@ type Summary struct {
 	DroppedPhases      int               `json:"droppedPhases"`
 	ExcludedEvents     int               `json:"excludedEvents"`
 	ExcludedKills      int               `json:"excludedKills"`
+	Excluded           *ExcludedPool     `json:"-"`
 	SaturationOverlaps int               `json:"saturationOverlaps"`
 	DuplicatePackets   uint64            `json:"duplicatePackets"`
 	PhaseDiagnostics   []PhaseDiagnostic `json:"phaseDiagnostics"`
@@ -52,6 +53,44 @@ type Summary struct {
 	ICERestarts         int              `json:"iceRestarts"`
 }
 
+// ExcludedPool reports the takeovers left out of the pool for a wide kill
+// bracket. CountedBackIn is the pooled status with them judged on their trusted
+// brackets. OwnerSignOff marks a pass held back as inconclusive because an
+// excluded takeover's non-timing checks did not all pass. The judge emits it
+// only when excludedKills is nonzero; DecodeSummary then requires it.
+type ExcludedPool struct {
+	Takeovers     []ExcludedTakeover `json:"takeovers"`
+	CountedBackIn operator.Verdict   `json:"countedBackIn"`
+	OwnerSignOff  bool               `json:"ownerSignOff"`
+}
+
+// ExcludedTakeover is one excluded takeover's results when counted back in.
+// Metrics lists each yardstick metric's outcome for that event.
+type ExcludedTakeover struct {
+	Phase           int              `json:"phase"`
+	Event           int              `json:"event"`
+	Calls           []ExcludedCall   `json:"calls"`
+	Metrics         []ExcludedMetric `json:"metrics"`
+	NonTimingPassed bool             `json:"nonTimingPassed"`
+}
+type ExcludedCall struct {
+	WindowOutcome string         `json:"windowOutcome"`
+	KillToLive    DurationBounds `json:"killToLive"`
+	EventGaps     []TrackGap     `json:"eventGaps"`
+}
+type DurationBounds struct {
+	LowerNS int64 `json:"lowerNs"`
+	UpperNS int64 `json:"upperNs"`
+}
+type TrackGap struct {
+	Kind string `json:"kind"`
+	DurationBounds
+}
+type ExcludedMetric struct {
+	Metric  string `json:"metric"`
+	Outcome string `json:"outcome"`
+}
+
 // MarshalJSON preserves an explicit empty diagnostic inventory. Missing/null
 // inventories still fail the recursive evidence decoder at the read boundary.
 func (s Summary) MarshalJSON() ([]byte, error) {
@@ -62,7 +101,10 @@ func (s Summary) MarshalJSON() ([]byte, error) {
 	if s.PhaseDiagnostics == nil {
 		s.PhaseDiagnostics = []PhaseDiagnostic{}
 	}
-	return json.Marshal(wire(s))
+	return json.Marshal(struct {
+		wire
+		Excluded *ExcludedPool `json:"excluded,omitempty"`
+	}{wire(s), s.Excluded})
 }
 
 // DecodeSummary validates presence once; missing counters never become zeros.
@@ -78,6 +120,18 @@ func DecodeSummary(raw []byte) (Summary, error) {
 	}
 	if s.Status != operator.Passed && s.Status != operator.Failure && s.Status != operator.Inconclusive {
 		return s, errors.New("invalid-media-status")
+	}
+	if s.ExcludedKills > 0 {
+		var excluded struct {
+			Excluded ExcludedPool `json:"excluded"`
+		}
+		if observe.DecodeEvidenceLimit(raw, &excluded, 256000) != nil || observe.Numbers(excluded) != nil {
+			if knownFailure {
+				return Summary{Status: operator.Failure}, nil
+			}
+			return s, errors.New("invalid-media-summary")
+		}
+		s.Excluded = &excluded.Excluded
 	}
 	trialsComplete := s.EventCount > 0 && s.MetricCount > 0
 	if s.RelayCalls == s.CompletedCalls {

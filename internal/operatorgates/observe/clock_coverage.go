@@ -85,7 +85,8 @@ type coverageSpan struct {
 	slot              string
 	a, b, bound, half int64
 	signal            bool
-	// excluded waives only the gate-recorded bracket's half-width check.
+	// excluded marks a bracket the gate recorded as wide. Its width is
+	// rechecked and, when still too wide, excludes the takeover.
 	excluded bool
 }
 
@@ -139,14 +140,7 @@ func coverageSpans(w CoverageWindow, control string, cb, wb int64, brackets []Co
 	if !x || !y || after < before || before+(after-before)/2 != a {
 		return nil, "clock-coverage-kill-bracket"
 	}
-	spans := []coverageSpan{{slot: w.Worker, a: before, b: after, bound: wb, half: (after - before + 1) / 2, signal: true, excluded: found.LeaseExcluded}, {slot: control, a: b, b: b, bound: cb}}
-	// The gate recorded this well-formed bracket as wider than its selected
-	// worker bound. Its timelines are still checked; any other cause keeps the
-	// takeover undecided instead of excluded.
-	if found.LeaseExcluded {
-		return spans, "clock-coverage-kill-excluded"
-	}
-	return spans, ""
+	return []coverageSpan{{slot: w.Worker, a: before, b: after, bound: wb, half: (after - before + 1) / 2, signal: true, excluded: found.LeaseExcluded}, {slot: control, a: b, b: b, bound: cb}}, ""
 }
 
 // coverageError takes the maximum retrospective envelope over every intersecting
@@ -287,6 +281,11 @@ func evaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, cont
 			add(whyH)
 			add(whyF)
 			if whyH != "" || whyF != "" {
+				// The width cannot be rechecked; the timeline cause keeps the
+				// takeover undecided beside the gate's exclusion.
+				if s.excluded {
+					add("clock-coverage-kill-excluded")
+				}
 				continue
 			}
 			reserve := int64(0)
@@ -296,8 +295,15 @@ func evaluateClockCoverage(timelines map[string]CoverageTimeline, frontend, cont
 			if h > math.MaxInt64-f || reserve < 0 || reserve > s.bound || h+f > s.bound-reserve {
 				add("clock-coverage-bound")
 			}
-			if s.signal && !s.excluded && (h > math.MaxInt64-f || s.half > s.bound || h+f > s.bound-s.half) {
-				add("clock-coverage-kill-bracket")
+			// The gate's exclusion stands only when this recheck also finds the
+			// bracket too wide: clock error plus half-width exceeds the bound.
+			// Otherwise the takeover is judged like any other.
+			if s.signal && (h > math.MaxInt64-f || s.half > s.bound || h+f > s.bound-s.half) {
+				if s.excluded {
+					add("clock-coverage-kill-excluded")
+				} else {
+					add("clock-coverage-kill-bracket")
+				}
 			}
 		}
 	}

@@ -137,6 +137,28 @@ func TestClockCoverageKillExcluded(t *testing.T) {
 	}
 }
 
+// The evaluator rechecks a gate-excluded bracket: it stays excluded only when
+// the 2 ms clock error plus its half-width exceeds the 3 ms worker bound. A
+// 4 ms bracket's 2 ms half-width alone fits; with the clock error it does not.
+func TestClockCoverageKillExcludedRecheck(t *testing.T) {
+	for _, tc := range []struct {
+		width int64
+		want  []string
+	}{{2000000, []string{}}, {2000001, []string{"clock-coverage-kill-excluded"}}, {4000000, []string{"clock-coverage-kill-excluded"}}} {
+		t.Run(fmt.Sprint(tc.width), func(t *testing.T) {
+			m, w := coverageFixture()
+			before := coverageBase*coverageSecond + 10250000000
+			mid := before + tc.width/2
+			w[0].Kind, w[0].StartUnixNS = "takeover", fmt.Sprint(mid)
+			b := []CoverageBracket{{LeaseExcluded: true, Worker: "w1", BeforeUnixNS: fmt.Sprint(before), AfterUnixNS: fmt.Sprint(before + tc.width), MidpointUnixNS: fmt.Sprint(mid)}}
+			got := EvaluateClockCoverage(m, "relay", "shared", 2000000, 3000000, w, b)
+			if !reflect.DeepEqual(got[0].Causes, tc.want) {
+				t.Fatal("MUTATION: excluded-bracket-trusts-gate", tc.width, got[0].Causes, tc.want)
+			}
+		})
+	}
+}
+
 // An excluded bracket waives only its own width. Every timeline check of the
 // takeover still runs, so an independent clock cause keeps the event undecided.
 func TestClockCoverageKillExcludedKeepsTimelineChecks(t *testing.T) {
