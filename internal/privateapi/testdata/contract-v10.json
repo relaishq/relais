@@ -34,7 +34,8 @@
               "not_movable": true,
               "to": "fixture"
             }
-          ]
+          ],
+          "not_movable": 1
         },
         "shape": {
           "moves": {
@@ -63,6 +64,10 @@
                 }
               }
             ]
+          },
+          "not_movable": {
+            "json_options": "",
+            "type": "int"
           }
         }
       },

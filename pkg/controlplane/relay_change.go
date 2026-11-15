@@ -22,6 +22,13 @@ import (
 
 var ErrRelayRolledBack = errors.New("controlplane: relay_change_rolled_back")
 
+// relayPlannedFailure identifies an attempt whose pending assignment was
+// accepted. Other operations can advance a generation without this attempt
+// starting, so a generation comparison cannot establish that it ran.
+type relayPlannedFailure struct{ error }
+
+func (e *relayPlannedFailure) Unwrap() error { return e.error }
+
 type RelayBinding struct {
 	Slot           mediaworker.RelaySlot
 	Relay          Relay
@@ -121,7 +128,7 @@ func (p *Plane) configureWorkerRelays(ctx context.Context, worker Worker) error 
 	return w.ConfigureRelays(ctx, slots)
 }
 
-func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
+func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr error) {
 	if err := p.requireMutationReady(); err != nil {
 		return err
 	}
@@ -129,6 +136,13 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if changeErr == nil {
+			c.stateMu.Lock()
+			c.relayNotMovableSlot, c.relayNotMovableReason = "", ""
+			c.stateMu.Unlock()
+		}
+	}()
 	// Request cancellation starts recovery; takeover cancellation stops it.
 	// Publish the detached recovery cancellation with ownership of the call.
 	recoveryBase, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -189,6 +203,11 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if err = p.setRelay(ctx, lease, from, pending); err != nil {
 		return errors.Join(err, p.cleanupRelayPending(ctx, lease, pending))
 	}
+	defer func() {
+		if changeErr != nil {
+			changeErr = &relayPlannedFailure{changeErr}
+		}
+	}()
 	planned := relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit)}
 	firstOuter := planned.outer // never extended by a fresh rollback window
 	err = p.waitRelayChange(ctx, c, pending, relayPlannedLimit, planned)
@@ -725,7 +744,8 @@ type RelayMoveResult struct {
 // HTTP returns 200 for these per-call outcomes, including cancellation.
 // Request-level failures return the existing error response instead.
 type RelayDrainResult struct {
-	Moves []RelayMoveResult `json:"moves"`
+	Moves      []RelayMoveResult `json:"moves"`
+	NotMovable int               `json:"not_movable"`
 }
 
 // DrainRelay preserves the error-only API for in-process callers. HTTP also
@@ -784,16 +804,8 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 		c.stateMu.Lock()
 		c.relayNotMovableSlot, c.relayNotMovableReason = "", ""
 		c.stateMu.Unlock()
-		result.Moves[i] = RelayMoveResult{ID: c.id, From: slot}
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			errs[i] = ctx.Err()
-			continue
-		}
 		wg.Go(func() {
-			defer func() { <-sem }()
-			result.Moves[i].To, errs[i] = p.drainRelayCall(ctx, c, slot)
+			result.Moves[i], errs[i] = p.drainRelayCall(ctx, c, slot, sem)
 		})
 	}
 	wg.Wait()
@@ -802,45 +814,134 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 		if err := errs[i]; err != nil {
 			joined = errors.Join(joined, err)
 			reason := strings.Join(strings.Fields(err.Error()), " ")
-			result.Moves[i].NotMovable, result.Moves[i].Error = true, reason
-			c.stateMu.Lock()
-			c.relayNotMovableSlot, c.relayNotMovableReason = slot, reason
-			c.stateMu.Unlock()
+			result.Moves[i].Error = reason
+			if result.Moves[i].NotMovable {
+				result.NotMovable++
+				c.stateMu.Lock()
+				c.relayNotMovableSlot, c.relayNotMovableReason = slot, reason
+				c.stateMu.Unlock()
+			}
 		}
 	}
 	return result, joined
 }
 
-func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string) (string, error) {
+// relayDrainState observes ownership and episode authority before any new
+// planned attempt. An open episode must settle before planning another move.
+func (p *Plane) relayDrainState(ctx context.Context, id string) (sessionstore.RelayAssignment, bool, error) {
+	_, a, err := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
+	if err != nil {
+		return a, false, err
+	}
+	if store, ok := p.store.(sessionstore.RelayConfirmations); ok {
+		current, rec, err := store.RelayConfirmation(ctx, id)
+		if err != nil {
+			return a, false, err
+		}
+		if rec.Episode != nil && rec.Episode.Outcome == sessionstore.RelayEpisodeEnded {
+			return current, false, errRelayEpisodeEnded
+		}
+		return current, rec.Episode.Open(), nil
+	}
+	return a, false, nil
+}
+
+func relayDrainEnded(err error) bool {
+	return errors.Is(err, ErrUnknownCall) || errors.Is(err, sessionstore.ErrNotFound) ||
+		errors.Is(err, mediaworker.ErrUnknownSession) || errors.Is(err, sessionstore.ErrEnded) || errors.Is(err, errRelayEpisodeEnded)
+}
+
+func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem chan struct{}) (res RelayMoveResult, err error) {
+	res = RelayMoveResult{ID: c.id, From: slot}
 	backoff := [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
-	for attempt := 0; ; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return "", err
+	failures := 0
+	for {
+		if err = ctx.Err(); err != nil {
+			return res, err
 		}
-		target, err := p.pickRelay(ctx, slot)
-		if err == nil {
-			err = p.ChangeRelay(ctx, c.id, target)
+		// Hold capacity for observation and the planned attempt, never for backoff.
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return res, ctx.Err()
 		}
-		if err == nil {
-			return target, nil
-		}
-		// A missing caller/worker contract cannot improve by retrying this drain.
-		if errors.Is(err, mediaworker.ErrRelayUnsupported) {
-			// The same error also names a target that became unavailable after
-			// picking it. Only a caller without relay change is permanently blocked.
-			mode, modeErr := p.relayMode(ctx, c)
-			if modeErr == nil && mode == sessionstore.RelayConfirmNone {
-				return "", err
+		settled, stepErr := func() (bool, error) {
+			defer func() { <-sem }()
+			if err := ctx.Err(); err != nil {
+				return true, err
 			}
+			before, open, err := p.relayDrainState(ctx, c.id)
+			if err != nil {
+				return true, err
+			}
+			if before.Slot != slot && before.Pending == "" {
+				res.To = before.Slot
+				return true, nil
+			}
+			if open || before.Slot != slot && before.Pending != "" {
+				return false, nil
+			}
+			target, err := p.pickRelay(ctx, slot)
+			if err != nil { // no planned attempt ran
+				return true, err
+			}
+			err = p.ChangeRelay(ctx, c.id, target)
+			if err == nil {
+				res.To = target
+				return true, nil
+			}
+			if relayDrainEnded(err) {
+				return true, err
+			}
+			if ctx.Err() != nil {
+				return true, ctx.Err()
+			}
+			after, open, readErr := p.relayDrainState(ctx, c.id)
+			if readErr != nil {
+				return true, readErr
+			}
+			if after.Slot != slot && after.Pending == "" {
+				res.To = after.Slot
+				return true, nil
+			}
+			// The episode owns recovery. Busy/conflicting operations did not run a
+			// planned attempt and do not consume the drain's failure allowance.
+			if open || after.Slot != slot && after.Pending != "" || errors.Is(err, errRelayUnconfirmed) ||
+				errors.Is(err, ErrMoveInProgress) || errors.Is(err, sessionstore.ErrRelayConflict) {
+				return false, nil
+			}
+			unsupported := errors.Is(err, ErrConfirmationUnsupported)
+			if errors.Is(err, mediaworker.ErrRelayUnsupported) {
+				mode, modeErr := p.relayMode(ctx, c)
+				unsupported = unsupported || modeErr == nil && mode == sessionstore.RelayConfirmNone
+			}
+			if unsupported {
+				res.NotMovable = true
+				return true, err
+			}
+			// Only this call's acknowledged planned attempt counts. A write
+			// refused before it starts stays an error, even if another
+			// operation consumed a generation in the meantime.
+			var failed *relayPlannedFailure
+			if !errors.As(err, &failed) {
+				return true, err
+			}
+			failures++
+			if failures > len(backoff) {
+				res.NotMovable = true
+				return true, err
+			}
+			return false, nil
+		}()
+		if settled {
+			return res, stepErr
 		}
-		if errors.Is(err, ErrConfirmationUnsupported) || attempt == len(backoff) {
-			return "", err
-		}
-		timer := time.NewTimer(backoff[attempt])
+		// Episode observations use the current delay without consuming retries.
+		timer := time.NewTimer(backoff[max(0, failures-1)])
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return "", ctx.Err()
+			return res, ctx.Err()
 		case <-timer.C:
 		}
 	}

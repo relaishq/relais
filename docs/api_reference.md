@@ -75,19 +75,35 @@ confirmed under the same mode.
 placement. At most eight calls change relay at once. Each call gets one attempt
 and up to three retries, waiting 1 s, 2 s and 4 s and picking a target again for
 each retry. A caller without relay-change support or a worker without C is
-reported immediately. Existing change, rollback and episode bounds apply;
-backoff uses the request context and adds no deadline.
+reported immediately. Sleeping calls release capacity, so other calls can
+start. Before each retry, control reads the current assignment and recovery
+episode. A call already off the draining slot with no pending change is
+reported moved to its current slot. An open recovery episode settles before
+another planned attempt; observing a busy operation does not consume a retry.
+Only failed planned attempts whose pending assignment was accepted and which
+leave the call on the draining slot count toward exhaustion. Change, rollback and
+episode bounds apply; backoff uses the request context and adds no deadline.
 
 A completed report returns HTTP `200`, including partial drains and cancellation:
 
 ```json
-{"moves":[{"id":"call-a","from":"r1","to":"r2"},{"id":"call-b","from":"r1","not_movable":true,"error":"controlplane: confirmation_unsupported"}]}
+{"moves":[{"id":"call-a","from":"r1","to":"r2"},{"id":"call-b","from":"r1","not_movable":true,"error":"controlplane: confirmation_unsupported"}],"not_movable":1}
 ```
 
-`to` is present only for a confirmed move. `not_movable` and `error` name the
-final failure. Cancellation reports remaining calls with the context error.
-An empty drain returns `{"moves":[]}`. Request-level failures use the error
-response: an unknown slot returns `404`, control not ready returns `503`, and
+`to` names the successful destination, including a recovery move observed
+between attempts. Per-call `not_movable` is true only for exhausted planned
+attempts or unsupported contracts. The top-level `not_movable` is their count.
+Cancellation and ended/unknown calls instead have `error` without
+`not_movable`, and do not store a status reason. They stop without another
+attempt once observed. For example, cancellation can return:
+
+```json
+{"moves":[{"id":"call-a","from":"r1","error":"context canceled"}],"not_movable":0}
+```
+
+No eligible target or a pre-attempt read failure also reports an error without
+`not_movable`. An empty drain returns `{"moves":[],"not_movable":0}`.
+Request-level failures use the error response: an unknown slot returns `404`, control not ready returns `503`, and
 an assignment read failure before work starts uses its existing error status.
 The in-process `DrainRelay` API still returns the joined per-call errors.
 
@@ -95,8 +111,9 @@ For a call still on its old slot, private `GET /status` adds the optional reason
 string `relay.not_movable`, for example
 `{"slot":"r1","generation":1,"confirmation":"delivery","not_movable":"controlplane: confirmation_unsupported"}`.
 It records the last drain report for that slot in this control process. A new
-drain clears the old report; successful moves do not show it on another slot.
-This operator report is not persisted across control restarts.
+drain clears the old report. Any successful `ChangeRelay` also clears it, so
+returning to an old slot does not revive a stale reason. This operator report
+is not persisted across control restarts.
 
 ### Relay change confirmation (ADR 0016 sections 5, 7, 10)
 

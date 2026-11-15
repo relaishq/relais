@@ -26,6 +26,7 @@ type drainWorker struct {
 	active    atomic.Int64
 	peak      atomic.Int64
 	gate      chan struct{}
+	gateAfter int64
 	failureID string
 	failure   error
 	muTimes   sync.Mutex
@@ -51,7 +52,7 @@ func (w *drainWorker) RelayDelivery(ctx context.Context, id string, g uint64) (m
 			}
 		}
 		defer w.active.Add(-1)
-		if w.gate != nil {
+		if w.gate != nil && w.attempts.Load() > w.gateAfter {
 			select {
 			case <-w.gate:
 			case <-ctx.Done():
@@ -176,6 +177,7 @@ func TestRelayDrainBackoffExhaustionReportsNotMovable(t *testing.T) {
 		w.failures.Store(100)
 		result := drainHTTP(t, p, context.Background())
 		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", NotMovable: true, Error: "controlplane: relay_change_rolled_back temporary delivery failure"}}, result.Moves)
+		require.Equal(t, 1, result.NotMovable)
 		status := relayStatusOf(t, p, ids[0])
 		require.Equal(t, "r1", status.Slot)
 		require.Equal(t, result.Moves[0].Error, status.NotMovable)
@@ -205,13 +207,15 @@ func TestRelayDrainCancellationReportsRemaining(t *testing.T) {
 		result := drainHTTP(t, p, ctx)
 		require.Equal(t, 250*time.Millisecond, time.Since(start), "cancel interrupts the backoff")
 		require.Len(t, result.Moves, len(ids))
+		require.Zero(t, result.NotMovable)
 		for _, move := range result.Moves {
-			require.True(t, move.NotMovable)
+			require.False(t, move.NotMovable)
+			require.Empty(t, relayStatusOf(t, p, move.ID).NotMovable)
 			require.Equal(t, context.DeadlineExceeded.Error(), move.Error)
 			require.Empty(t, move.To)
 			require.Equal(t, "r1", relayStatusOf(t, p, move.ID).Slot)
 		}
-		require.EqualValues(t, 8, w.attempts.Load(), "queued calls never start after cancellation")
+		require.EqualValues(t, 17, w.attempts.Load(), "sleeping calls release capacity for queued calls")
 	})
 }
 
@@ -276,6 +280,7 @@ func TestRelayDrainMixedHTTPOutcomes(t *testing.T) {
 			{ID: ids[1], From: "r1", To: "r2"},
 		}, result.Moves)
 		require.Empty(t, relayStatusOf(t, p, ids[1]).NotMovable)
+		require.Equal(t, 1, result.NotMovable)
 	})
 }
 
@@ -286,5 +291,151 @@ func TestRelayDrainEmptyHTTPResult(t *testing.T) {
 		result := drainHTTP(t, p, context.Background())
 		require.NotNil(t, result.Moves)
 		require.Empty(t, result.Moves)
+		require.Zero(t, result.NotMovable)
+	})
+}
+
+func TestRelayDrainEndedCallIsNotNotMovable(t *testing.T) {
+	for _, failure := range []error{ErrUnknownCall, sessionstore.ErrNotFound, mediaworker.ErrUnknownSession, sessionstore.ErrEnded, errRelayEpisodeEnded} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, _ := drainPlane(t, 1)
+				w.failures.Store(100)
+				w.failure = failure
+				start := time.Now()
+				result := drainHTTP(t, p, context.Background())
+				require.False(t, result.Moves[0].NotMovable)
+				require.Contains(t, result.Moves[0].Error, failure.Error())
+				require.EqualValues(t, 1, w.attempts.Load())
+				require.Less(t, time.Since(start), time.Second)
+			})
+		})
+	}
+}
+
+func TestRelayDrainCallEndsBetweenAttempts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, ids := drainPlane(t, 1)
+		w.failures.Store(1)
+		go func() { time.Sleep(500 * time.Millisecond); require.NoError(t, p.End(context.Background(), ids[0])) }()
+		start := time.Now()
+		result := drainHTTP(t, p, context.Background())
+		require.False(t, result.Moves[0].NotMovable)
+		require.Contains(t, result.Moves[0].Error, "not found")
+		require.EqualValues(t, 1, w.attempts.Load())
+		require.Less(t, time.Since(start), 2*time.Second)
+	})
+}
+
+func TestRelayDrainRecoveryLeavesSlot(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "between attempts", true: "open past retry budget"}[blocked], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				b := relayTestSlots()[1]
+				b.Slot.ID = "r3"
+				b.draining = true
+				p.relaySet["r3"] = b
+				stopRelayRecoveries(t, p)
+				w.failures.Store(1)
+				w.gate = make(chan struct{})
+				w.gateAfter = 1
+				c, err := p.lookup(ids[0])
+				require.NoError(t, err)
+				actorDone := make(chan struct{})
+				go func() {
+					defer close(actorDone)
+					time.Sleep(500 * time.Millisecond)
+					require.NoError(t, p.startRelayRecovery(context.Background(), c, false))
+					c.relayEpisodeMu.Lock()
+					e := c.relayEpisode
+					c.relayEpisodeMu.Unlock()
+					// r3 becomes eligible only after recovery selected r2.
+					// A redundant planned retry would then choose r3.
+					_, pending := waitRelayPending(t, p.store, ids[0])
+					require.Equal(t, "r2", pending.Pending)
+					p.mu.Lock()
+					b := p.relaySet["r3"]
+					b.draining = false
+					p.relaySet["r3"] = b
+					p.mu.Unlock()
+					if blocked {
+						time.Sleep(8 * time.Second)
+					}
+					close(w.gate)
+					<-e.done
+				}()
+				result := drainHTTP(t, p, context.Background())
+				<-actorDone
+				require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
+				require.EqualValues(t, 2, w.attempts.Load(), "one failed planned attempt and one recovery attempt")
+				require.Empty(t, relayStatusOf(t, p, ids[0]).NotMovable)
+			})
+		})
+	}
+}
+
+func TestRelayDrainBackoffReleasesCapacity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, _ := drainPlane(t, 17)
+		w.failures.Store(100)
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		drainHTTP(t, p, ctx)
+		require.EqualValues(t, 17, w.attempts.Load(), "all first attempts run before any retry is due")
+		require.LessOrEqual(t, w.peak.Load(), int64(8))
+	})
+}
+
+func TestRelayDrainReasonClearedByLaterChange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, ids := drainPlane(t, 1)
+		w.failures.Store(100)
+		result := drainHTTP(t, p, context.Background())
+		require.True(t, result.Moves[0].NotMovable)
+		w.failures.Store(0)
+		require.NoError(t, p.ChangeRelay(context.Background(), ids[0], "r2"))
+		p.mu.Lock()
+		b := p.relaySet["r1"]
+		b.draining = false
+		p.relaySet["r1"] = b
+		p.mu.Unlock()
+		require.NoError(t, p.ChangeRelay(context.Background(), ids[0], "r1"))
+		require.Empty(t, relayStatusOf(t, p, ids[0]).NotMovable)
+	})
+}
+
+// Another transition can consume a generation before our pending CAS is
+// acknowledged. That is not evidence that this drain ran a planned attempt.
+type drainCompetingStore struct{ *sessionstore.Memory }
+
+func (s *drainCompetingStore) CASRelay(ctx context.Context, lease sessionstore.Lease, from, to sessionstore.RelayAssignment) error {
+	if from.Pending == "" && to.Pending != "" {
+		if err := s.Memory.CASRelay(ctx, lease, from, to); err != nil {
+			return err
+		}
+		retired := from
+		retired.Generation++
+		if err := s.Memory.CASRelay(ctx, lease, to, retired); err != nil {
+			return err
+		}
+		return sessionstore.ErrLeaseLost
+	}
+	return s.Memory.CASRelay(ctx, lease, from, to)
+}
+
+func TestRelayDrainDoesNotCountAnotherTransition(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, _ := drainPlane(t, 1)
+		store := &drainCompetingStore{Memory: p.store.(*sessionstore.Memory)}
+		p.store = store
+		w.store = store
+		start := time.Now()
+		result := drainHTTP(t, p, context.Background())
+		require.False(t, result.Moves[0].NotMovable)
+		require.Zero(t, result.NotMovable)
+		require.Contains(t, result.Moves[0].Error, sessionstore.ErrLeaseLost.Error())
+		require.Zero(t, w.attempts.Load())
+		require.Less(t, time.Since(start), time.Second)
 	})
 }
