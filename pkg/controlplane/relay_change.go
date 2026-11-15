@@ -92,6 +92,9 @@ func (p *Plane) ConfigureRelaySet(ctx context.Context, bindings []RelayBinding) 
 	p.mu.Lock()
 	p.relaySet = next
 	p.mu.Unlock()
+	for id := range next {
+		p.relayMetrics.exposeSlot(id)
+	}
 	return nil
 }
 
@@ -249,6 +252,7 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 			cleanup = target
 			ctx = recovery
 			err = errors.Join(ErrRelayRolledBack, err)
+			p.relayMetrics.event(target, relayRolledBack)
 		}
 	}
 	p.mu.Lock()

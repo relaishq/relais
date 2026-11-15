@@ -286,11 +286,16 @@ func (p *Plane) decisionCAS(ctx context.Context, id string, at sessionstore.Rela
 	}
 	to.Commit = from.Commit
 	err := store.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
-	if err == nil || errors.Is(err, sessionstore.ErrRelayConflict) || errors.Is(err, sessionstore.ErrRelayTransition) || errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) || errors.Is(err, sessionstore.ErrRelayAttemptExpired) || errors.Is(err, sessionstore.ErrRelayTooEarly) {
+	if err == nil {
+		p.recordRelayWrite(id, at, from, to)
+		return nil
+	}
+	if errors.Is(err, sessionstore.ErrRelayConflict) || errors.Is(err, sessionstore.ErrRelayTransition) || errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) || errors.Is(err, sessionstore.ErrRelayAttemptExpired) || errors.Is(err, sessionstore.ErrRelayTooEarly) {
 		return err
 	}
 	gotA, got, e := store.RelayConfirmation(ctx, id)
 	if e == nil && gotA == at && sameRelayRecord(got, to) {
+		p.recordRelayWrite(id, at, from, to)
 		return nil
 	}
 	return err

@@ -120,6 +120,37 @@ follows the durable completion predicate, so a switch commit that supplies the
 last prerequisite already reads `confirmed`. The sanitized `relais-signal`
 status does not include these fields.
 
+With a configured relay set, private control `/metrics` adds per-slot relay
+change metrics (no call or session labels; `slot` is a configured slot ID):
+
+- `relais_control_relay_changes_total{slot,event}` counts attempts (one per
+  generation) on their target slot. `started`: the attempt is saved before its
+  event. `switched`: control saved its first observation of the switch commit.
+  `delivered`: C covers every required MID (packet delivery). `decode_confirmed`:
+  A covers every required MID (decoded media). `confirmed`: the attempt met the
+  completion predicate; a rollback attempt counts here on the original slot.
+  `rolled_back`: a planned change was confirmed back on its original slot,
+  counted on the slot it left. `failed`: a loss episode ended the call with
+  `relay_change_failed`, counted on the slot of the episode's attempt, or on the
+  call's slot when it had none. An attempt that expires, is retired or is
+  superseded counts only as `started` (and `switched` or `delivered` if
+  reached).
+- `relais_control_relay_loss_decisions_total{slot}` counts decisions that a
+  slot is lost; retries keep the first decision.
+- `relais_control_relay_switch_seconds{slot}` is a histogram, per attempt, from
+  saving the attempt to control's first observation of its switch commit.
+- `relais_control_relay_confirmation_seconds{slot,confirmation}` is a histogram,
+  per attempt, from that observation to the saved confirmation;
+  `confirmation` is `delivery` or `decode`. It is 0 when the confirming write
+  also first records the switch.
+
+Confirmation events are recorded by the control whose store write makes the
+transition, so a retry or a restarted control that finds the decision saved
+records nothing. A write whose outcome stays unknown is not counted. Times use
+only this control's own clock: a restarted control does not time an attempt
+whose start or switch another control observed. Counters reset when control
+restarts.
+
 ## Fixed-pool admission and telemetry
 
 Control `POST /calls` counts live store leases plus incoming reservations against
