@@ -115,8 +115,17 @@ type RelayAttemptStatus struct {
 
 // relayStatus reads the call's durable relay record for status. A record
 // that control cannot decode is shown as absent; its owner path discards it.
+// A store without confirmation records shows the assignment only: its calls
+// are ordinary (mode none, see acceptCapabilities).
 func (p *Plane) relayStatus(ctx context.Context, id string) (*CallRelayStatus, error) {
-	a, rec, err := p.store.(sessionstore.RelayConfirmations).RelayConfirmation(ctx, id)
+	var a sessionstore.RelayAssignment
+	var rec sessionstore.RelayConfirmation
+	var err error
+	if store, ok := p.store.(sessionstore.RelayConfirmations); ok {
+		a, rec, err = store.RelayConfirmation(ctx, id)
+	} else { // ConfigureRelaySet refuses a store without RelayAssignments
+		_, a, err = p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
+	}
 	if errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) || errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
 		return nil, nil
 	}

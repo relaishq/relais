@@ -3,9 +3,11 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,16 +85,84 @@ func TestStatusShowsRelayConfirmation(t *testing.T) {
 	})
 }
 
+// relayReadStore counts the relay reads Status may make and can fail them.
+type relayReadStore struct {
+	*sessionstore.Memory
+	reads atomic.Int64
+	err   atomic.Pointer[error]
+}
+
+func (s *relayReadStore) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	s.reads.Add(1)
+	if err := s.err.Load(); err != nil {
+		return sessionstore.RelayAssignment{}, sessionstore.RelayConfirmation{}, *err
+	}
+	return s.Memory.RelayConfirmation(ctx, id)
+}
+
+func (s *relayReadStore) RelayOwner(ctx context.Context, id string) (sessionstore.Lease, sessionstore.RelayAssignment, error) {
+	s.reads.Add(1)
+	if err := s.err.Load(); err != nil {
+		return sessionstore.Lease{}, sessionstore.RelayAssignment{}, *err
+	}
+	return s.Memory.RelayOwner(ctx, id)
+}
+
 // Calls on a plane without a relay set have no relay status and cost no
 // extra store read.
 func TestStatusOmitsRelayWithoutRelaySet(t *testing.T) {
-	store := sessionstore.NewMemory()
+	store := &relayReadStore{Memory: sessionstore.NewMemory()}
 	p := New(&fakeRelay{}, store)
 	w := &fakeWorker{store: store, addr: netip.MustParseAddrPort("127.0.0.1:17001"), running: map[string]bool{}}
 	require.NoError(t, p.Register("a", w.addr, w))
 	id, _, err := p.Create(context.Background(), "offer", "a")
 	require.NoError(t, err)
+	store.reads.Store(0)
 	require.Nil(t, relayStatusOf(t, p, id))
+	require.Zero(t, store.reads.Load(), "status made a relay read without a relay set")
+}
+
+// A call that ends between the lease read and the relay read stays in status
+// without relay fields; any other relay read error fails status, as a failed
+// lease read does.
+func TestStatusRelayReadErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"not found", sessionstore.ErrNotFound}, {"ended", sessionstore.ErrEnded}, {"store error", errors.New("store unavailable")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &relayReadStore{Memory: sessionstore.NewMemory()}
+			p, _, _, id := relayFailurePlane(t, store)
+			store.err.Store(&tc.err)
+			store.reads.Store(0)
+			status, err := p.Status(context.Background())
+			require.Equal(t, int64(1), store.reads.Load(), "one relay read per call")
+			if tc.name == "store error" {
+				require.ErrorIs(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, status.Calls, 1)
+			require.Equal(t, id, status.Calls[0].ID)
+			require.Nil(t, status.Calls[0].Relay)
+		})
+	}
+}
+
+// assignmentOnlyStore supports relay assignments but not confirmation
+// records: ConfigureRelaySet accepts it, and its calls are ordinary.
+type assignmentOnlyStore struct {
+	sessionstore.Store
+	sessionstore.RelayAssignments
+}
+
+func TestStatusShowsAssignmentWithoutConfirmationStore(t *testing.T) {
+	memory := sessionstore.NewMemory()
+	store := assignmentOnlyStore{Store: memory, RelayAssignments: memory}
+	_, ok := sessionstore.Store(store).(sessionstore.RelayConfirmations)
+	require.False(t, ok)
+	p, _, _, id := relayFailurePlane(t, store, "")
+	require.Equal(t, &CallRelayStatus{Slot: "r1", Confirmation: sessionstore.RelayConfirmNone}, relayStatusOf(t, p, id))
 }
 
 // A call without a saved mode on a relay set reads as mode none (ADR 0016
