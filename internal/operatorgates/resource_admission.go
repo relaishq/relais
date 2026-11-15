@@ -14,7 +14,7 @@ import (
 )
 
 // AdmissionPlan retains the campaign's explicit durations and seven-minute
-// combined preparation/stop reserve within the 20m procedure window.
+// combined preparation/stop reserve within the gate window.
 type AdmissionPlan struct {
 	SurvivorSeconds int `json:"survivorSeconds"`
 	BoundarySeconds int `json:"boundarySeconds"`

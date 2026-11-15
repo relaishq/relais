@@ -88,14 +88,17 @@ func (r ResourceRunner) validate(s *Session) error {
 	return nil
 }
 func CampaignDuration(g operator.Gate) time.Duration {
-	if g == operator.RelayDeploy {
+	switch g {
+	case operator.Rollout, operator.ControlRestart, operator.UpgradeRollback:
+		return 1500 * time.Second
+	case operator.RelayDeploy:
 		return 600 * time.Second
 	}
 	return 1020 * time.Second
 }
 
-const callerCollectionReserve = time.Minute
-const callerStopReserve = time.Minute
+const callerCollectionReserve = 2 * time.Minute
+const callerStopReserve = 2 * time.Minute
 
 func CampaignMinimum(g operator.Gate) time.Duration {
 	return CampaignDuration(g) + time.Minute + callerCollectionReserve + callerStopReserve

@@ -27,7 +27,7 @@ func TestResourceSequencePreparationConsumesCallerBudget(t *testing.T) {
 				Command: func(ctx context.Context, _ operator.Gate, end time.Duration) ProcedureResult {
 					p := ProcedurePorts{Clock: clock, Media: func(ctx context.Context) (*MediaSummary, error) {
 						collected = true
-						if clock.Elapsed() > cutoff-2*time.Minute || caller.End > cutoff-time.Minute {
+						if clock.Elapsed() > cutoff-4*time.Minute || caller.End > cutoff-2*time.Minute {
 							t.Fatal("collection reserve lost or caller cutoff renewed")
 						}
 						if ctx.Err() != nil {
@@ -38,7 +38,7 @@ func TestResourceSequencePreparationConsumesCallerBudget(t *testing.T) {
 					}}
 					return runResourceCommand(ctx, clock, caller, end, p, func(ctx context.Context, p ProcedurePorts, end time.Duration) ProcedureResult {
 						commandCalls++
-						if end > cutoff-2*time.Minute {
+						if end > cutoff-4*time.Minute {
 							t.Fatal("procedure/restoration renewed the immutable caller cutoff")
 						}
 						deadline, ok := ctx.Deadline()
@@ -100,7 +100,7 @@ func TestResourceCollectionHasItsOwnWindow(t *testing.T) {
 	caller := &CallerRuntime{End: 20 * time.Minute}
 	lost := false
 	p := ProcedurePorts{Clock: clock, Step: func(ctx context.Context, _ string, _ string, end time.Duration, _ ProcessExtra) (StepResult, error) {
-		if ctx.Err() != nil || end != 19*time.Minute || clock.Elapsed() >= end {
+		if ctx.Err() != nil || end != 18*time.Minute || clock.Elapsed() >= end {
 			t.Fatal("post-collection status lost its window")
 		}
 		row := StepResult{}
@@ -148,7 +148,7 @@ func TestResourceMeasurementCollectionReserve(t *testing.T) {
 		// Bind the real resource measurement ports, including the boundary caller.
 		runtime.Session = s
 		ports := runtime.measurePorts(caller, 1)
-		if ports.CollectionContext != p.CollectionContext || ports.CollectionEnd != 19*time.Minute {
+		if ports.CollectionContext != p.CollectionContext || ports.CollectionEnd != 18*time.Minute {
 			t.Fatal("resource measurement lost its collection window")
 		}
 		ports.Broker = p.Broker
@@ -156,10 +156,10 @@ func TestResourceMeasurementCollectionReserve(t *testing.T) {
 			return MeasurementObservation{}, fault("missing-live-inventory")
 		}
 		ports.Collect = func(ctx context.Context, end time.Duration) <-chan MeasurementCollection {
-			if end != 19*time.Minute || ctx.Err() != nil {
+			if end != 18*time.Minute || ctx.Err() != nil {
 				t.Fatal("measurement collection uses procedure deadline")
 			}
-			clock.Advance(18*time.Minute + 30*time.Second)
+			clock.Advance(17*time.Minute + 30*time.Second)
 			ch := make(chan MeasurementCollection, 1)
 			ch <- MeasurementCollection{Evidence: MeasurementEvidence{Media: &MediaSummary{Status: operator.Inconclusive}}}
 			close(ch)

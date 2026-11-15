@@ -507,7 +507,7 @@ first row that does not fit. It contains no resource output. Inconclusive
 diagnostics have a reason even when procedure execution completed. Legacy gate
 reasons remain unchanged. These additive
 fields keep result schema version 1. Preparation consumes the caller's original
-window; procedure and restoration leave one minute each for collection and stop.
+window; procedure and restoration leave two minutes each for collection and stop.
 
 The resource-backed runner owns preparation, gate admission, process/release
 procedures, caller brokers, the evidence pool and the pinned judge. Host steps
@@ -524,8 +524,8 @@ caller/mailbox operations carry their already-defined `admission-boundary`
 manifest phase. Old peers omit the marker and are refused before effects.
 Private configuration must supply `admission.survivorSeconds` and
 `admission.boundarySeconds`. The combined media duration plus the existing
-seven-minute campaign reserve must fit the 20-minute procedure cap. The separate
-caller maximum is 22 minutes; no deadline is renewed. Boundary fit is checked
+seven-minute campaign reserve must fit the 31-minute procedure cap. The separate
+caller maximum is 33 minutes; no deadline is renewed. Boundary fit is checked
 after the actual survivor stop and idle wait, then again after boundary startup.
 
 `PrepareCallers` proves both setups before survivor begin. The public
@@ -623,7 +623,7 @@ operation-specific JSON. No generic shell-command adapter is provided.
 
 Request IDs and Unix milliseconds are decimal strings. Init supplies the
 original armed time and absolute end, at most 105 minutes apart. The engine maps
-remaining time to its elapsed clock once. Gate windows are at most 20 minutes;
+remaining time to its elapsed clock once. Gate windows are at most 31 minutes;
 mutation windows end at minute 103 and final pooling ends by minute 105. Wall
 clock changes do not extend these bounds. Each request carries its absolute end
 and remaining milliseconds. The adapter must clamp its wait to both. Each active gate fixes its cutoff once;
@@ -817,7 +817,7 @@ spool and judge copy, saves `head-caller-evidence.json` (with
 report's `headCaller` section. `Evaluate` never reads that section, so the pinned
 verdict is unchanged. The phase is skipped when the pinned session latched. It
 shares the deployment and teardown: an unconfirmed head-caller stop still fails
-`cleanup`. It adds about 20 minutes. `callerTiming`, at the top level for pinned
+`cleanup`. It adds about 30 minutes. `callerTiming`, at the top level for pinned
 phases and in `headCaller`, lists per call the probe count, probe-capacity
 invalidation, gaps over 30 s between probe sends (frontend restarts leave about
 140 s in rollout and upgrade-rollback), and per move or takeover the nearest
@@ -1044,15 +1044,18 @@ needs at least ninety seconds after loader startup. The media calibration runs
 for 180 seconds so a 1.25-second phased first interval stays below the judge's
 1% budget, within a six-minute caller runtime limit.
 Caller preparation, including the ten-probe registration, precedes each fresh
-20-minute gate window. Campaign admission uses one elapsed-clock snapshot so a
-1,200-second minimum fits a full window exactly. Before launch, the caller's
-separate 22-minute manifest includes startup and must fit media plus 120 seconds; both windows stay
+31-minute gate window. Campaign admission uses one elapsed-clock snapshot.
+Part A media lasts 1,500 seconds, with a 1,800-second campaign minimum: one
+minute for startup and two minutes each for collection and stop. Relay deploy
+keeps 600 seconds of media; failover and load keep their existing media plans.
+Before launch, the separate 33-minute manifest includes startup and must fit
+media plus the unchanged 120-second manifest guard; both windows stay
 clamped to the original session cutoff, with mutations ending by minute 103.
-Procedure/restoration ends at least two minutes before the caller cutoff,
-collection ends one minute before it, and stop stays within that cutoff.
+Procedure/restoration ends at least four minutes before the caller cutoff,
+collection ends two minutes before it, and stop stays within that cutoff.
 The archived 21-minute manifest rejection in `26b5fb0694a332d7.json`, event 7,
 retains its original bytes. `TestOracleCallerManifests` explicitly checks that
-case under the new 22-minute policy; native manifest tests also reject a window
+case under the 33-minute policy; native manifest tests also reject a window
 one millisecond above the new maximum.
 Their UDP bind uses the runner's route source for the relay, with port zero;
 the loader rejects wildcard bind addresses. The bridge checks the staged loader
@@ -1453,10 +1456,11 @@ latency that passes these rules can still end a gate at its deadline.
 
 An unknown or late lease read still latches the session; the budget only
 changes when a reply is late. `TestSlowHostReadsGateSequence` runs a rollout
-with five moves and three kills on a fake transport at P = 8 s and four seconds
+with the rollout target of seven moves and seven takeovers on a fake transport
+at P = 8 s and four seconds
 for each action, with no `clock-lease-*` or `clock-coverage-*` cause. This is a
 fake-clock test, not a measurement of a remote transport. It gives the
-procedure the whole 20 minutes.
+procedure the whole 31 minutes.
 
 `-coverage-adapter FILE` starts a second adapter process (absolute path, no
 arguments, the fixed adapter environment) for the trailing coverage drain. Each
@@ -1661,3 +1665,36 @@ priority before any subprocess or exit polling, and records `unchanged` if denie
 A restoration error records `nice--20-restore-failed`; the helper remains finite.
 These fields never qualify evidence or change a verdict. Missing/malformed
 optional diagnostics are ignored; existing bracket timestamps remain authoritative.
+
+
+### Part A trial margin
+
+The regular rollout, control-restart and upgrade-rollback targets are 7/7,
+7/6 and 6/3 moves/takeovers. Together they supply 20 moves and 16 takeovers.
+Six excluded kills can leave the required ten qualified takeovers without
+using replacements, provided all other trials qualify. Moves have no spare
+trials. The pooled qualification thresholds remain 20 moves and 10 takeovers.
+The replacement cap remains two per run. Upgrade replacements still wait until
+rollback completes, and the measured-cycle time guard remains unchanged.
+`TestPartATrialMargin` runs each regular population with two excluded kills and
+the replacement budget exhausted. `TestReleaseReplacementWaitsForRollback` and
+`TestReplacementSkippedWhenTimeShort` retain the scheduling guards.
+
+Three maximum A gate windows total 93 minutes, below the unchanged 103-minute
+mutation window and 105-minute session maximum. Preparation and other work also
+consume the session; these maxima do not guarantee a run with arbitrary setup
+delays will fit. The rehearsal's four media phases total 85 minutes, plus caller
+preparation, controls, collection and cleanup. Its job limit is 180 minutes.
+`TestCampaignsFitAfterCalibrationAndCallerPreparation` checks admission after
+4 minutes 59 seconds of controls and two minutes of preparation per gate,
+with an advancing fake clock. At exactly five minutes of controls, the final
+relay preparation reaches its strict cutoff; the test also pins that refusal. Part B has two gates: their 62-minute combined maximum
+also fits. Explicit load admission media retains its seven-minute reserve and
+1,200-second per-phase ceilings.
+
+Caller plans accept up to 1,680 seconds (28 minutes). The 33-minute caller
+maximum leaves five minutes for startup, collection and stop at that ceiling.
+`TestCallerPlanDurationCeiling`, `TestResourceDeadlineArithmetic` and
+`TestCallerWindowPreservesCampaignFitReserve` pin these limits. An excluded kill
+that leaves `trial-count-insufficient` remains a rehearsal failure, as checked
+by `TestRehearsalExcludedKillCounts`.

@@ -7272,5 +7272,92 @@
     "Test": "TestRestorationReferenceFreshAtTwoPointFiveSeconds",
     "Marker": "MUTATION: restoration-lease-window",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "part-a-media-margin",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "return 1500 * time.Second",
+    "New": "return 1020 * time.Second",
+    "Test": "TestPartATrialMargin",
+    "Marker": "MUTATION: part-a-trial-margin",
+    "Package": "./internal/operatorgates",
+    "Function": "CampaignDuration"
+  },
+  {
+    "ID": "part-a-rollout-trial-margin",
+    "File": "internal/operatorgates/trials.go",
+    "Old": "return TrialTarget{7, 7}",
+    "New": "return TrialTarget{7, 3}",
+    "Test": "TestPartATrialMargin",
+    "Marker": "MUTATION: part-a-trial-margin",
+    "Package": "./internal/operatorgates",
+    "Function": "TrialTargets"
+  },
+  {
+    "ID": "part-a-restart-trial-margin",
+    "File": "internal/operatorgates/trials.go",
+    "Old": "return TrialTarget{7, 6}",
+    "New": "return TrialTarget{7, 4}",
+    "Test": "TestPartATrialMargin",
+    "Marker": "MUTATION: part-a-trial-margin",
+    "Package": "./internal/operatorgates",
+    "Function": "TrialTargets"
+  },
+  {
+    "ID": "part-a-duration-scope",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "return 1020 * time.Second",
+    "New": "return 1500 * time.Second",
+    "Test": "TestCampaignLimitsPreserveOtherGates",
+    "Marker": "MUTATION: campaign-scope",
+    "Package": "./internal/operatorgates",
+    "Function": "CampaignDuration"
+  },
+  {
+    "ID": "gate-maximum-margin",
+    "File": "internal/operatorgates/deadline.go",
+    "Old": "GateMaximum = 31 * time.Minute",
+    "New": "GateMaximum = 20 * time.Minute",
+    "Test": "TestCampaignLimitsPreserveOtherGates",
+    "Marker": "MUTATION: campaign-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-maximum-margin",
+    "File": "internal/operatorcaller/protocol.go",
+    "Old": "CallerMaximum   = 33 * time.Minute",
+    "New": "CallerMaximum   = 22 * time.Minute",
+    "Test": "TestCallerPlanDurationCeiling",
+    "Marker": "MUTATION: caller-plan-ceiling",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-plan-margin",
+    "File": "internal/operatorcaller/protocol.go",
+    "Old": "p.DurationSeconds > 1680",
+    "New": "p.DurationSeconds > 1200",
+    "Test": "TestCallerPlanDurationCeiling",
+    "Marker": "MUTATION: caller-plan-ceiling",
+    "Package": "./internal/operatorcaller",
+    "Function": "Validate",
+    "Receiver": "Plan"
+  },
+  {
+    "ID": "caller-collection-margin",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "callerCollectionReserve = 2 * time.Minute",
+    "New": "callerCollectionReserve = time.Minute",
+    "Test": "TestResourceDeadlineArithmetic/gate-first",
+    "Marker": "MUTATION: resource-deadline-arithmetic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-stop-margin",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "callerStopReserve = 2 * time.Minute",
+    "New": "callerStopReserve = time.Minute",
+    "Test": "TestResourceDeadlineArithmetic/gate-first",
+    "Marker": "MUTATION: resource-deadline-arithmetic",
+    "Package": "./internal/operatorgates"
   }
 ]

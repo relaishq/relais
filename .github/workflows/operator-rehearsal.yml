@@ -40,7 +40,7 @@ concurrency:
 jobs:
   rehearsal:
     runs-on: ubuntu-24.04
-    timeout-minutes: 145
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
         with:

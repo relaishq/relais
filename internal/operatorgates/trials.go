@@ -18,9 +18,9 @@ type TrialTarget struct {
 func TrialTargets(g operator.Gate) TrialTarget {
 	switch g {
 	case operator.Rollout:
-		return TrialTarget{7, 3}
+		return TrialTarget{7, 7}
 	case operator.ControlRestart:
-		return TrialTarget{7, 4}
+		return TrialTarget{7, 6}
 	case operator.UpgradeRollback:
 		return TrialTarget{6, 3}
 	}

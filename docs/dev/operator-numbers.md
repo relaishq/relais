@@ -49,7 +49,7 @@ The audit covered these arithmetic sites:
 | Caller `transport.go`: `ProtocolMailbox.exchange` | Request-ID exhaustion checked before increment. |
 | Caller `host.go`: `CollectHost` | Logical CPU count bounded before increment. |
 | Caller `mailbox.go`: `Directory.Read`, `Directory.Create`; bridge spool reads | Fixed bounded blob lengths and fixed extra-byte overflow detection; no evidence-controlled size sum. |
-| Caller launcher scripts, broker waits and feed deadlines | Runtime limited to 20 minutes, manifest lifetime to 105 minutes; remaining time uses bounded deadlines and fixed reserves; exit status is compared, never aggregated. |
+| Caller launcher scripts, broker waits and feed deadlines | Runtime limited to 33 minutes, manifest lifetime to 105 minutes; remaining time uses bounded deadlines and fixed reserves; exit status is compared, never aggregated. |
 
 Regression tests start with the passing pooled fixture, then inject cancelling
 counters, extreme counters, negative packet/gap measurements, overflowing pacing

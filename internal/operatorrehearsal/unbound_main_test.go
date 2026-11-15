@@ -15,7 +15,8 @@ func TestUnboundMainBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(raw))
-	if got != "0563aa7c7ed3a797b42f3ca03a36a678a4fc0a81301129254919da2391b2ba37" {
+	// The passing fixture contains 20 moves, 16 takeovers and 36 events.
+	if got != "331c52902955ef27a4af6a71026807af41463b71966260b9e6dc2f7c3ea95aca" {
 		t.Fatal("MUTATION: unbound-main-bytes", got)
 	}
 }

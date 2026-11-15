@@ -22,7 +22,7 @@ const maxSafeInteger = 9007199254740991
 
 const (
 	// CallerMaximum includes startup, media, evidence collection and stop.
-	CallerMaximum   = 22 * time.Minute
+	CallerMaximum   = 33 * time.Minute
 	NearRTT         = 10 * time.Millisecond
 	ClockBurstCount = 10
 	ReportGrace     = 180 * time.Second
@@ -84,8 +84,10 @@ func NewPlan(phase Phase, seconds int, sha string) Plan {
 	}
 	return Plan{1, phase, 1, calls, 2, seconds, sha}
 }
+
+// Validate leaves five minutes of CallerMaximum for startup, collection and stop.
 func (p Plan) Validate() error {
-	if p != NewPlan(p.Phase, p.DurationSeconds, p.PublicSHA) || (p.Phase != Survivor && p.Phase != AdmissionBoundary) || p.DurationSeconds < 1 || p.DurationSeconds > 1200 || !shaPattern.MatchString(p.PublicSHA) {
+	if p != NewPlan(p.Phase, p.DurationSeconds, p.PublicSHA) || (p.Phase != Survivor && p.Phase != AdmissionBoundary) || p.DurationSeconds < 1 || p.DurationSeconds > 1680 || !shaPattern.MatchString(p.PublicSHA) {
 		return errors.New("invalid-caller-plan")
 	}
 	return nil

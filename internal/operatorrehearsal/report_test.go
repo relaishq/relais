@@ -16,15 +16,13 @@ import (
 )
 
 func passingReport() Report {
-	r := Report{ScenarioSHA256: strings.Repeat("a", 64), Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{CompleteMedia: true, Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 10, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 30, IncludedPhases: 4}}
+	r := Report{ScenarioSHA256: strings.Repeat("a", 64), Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{CompleteMedia: true, Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 16, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 36, IncludedPhases: 4}}
 	for _, g := range CoveredGates {
 		r.Gates = append(r.Gates, GateReport{Gate: g, ProcedureCompleted: true, ProcedureResult: operatorgates.ProcedureResult{Status: operator.Passed, Process: operatorgates.ProcessEvidence{CompletedSteps: 1}, Media: &operatorgates.MediaSummary{Status: operator.Passed}}, CallerStopped: true})
 	}
 	for i, g := range CoveredGates {
-		n := 10
-		if i == 3 {
-			n = 0
-		}
+		target := operatorgates.TrialTargets(g)
+		n := target.Moves + target.Takeovers
 		r.Pool.PhaseDiagnostics = append(r.Pool.PhaseDiagnostics, operatorevidence.PhaseDiagnostic{Phase: i, Gate: string(g), EventCount: n, Included: true})
 	}
 	zero, one := uint64(0), uint64(1)

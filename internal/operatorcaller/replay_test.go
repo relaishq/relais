@@ -253,7 +253,7 @@ func TestOracleCallerManifests(t *testing.T) {
 			wantError := e.Completion == "threw"
 			if name == "26b5fb0694a332d7.json" && e.ID == 7 {
 				// Keep the archived 20m policy's 21m rejection intact. The
-				// separate 22m caller maximum intentionally admits this case.
+				// separate 33m caller maximum intentionally admits this case.
 				if !wantError || m.Deadline-m.CreatedAt != int64(21*time.Minute/time.Millisecond) {
 					t.Fatal("caller window transition fixture changed")
 				}

@@ -423,10 +423,7 @@ func (r *rehearsal) setup(ctx context.Context) error {
 	return e
 }
 func duration(g operator.Gate) int {
-	if g == operator.RelayDeploy {
-		return 600
-	}
-	return 1020
+	return int(operatorgates.CampaignDuration(g) / time.Second)
 }
 func campaignMinimum(g operator.Gate) time.Duration {
 	return operatorgates.CampaignMinimum(g)
