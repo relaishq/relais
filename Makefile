@@ -10,8 +10,6 @@ GOLANGCI_LINT_VERSION := v2.14.0
 # Explicit-version go run ignores the main module toolchain directive. Reuse
 # the module-selected toolchain instead of downloading a newer one for lint.
 GOLANGCI_LINT = GOTOOLCHAIN=$(shell $(GOCMD) env GOVERSION) $(GOCMD) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-BINARY_NAME=relais
-BINARY_UNIX=$(BINARY_NAME)_unix
 BIN_DIR=bin
 
 # Build-time variables
@@ -26,11 +24,7 @@ LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION)
 
 all: test build
 
-build: ensure_bin_dir ## Build plugin runners, relay, worker, control, signal, crash-run and demo/example binaries
-	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-ingress -v $(LDFLAGS) ./cmd/ingress-runner
-	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-egress -v $(LDFLAGS) ./cmd/egress-runner
-	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-transform -v $(LDFLAGS) ./cmd/transform-runner
-
+build: ensure_bin_dir ## Build relay, worker, control, signal, crash-run and demo/example binaries
 	$(GOBUILD) -o $(BIN_DIR)/relais-relay $(LDFLAGS) ./cmd/relais-relay
 	$(GOBUILD) -o $(BIN_DIR)/relais-worker $(LDFLAGS) ./cmd/relais-worker
 	$(GOBUILD) -o $(BIN_DIR)/relais-control $(LDFLAGS) ./cmd/relais-control
@@ -152,8 +146,7 @@ test-cluster: ## Run opt-in Redis Cluster tests (RELAIS_TEST_REDIS_CLUSTER=1; bu
 	$(GOTEST) -race -p 1 -v -count=1 -timeout 10m -run '^Test(Cluster|RedisCluster|Redis.*Slot|SlotCRC16)' ./pkg/storage ./pkg/sessionstore ./pkg/framecache ./internal/processrun ./internal/redistestcluster ./cmd/crash-run ./cmd/relais-control
 
 # Cover all packages except the call harness, which has a separate CI job.
-# Include the plugin and pipeline suites previously covered by make test.
-UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./examples/... ./plugins/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
+UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./examples/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
 JUDGE_FLAGS ?=
 
 test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_REDIS_ADDR for Redis suites

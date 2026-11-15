@@ -1,11 +1,15 @@
 # Stored-frame plugin pipeline
 
-Legacy stored-frame pipeline (experimental, unmaintained). Not used by live calls. The camera ingress is simulated and the WebRTC egress is a storage-polling placeholder.
+**Historical record.** The stored-frame pipeline, its packages, its three
+runners, and its Viper configuration were removed in issue #262. The interfaces,
+paths, commands, and environment settings below describe the retired code and
+are not current development or deployment instructions. Shared frame storage
+remains available. The old camera ingress was simulated, and the WebRTC egress
+was a storage-polling placeholder.
 
 For current media, see [the architecture](../architecture.md). Examples such as
-RTSP and S3 below describe extension points, not shipped integrations. Use a
-dedicated throwaway Redis, never port 6379, even though the legacy configuration
-code still defaults to that port.
+RTSP and S3 below described extension points, not shipped integrations. Always
+use a dedicated throwaway Redis for tests, never port 6379.
 
 ## Features
 

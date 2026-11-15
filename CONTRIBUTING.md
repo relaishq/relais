@@ -2,7 +2,7 @@
 
 Build a focused change, keep error handling and context cancellation explicit,
 and run the checks that exercise it. Concurrent code must be race-free. Add
-integration coverage for new legacy plugins. Open a pull request from your
+integration coverage for new behavior. Open a pull request from your
 feature branch after testing and linting. Contributors can fork and clone
 [relaishq/relais](https://github.com/relaishq/relais); source builds need Go 1.26+.
 See [CLAUDE.md](CLAUDE.md) for the repository's command contract and
@@ -74,8 +74,9 @@ make coverage          # coverage.out and HTML report
 Without `RELAIS_TEST_REDIS_ADDR`, Redis tests and benchmarks skip before
 connecting. With `RELAIS_TEST_REDIS_REQUIRE=1`, missing or unreachable Redis
 fails those checks. Redis benchmarks use random prefixes and remove their keys.
-See [legacy stream tests](docs/legacy/plugin-pipeline.md#running-redis-streams-integration-tests)
-for `make test-streams`, `make test-stream-groups`, and optional `make test-cluster`.
+Use `make test-streams` and `make test-stream-groups` for Redis frame-storage
+stream tests. `make test-cluster` runs the optional Redis Cluster tests with a
+dedicated cluster; see [CI jobs](docs/dev/ci.md).
 
 ## PR and full checks
 

@@ -10,7 +10,7 @@ Before handing over a change, run `make check-quality` and the tests of the pack
 # Install dependencies
 make deps
 
-# Build plugin runners plus relais-relay, relais-worker, relais-control
+# Build relais-relay, relais-worker, relais-control, relais-signal
 # and the opt-in crash-run, relais-demo and delayed-loopback binaries
 make build
 
@@ -84,7 +84,7 @@ CI jobs, schedules and gates are described in [docs/dev/ci.md](docs/dev/ci.md).
 
 ## Architecture Overview
 
-Relais is a distributed media server. Live WebRTC media runs in the media worker; stored frames flow through a plugin-based pipeline:
+Relais is a distributed media server. Live WebRTC media runs in the media worker:
 
 - **Media path**:
   - `pkg/mediaworker/` - Media worker: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling; it currently echoes the caller's audio and video. A live session can be exported to bytes and resumed on another worker that shares the same UDP socket (`Socket.Handover`, a planned handover); relayed workers also persist fenced snapshots for automatic crash takeover
@@ -97,34 +97,10 @@ Relais is a distributed media server. Live WebRTC media runs in the media worker
   - `cmd/crash-run` - Starts the process topology and a dedicated throwaway Redis, runs the Pion caller and SIGKILLs the owning worker (`make crash-run`)
   - `cmd/echo-demo` - Browser echo demo: two media workers on one socket, with a "Move call" button (`make demo`)
 
-- **Plugin runners**:
-  - `ingress-runner` - Handles media input plugins
-  - `egress-runner` - Handles media output plugins
-  - `transform-runner` - Handles media processing plugins
-
-- **Plugin System**: Located in `plugins/` with interfaces defined in `pkg/plugins/`
-  - Ingress plugins capture media (e.g., camera input)
-  - Transform plugins process media (e.g., watermarking)
-  - Egress plugins output media (the WebRTC egress plugin is a storage-polling placeholder)
-
 - **Storage Backend**: Abstractions in `pkg/storage/` supporting Redis and in-memory implementations
 
 - **Key Packages**:
-  - `pkg/config/` - Configuration management using Viper
   - `pkg/frames/` - Media frame handling and codecs
-
-## Configuration
-
-Environment variables for the legacy plugin pipeline (not the live media processes):
-```
-RELAIS_STORAGE_TYPE=redis
-RELAIS_STORAGE_REDIS_URL=localhost:6379
-RELAIS_LOGGING_LEVEL=info
-```
-
-## Plugin Development
-
-New plugins must implement one of the interfaces in `pkg/plugins/interface.go` and register via `registry.Register()`. See existing plugins in `plugins/` for examples.
 
 ## Dependencies
 

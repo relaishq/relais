@@ -1,3 +1,5 @@
+> **Historical planning prompt.** This describes the retired stored-frame pipeline, removed in issue #262. Its package paths and tasks are obsolete. See [the current architecture](../docs/architecture.md).
+
 name: "Scalable Media Server Architecture Plan"
 description: |
 
