@@ -108,6 +108,18 @@ sends `ended` with `reason: relay_change_failed` and `detail`
 `confirmation_unsupported`, plus `generation`, `slot`, `confirmation` and
 `missing_mids`.
 
+With a configured relay set, each call in private control `GET /status` adds
+`relay`: the assignment (`slot`, `pending`, `generation`), the accepted mode
+`confirmation` (`none`, `delivery` or `decode`) and, once a change has started,
+the current `attempt`: `generation`, `slot`, `kind` (`planned` or `recovery`),
+`phase` (`pending`, `switched`, `confirmed`, `expired` or `aborted`),
+`required_mids`, `delivered_mids`, `decoded_mids` and `delivered`. `delivered`
+is true only when C covers every required MID of that generation; it proves
+packet delivery, not decode. A new generation starts undelivered. The phase
+follows the durable completion predicate, so a switch commit that supplies the
+last prerequisite already reads `confirmed`. The sanitized `relais-signal`
+status does not include these fields.
+
 ## Fixed-pool admission and telemetry
 
 Control `POST /calls` counts live store leases plus incoming reservations against
