@@ -25,58 +25,13 @@
         "shape": null
       },
       "response": {
-        "json": {
-          "moves": [
-            {
-              "error": "fixture",
-              "from": "fixture",
-              "id": "fixture",
-              "not_movable": true,
-              "to": "fixture"
-            }
-          ],
-          "not_movable": 1
-        },
-        "shape": {
-          "moves": {
-            "json_options": "",
-            "type": [
-              {
-                "error": {
-                  "json_options": ",omitempty",
-                  "type": "string"
-                },
-                "from": {
-                  "json_options": "",
-                  "type": "string"
-                },
-                "id": {
-                  "json_options": "",
-                  "type": "string"
-                },
-                "not_movable": {
-                  "json_options": ",omitempty",
-                  "type": "bool"
-                },
-                "to": {
-                  "json_options": ",omitempty",
-                  "type": "string"
-                }
-              }
-            ]
-          },
-          "not_movable": {
-            "json_options": "",
-            "type": "int"
-          }
-        }
+        "json": null,
+        "shape": null
       },
       "statuses": [
         200,
         404,
-        409,
-        500,
-        503
+        409
       ]
     },
     {
@@ -2745,7 +2700,6 @@
                 },
                 "confirmation": "fixture",
                 "generation": 1,
-                "not_movable": "fixture",
                 "pending": "fixture",
                 "slot": "fixture"
               },
@@ -2967,10 +2921,6 @@
                       "generation": {
                         "json_options": "",
                         "type": "uint64"
-                      },
-                      "not_movable": {
-                        "json_options": ",omitempty",
-                        "type": "string"
                       },
                       "pending": {
                         "json_options": ",omitempty",
@@ -4683,7 +4633,9 @@
         "service": "control",
         "route": "POST /relays/{id}/drain",
         "query_parameters": null,
-        "explicit_statuses": null,
+        "explicit_statuses": [
+          "http.StatusOK"
+        ],
         "anonymous_response_types": null
       },
       {
