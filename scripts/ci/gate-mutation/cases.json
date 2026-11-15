@@ -6066,7 +6066,7 @@
     "ID": "rollback-empty-old-accepted",
     "File": "internal/operatorgates/lease_guard.go",
     "Function": "restorationProof",
-    "Old": "if len(old.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "Old": "if len(old.Rows) == 0 {\n\t\t\treturn &restorationError{fault(\"clock-lease-missing\"), \"missing-row\"}\n\t\t}",
     "New": "if len(old.Rows) == 0 { return nil }",
     "Test": "TestRollbackProofBoundaries/empty-old",
     "Marker": "MUTATION: rollback-proof-boundary",
@@ -6076,7 +6076,7 @@
     "ID": "rollback-empty-new-accepted",
     "File": "internal/operatorgates/lease_guard.go",
     "Function": "restorationProof",
-    "Old": "if len(next.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "Old": "if len(next.Rows) == 0 {\n\t\t\treturn &restorationError{fault(\"clock-lease-missing\"), \"missing-row\"}\n\t\t}",
     "New": "if len(next.Rows) == 0 { return nil }",
     "Test": "TestRollbackProofBoundaries/empty-new",
     "Marker": "MUTATION: rollback-proof-boundary",
@@ -7182,5 +7182,45 @@
     "Test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
     "Marker": "MUTATION: boundary-move-single-verdict",
     "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "restoration-expiry-retry-skipped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "if err == nil || err.Error() != \"clock-lease-expired\" {",
+    "New": "if true {",
+    "Test": "TestRestorationExpiredThenFresh",
+    "Marker": "MUTATION: restoration-fresh-retry",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-late-read-covered",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "if g.clock.Elapsed() >= end {",
+    "New": "if false {",
+    "Test": "TestRestorationRetryBudget/read-over-cutoff",
+    "Marker": "MUTATION: restoration-cutoff",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-retry-rows-lost",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "log.Rows = append(previous.TrackingLog.Rows, log.Rows...)",
+    "New": "log.Rows = append([]clocks.TrackingRow{}, log.Rows...)",
+    "Test": "TestRestorationRetryRetainsHistory/bound",
+    "Marker": "MUTATION: restoration-whole-history",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-proof-stage-lost",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "b.ProofStage = failure.stage",
+    "New": "b.ProofStage = \"\"",
+    "Test": "TestRollbackContinuousLeaseCoverage/gap",
+    "Marker": "MUTATION: restoration-stage-recording",
+    "Package": "./internal/operatorgates"
   }
 ]

@@ -674,7 +674,11 @@
     "boundary-move-failure-cleared",
     "boundary-rows-listed-twice",
     "boundary-move-row-counted-back-twice",
-    "boundary-move-requires-both-label-only"
+    "boundary-move-requires-both-label-only",
+    "restoration-expiry-retry-skipped",
+    "restoration-late-read-covered",
+    "restoration-retry-rows-lost",
+    "restoration-proof-stage-lost"
   ],
   "killed": [
     {
@@ -5580,6 +5584,30 @@
       "id": "boundary-move-requires-both-label-only",
       "test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
       "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-expiry-retry-skipped",
+      "test": "TestRestorationExpiredThenFresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-late-read-covered",
+      "test": "TestRestorationRetryBudget/read-over-cutoff",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-retry-rows-lost",
+      "test": "TestRestorationRetryRetainsHistory/bound",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-proof-stage-lost",
+      "test": "TestRollbackContinuousLeaseCoverage/gap",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

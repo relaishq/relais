@@ -254,20 +254,31 @@ func (g *LeaseGuard) readAttempt(ctx context.Context, end time.Duration) (LeaseR
 	return g.read(bounded, end)
 }
 
+// restorationError adds a proof stage without changing the existing refusal kind.
+type restorationError struct {
+	error
+	stage string
+}
+
+func (e *restorationError) Unwrap() error { return e.error }
+
 // coverRestoration never admits an operation: restoration has already completed.
-// An expired cache needs one fresh endpoint lease plus a continuous retrospective
+// An expired cache needs a fresh endpoint lease plus a continuous retrospective
 // tracking chain. Final coverage must still close and bound the actual event.
 func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, start, finish time.Time) error {
 	g.refresh.Lock()
 	defer g.refresh.Unlock()
 	err := g.Check()
-	if err == nil || err.Error() != "clock-lease-expired" {
-		return err
+	if err == nil {
+		return nil
+	}
+	if err.Error() != "clock-lease-expired" {
+		return &restorationError{err, "cached-lease"}
 	}
 	g.mu.Lock()
 	if !g.historyComplete {
 		g.mu.Unlock()
-		return fault("clock-lease-missing")
+		return &restorationError{fault("clock-lease-missing"), "missing-row"}
 	}
 	before := clocks.NewBoundCoverageAttempt(clocks.Evidence{Clocks: g.samples})
 	g.mu.Unlock()
@@ -276,27 +287,64 @@ func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, st
 	if deadline, ok := ctx.Deadline(); ok {
 		end = min(end, g.clock.Elapsed()+time.Until(deadline)-RestoreReserve)
 	}
-	started := g.clock.Elapsed()
-	read, err := g.readAttempt(ctx, end)
-	accepted := g.accept(read)
-	if g.restorationReadObserved != nil {
-		g.restorationReadObserved(read, started, g.clock.Elapsed())
+	history := clocks.Evidence{Clocks: map[string]clocks.Sample{}}
+	for {
+		started := g.clock.Elapsed()
+		read, err := g.readAttempt(ctx, end)
+		accepted := g.accept(read)
+		if g.restorationReadObserved != nil {
+			g.restorationReadObserved(read, started, g.clock.Elapsed())
+		}
+		if err != nil {
+			stage := "transport-unknown"
+			if end-started < g.session.timing.leaseAttempt() {
+				stage = "reserve-exhausted"
+			}
+			return &restorationError{err, stage}
+		} // Unknown transport never triggers another read.
+		if accepted != nil {
+			return &restorationError{accepted, "endpoint-evidence"}
+		}
+		if g.clock.Elapsed() >= end {
+			return &restorationError{fault("clock-lease-expired"), "reserve-exhausted"}
+		}
+		// Host cursors consume each delta, even when its endpoint lease is expired.
+		// Keep every row and break, with the latest endpoint, for the original proof.
+		for slot, sample := range read.Evidence.Clocks {
+			log := *sample.TrackingLog
+			if previous, ok := history.Clocks[slot]; ok {
+				log.Rows = append(previous.TrackingLog.Rows, log.Rows...)
+				log.Breaks = append(previous.TrackingLog.Breaks, log.Breaks...)
+			}
+			sample.TrackingLog = &log
+			history.Clocks[slot] = sample
+		}
+		err = g.restorationProof(before, LeaseRead{Evidence: history}, start, finish)
+		if err == nil || err.Error() != "clock-lease-expired" {
+			return err
+		}
+		// One fifth of the existing host poll period (200 ms at reference timing)
+		// spaces fresh observations without adding a deadline or changing validity.
+		spacing := g.session.timing.poll / 5
+		if end-g.clock.Elapsed() < spacing+g.session.timing.leaseAttempt() {
+			return &restorationError{err, "reserve-exhausted"}
+		}
+		if err := g.pause(ctx, spacing); err != nil {
+			return &restorationError{err, "retry-wait"}
+		}
 	}
-	if err != nil {
-		return err
-	}
-	if accepted != nil {
-		return accepted
-	}
-	return g.restorationProof(before, read, start, finish)
 }
 
 func (g *LeaseGuard) restorationProof(before clocks.CoverageAttempt, read LeaseRead, start, finish time.Time) error {
 	if err := g.Check(); err != nil {
-		return err
+		stage := "endpoint-lease"
+		if err.Error() == "clock-lease-expired" {
+			stage = "expired-reference"
+		}
+		return &restorationError{err, stage}
 	}
 	if finish.Before(start) {
-		return fault("clock-lease-missing")
+		return &restorationError{fault("clock-lease-missing"), "missing-row"}
 	}
 	after := clocks.NewBoundCoverageAttempt(read.Evidence)
 	timelines := map[string]observe.CoverageTimeline{}
@@ -306,15 +354,21 @@ func (g *LeaseGuard) restorationProof(before clocks.CoverageAttempt, read LeaseR
 		sample := read.Evidence.Clocks[slot]
 		// Both endpoints were fully accepted; empty tracking reads are still legal.
 		if len(old.Rows) == 0 {
-			return fault("clock-lease-missing")
+			return &restorationError{fault("clock-lease-missing"), "missing-row"}
 		}
 		if len(next.Rows) == 0 {
-			return fault("clock-lease-missing")
+			return &restorationError{fault("clock-lease-missing"), "missing-row"}
 		}
 		oldLast, newLast := old.Rows[len(old.Rows)-1].UnixSeconds, next.Rows[len(next.Rows)-1].UnixSeconds
 		measured, _ := strconv.ParseInt(sample.Lease.MeasuredUnixNS, 10, 64)
-		if oldLast > start.Unix() || measured-g.bounds.FrontendControlBoundNS < finish.UnixNano() || newLast < oldLast {
-			return fault("clock-lease-missing")
+		if oldLast > start.Unix() {
+			return &restorationError{fault("clock-lease-missing"), "old-row-after-event"}
+		}
+		if measured-g.bounds.FrontendControlBoundNS < finish.UnixNano() {
+			return &restorationError{fault("clock-lease-missing"), "endpoint-before-event-end"}
+		}
+		if newLast < oldLast {
+			return &restorationError{fault("clock-lease-missing"), "row-regression"}
 		}
 		left = max(left, oldLast)
 		right = min(right, newLast)
@@ -333,11 +387,11 @@ func (g *LeaseGuard) restorationProof(before clocks.CoverageAttempt, read LeaseR
 	for _, cause := range results[0].Causes {
 		switch cause {
 		case "clock-coverage-bound":
-			return fault("clock-lease-bound")
+			return &restorationError{fault("clock-lease-bound"), "continuity-bound"}
 		case "clock-coverage-break", "clock-coverage-leap":
-			return fault("clock-config-differ")
+			return &restorationError{fault("clock-config-differ"), "continuity-break"}
 		default:
-			return fault("clock-lease-missing")
+			return &restorationError{fault("clock-lease-missing"), "missing-row"}
 		}
 	}
 	return nil

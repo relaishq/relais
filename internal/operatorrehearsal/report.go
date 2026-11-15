@@ -22,6 +22,7 @@ type GateReport struct {
 	CallerStopped      bool `json:"callerStopped"`
 }
 type CPUReport struct {
+	PhaseCauseScope  string        `json:"phaseCauseScope,omitempty"`
 	Layout           CPULayout     `json:"layout"`
 	Topology         string        `json:"topology"`
 	DriverAffinity   string        `json:"driverAffinity"`

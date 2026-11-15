@@ -97,6 +97,9 @@ func TestRollbackContinuousLeaseCoverage(t *testing.T) {
 				start, finish = c.Wall().Add(-time.Second), c.Wall()
 			}
 			end := 10 * time.Minute
+			if mode == "expired" {
+				end = c.Elapsed() + RestoreReserve + g.session.timing.leaseAttempt()
+			}
 			if mode == "restore-budget" {
 				end = c.Elapsed() + 120*time.Second
 			}
@@ -183,6 +186,22 @@ func TestRollbackContinuousLeaseCoverage(t *testing.T) {
 			}
 			if !covered {
 				missing := r.Session.clockMissingIntervals["shared"]
+				stage := "missing-row"
+				switch mode {
+				case "expired", "no-budget", "restore-budget", "context-budget":
+					stage = "reserve-exhausted"
+				case "unknown":
+					stage = "transport-unknown"
+				case "bound":
+					stage = "continuity-bound"
+				case "event-after-read":
+					stage = "endpoint-before-event-end"
+				case "missing", "zero-failed", "mixed-failed", "zero-start", "zero-end", "reversed-move":
+					stage = "cached-lease"
+				}
+				require.Equal(t, stage, missing.ProofStage, "MUTATION: restoration-stage-recording")
+				public := (clocks.CoverageEvidence{MissingIntervals: r.Session.clockMissingIntervals}).Public()
+				require.Equal(t, stage, public.MissingIntervals["shared"].ProofStage, "public receipt must retain the proof stage")
 				kind := "clock-lease-missing"
 				switch mode {
 				case "expired", "no-budget", "restore-budget", "context-budget":

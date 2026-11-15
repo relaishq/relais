@@ -115,6 +115,11 @@ func (e CoverageEvidence) Public() CoverageEvidence {
 			default:
 				b.Kind = "log-loss"
 			}
+			switch b.ProofStage {
+			case "", "missing-guard", "cached-lease", "missing-row", "transport-unknown", "reserve-exhausted", "endpoint-evidence", "retry-wait", "endpoint-lease", "expired-reference", "old-row-after-event", "endpoint-before-event-end", "row-regression", "continuity-bound", "continuity-break":
+			default:
+				b.ProofStage = "unavailable"
+			}
 			missing[slot] = b
 		}
 	}
