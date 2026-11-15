@@ -1,7 +1,8 @@
 """Known-bad inputs must fail each mechanical repository rule."""
 import unittest
 
-from check_rules import bad_name, lint_version_errors, source_errors, release_binary_errors
+from check_rules import (bad_name, doc_reader_errors, go_embed_patterns, go_pattern_regex, lint_version_errors,
+                         source_errors, release_binary_errors)
 
 
 class BehaviourNames(unittest.TestCase):
@@ -139,6 +140,105 @@ class PortableDocs(unittest.TestCase):
                 self.assertFalse(source_errors('docs/testing.md', 'Use ' + path))
         self.assertTrue(source_errors('docs/testing.md',
                                      'https://example.com/home/index /Users/you/'))
+
+
+class DocsOnlyReaders(unittest.TestCase):
+    fallback = ['docs/listed-example.md', 'README.md', '**/testdata/']
+    files = ['docs/listed-example.md', 'docs/unlisted-example.md', 'docs/demo.md', 'docs/adr/a.md',
+             'docs/img.png', 'docs/dev/ci.md', 'README.md', 'GUIDE.md', 'cmd/demo/web/x.md', 'cmd/demo/main.go',
+             'site.go']
+
+    def errors(self, path, source, fallback=None):
+        return doc_reader_errors(path, source, self.fallback if fallback is None else fallback, self.files)
+
+    def test_code_and_fixtures_reading_unlisted_docs_fail(self):
+        for path, source in (('pkg/a/a_test.go', 'os.ReadFile("../../docs/unlisted-example.md")'),
+                             ('pkg/a/a.go', 'os.ReadFile("../../docs/unlisted-example.md")'),
+                             ('cmd/demo/page.test.cjs', "fs.readFileSync('docs/unlisted-example.md')"),
+                             ('cmd/demo/web/page.mjs', "fetch('../../GUIDE.md')"),
+                             ('cmd/demo/web/page.mjs', "fetch('docs/demo.md?raw')"),
+                             ('scripts/x/test_page.py', "Path('./docs/adr/')"),
+                             ('scripts/x/run.sh', 'cat docs/adr/*.md'),
+                             ('Makefile', '\tcp GUIDE.md bin/'),
+                             ('.github/workflows/ci.yml', '        run: grep x docs/unlisted-example.md'),
+                             ('pkg/a/testdata/case.json', '{"doc": "docs/unlisted-example.md"}')):
+            with self.subTest(path=path, source=source):
+                self.assertTrue(self.errors(path, source))
+        self.assertTrue(self.errors('pkg/a/a_test.go', 'name := "README.md"', fallback=[]))
+
+    def test_glob_literals_match_files(self):
+        for source in ('"../../docs/d?mo.md"', '"../../docs/[d]emo.md"', '"../../docs/[^x]emo.md"', '"../../G*.md"'):
+            with self.subTest(source=source):
+                self.assertTrue(self.errors('pkg/a/a_test.go', source))
+        self.assertFalse(self.errors('pkg/a/a_test.go', '"../../docs/[x]emo.md" "../../docs/*.png"'))
+
+    def test_joined_path_readers_fail(self):
+        for path, source in (('pkg/a/a_test.go', 'os.ReadFile(filepath.Join("..", "..", "docs", name))'),
+                             ('pkg/a/a.go', 'root := filepath.Join(repo, `docs`)'),
+                             ('scripts/x/report.py', "text = (Path(root) / 'docs' / name).read_text()"),
+                             ('scripts/x/report.py', 'os.path.join(root, "../docs")'),
+                             ('cmd/demo/page.test.cjs', "path.join(__dirname, '../../docs/', name)")):
+            with self.subTest(source=source):
+                self.assertTrue(self.errors(path, source))
+
+    def test_go_embed_resolves_against_tracked_files(self):
+        embed = 'package site\n//go:embed {}\nvar pages embed.FS'
+        for pattern in ('doc*', 'all:docs', 'docs/d?mo.md', 'docs/[d]emo.md', '"G*.md" web', '*.md', 'd*/adr'):
+            with self.subTest(pattern=pattern):
+                self.assertTrue(self.errors('site.go', embed.format(pattern)))
+        for pattern in ('web', 'docs/img.png', 'docs/listed-example.md', 'd[x]cs'):
+            with self.subTest(pattern=pattern):
+                self.assertFalse(self.errors('site.go', embed.format(pattern)))
+        self.assertFalse(self.errors('cmd/demo/main.go', embed.format('web *.md')))
+
+    def test_go_embed_quoting_and_go_class_syntax(self):
+        embed = 'package site\n//go:embed {}\nvar pages embed.FS'
+        # Backquoted and double-quoted arguments are Go strings, not shell words.
+        for pattern in ('`docs/dev/ci.md`', '"docs/dev/ci.md"', '"docs/dev/\\x63i.md"', 'web `docs/dev/c i.md` "docs/demo.md"',
+                        # In Go ! is a literal class member; [!c] still matches ci.md.
+                        'docs/dev/[!c]i.md', 'docs/dev/[^x]i.md', 'docs/dev/[a-c]i.md', 'docs/dev/\\ci.md'):
+            with self.subTest(pattern=pattern):
+                self.assertTrue(self.errors('site.go', embed.format(pattern)))
+        for pattern in ('docs/dev/[^c]i.md', 'docs/dev/[!x]i.md', '`docs/img.png`'):
+            with self.subTest(pattern=pattern):
+                self.assertFalse(self.errors('site.go', embed.format(pattern)))
+
+    def test_unresolvable_patterns_fail_closed(self):
+        embed = 'package site\n//go:embed {}\nvar pages embed.FS'
+        # Go also splits on Unicode spaces; the rule does not model them and fails closed.
+        for pattern in ('`docs/dev/ci.md', '"docs/dev/ci.md', 'docs/[ci.md', 'docs/[]ci.md', 'docs/[-]ci.md', 'docs\\',
+                        'README.md\u00a0docs/dev/ci.md'):
+            with self.subTest(pattern=pattern):
+                errors = self.errors('site.go', embed.format(pattern))
+                self.assertTrue(errors and 'cannot resolve' in errors[0], errors)
+        self.assertTrue(self.errors('scripts/x/run.sh', 'cat docs/[ci.md'))
+
+    def test_go_pattern_matching(self):
+        cases = (('*', 'abc', True), ('*', 'a/b', False), ('a?c', 'abc', True), ('a?c', 'a/c', False),
+                 ('[!c]i', '!i', True), ('[!c]i', 'xi', False), ('[^c]i', 'xi', True), ('[^c]i', 'ci', False),
+                 ('[a-c]', 'b', True), ('[c-a]', 'b', False), ('\\*', '*', True), ('\\*', 'a', False),
+                 ('[\\]]', ']', True))
+        for pattern, name, expected in cases:
+            with self.subTest(pattern=pattern, name=name):
+                self.assertEqual(bool(go_pattern_regex(pattern).fullmatch(name)), expected)
+
+    def test_go_embed_argument_split(self):
+        self.assertEqual(go_embed_patterns('a  `b c` "d\\x65" all:f'), ['a', 'b c', 'de', 'all:f'])
+
+    def test_rule_uses_the_classifier_fallback_matcher(self):
+        # A directory entry covers every file below it for both the rule and the classifier.
+        self.assertFalse(self.errors('site.go', 'package site\n//go:embed doc*\nvar d embed.FS', fallback=['docs', 'README.md']))
+        self.assertTrue(self.errors('site.go', 'package site\n//go:embed doc*\nvar d embed.FS', fallback=['docs/adr/']))
+
+    def test_listed_missing_allowlisted_and_comment_references_pass(self):
+        self.assertFalse(self.errors('pkg/a/a_test.go', 'os.ReadFile("../../docs/listed-example.md")'))
+        self.assertFalse(self.errors('pkg/a/a_test.go', 'names := []string{"README.md", "../../README.md"}'))
+        self.assertFalse(self.errors('pkg/a/a_test.go', '"../../docs/missing-example.md"'))
+        self.assertFalse(self.errors('pkg/a/a_test.go', '"pkg/docs/x.md" "examples/README.md" "mydocs/x.md"'))
+        self.assertFalse(self.errors('pkg/a/a.go', 'package a\n// See docs/unlisted-example.md.\nvar docsOnly = 1'))
+        self.assertFalse(self.errors('scripts/x/run.sh', '# See docs/unlisted-example.md'))
+        self.assertFalse(self.errors('scripts/ci/check_rules.py', "Path('docs') / 'unlisted-example.md'"))
+        self.assertFalse(self.errors('pkg/a/notes.txt', 'docs/unlisted-example.md'))
 
 
 class LintVersion(unittest.TestCase):

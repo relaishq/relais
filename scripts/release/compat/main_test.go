@@ -215,7 +215,7 @@ func TestCompatibilityEvolutionIsRequiredCIGate(t *testing.T) {
 	}
 	source := string(data)
 	check := func(source string) bool {
-		required := []string{"needs: [quality, unit-tests, gate-mutation, timing-smoke, call-harness, compatibility]", `test "$COMPATIBILITY_RESULT" = success`, "COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}", "CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}", "git rev-parse HEAD^", `go run ./scripts/release/compat check --base "$base"`}
+		required := []string{"needs: [changes, quality, unit-tests, gate-mutation, timing-smoke, call-harness, compatibility]", `test "$COMPATIBILITY_RESULT" = success`, "COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}", "CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}", "git rev-parse HEAD^", `go run ./scripts/release/compat check --base "$base"`}
 		for _, s := range required {
 			if !strings.Contains(source, s) {
 				return false

@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Repository rules that need no third-party Python dependencies."""
 import ast
+import fnmatch
+import posixpath
 import re
 import shlex
 from pathlib import Path
 import subprocess
 import sys
+
+# Isolated mode (-I) leaves this directory off sys.path; the fallback list
+# matcher lives beside this file.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from docs_only import docs_candidate, in_fallback, load_fallback  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER_PACKAGE = 'internal/redistestenv/'
@@ -17,6 +24,23 @@ GO_TOKEN = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|`[^`]*`|\'(?:\
 HOME_PATH = re.compile(r'/(?:Users|home)/(?!\$)[^/\s`\"\'<>]+(?:/|(?=$|[\s`\"\'<>]))|/private/tmp/|/var/folders/')
 FLOATING_RUNNER = re.compile(r'(?<![\w.-])(?:ubuntu|macos|windows)-latest(?:-[\w-]+)?(?![\w.-])', re.I)
 URL = re.compile(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>`\"\']+')
+# Code, build files and test fixtures that could read docs/ or root Markdown.
+# A docs-only PR skips the heavy jobs that run most of them.
+READER_FILE = re.compile(r'(?:^|/)(?:[^/]+\.(?:go|py|sh|js|cjs|mjs|ts)|Makefile|testdata/.*)$|^\.github/workflows/[^/]+$')
+# Readers that may name docs freely, with the reason each is safe.
+READER_ALLOWLIST = {
+    'scripts/ci/docs_only.py': 'the docs-only classifier itself; runs in changes, which always runs',
+    'scripts/ci/check_rules.py': 'reads every Markdown file for repository rules; runs in quality, which always runs',
+    'scripts/ci/test_check_rules.py': 'synthetic doc paths as rule inputs; runs in quality, which always runs',
+    'scripts/ci/test_docs_only.py': 'synthetic doc paths as classifier inputs; runs in quality, which always runs',
+}
+# A ./ or ../-relative docs/ path or root-level Markdown name, including globs
+# such as docs/d?mo.md, docs/[d]emo.md and [^R]*.md.
+GLOB_CHAR = r'(?:[\w.*?-]|\[[^\]/\s]+\])'
+DOC_PATH = re.compile(rf'(?<![\w./-])(?:\./)?(?:\.\./)*(docs/(?:/|{GLOB_CHAR})*|{GLOB_CHAR}+?\.md(?![\w.-]))')
+# A quoted docs path component, as in filepath.Join("..", "docs") or Path(root) / 'docs'.
+DOC_COMPONENT = re.compile(r'''(["'`])(?:\./)?(?:\.\./)*docs/?\1''')
+GO_EMBED = re.compile(r'^\s*//go:embed\s+(.+)$')
 
 
 def words(name):
@@ -89,6 +113,157 @@ def source_errors(path, source):
                 errors.append(f'{path}:{line}: Redis test endpoint literal; use internal/redistestenv')
     if path.startswith('.github/workflows/') and path.endswith(('.yml', '.yaml')):
         errors.extend(workflow_errors(path, source))
+    return errors
+
+
+def go_pattern_regex(pattern):
+    """Compile Go path.Match syntax: * and ? skip /, [lo-hi] and [^...] classes, \ escapes.
+
+    ! is a literal inside a class. A malformed pattern raises ValueError."""
+    out, i, n = [], 0, len(pattern)
+
+    def escaped():
+        nonlocal i
+        if i >= n or pattern[i] in '-]':
+            raise ValueError(f'bad pattern {pattern!r}')
+        if pattern[i] == '\\':
+            i += 1
+            if i >= n:
+                raise ValueError(f'bad pattern {pattern!r}')
+        i += 1
+        return pattern[i - 1]
+
+    while i < n:
+        char = pattern[i]
+        i += 1
+        if char == '*':
+            out.append('[^/]*')
+        elif char == '?':
+            out.append('[^/]')
+        elif char == '\\':
+            if i >= n:
+                raise ValueError(f'bad pattern {pattern!r}')
+            out.append(re.escape(pattern[i]))
+            i += 1
+        elif char == '[':
+            negate = i < n and pattern[i] == '^'
+            i += negate
+            ranges = []
+            while not (i < n and pattern[i] == ']' and ranges):
+                low = high = escaped()
+                if i < n and pattern[i] == '-':
+                    i += 1
+                    high = escaped()
+                ranges.append((low, high))
+            i += 1
+            body = ''.join(re.escape(low) + '-' + re.escape(high) for low, high in ranges if low <= high)
+            out.append(('[^' + body + ']' if body else '(?s:.)') if negate else ('[' + body + ']' if body else '(?!)'))
+        else:
+            out.append(re.escape(char))
+    return re.compile(''.join(out), re.S)
+
+
+def matched_files(pattern, files, go_only):
+    """Tracked files a path pattern reaches; a matched directory includes its files.
+
+    go:embed uses Go syntax only. Other literals may be shell, Python or JS
+    globs, so they also match with fnmatch, where [!...] negates."""
+    pattern = pattern.strip('/')
+    tests = [go_pattern_regex(pattern).fullmatch]
+    if not go_only:
+        tests.append(re.compile(fnmatch.translate(re.sub(r'\[\^', '[!', pattern))).match)
+    matches = []
+    for file in files:
+        segments = file.split('/')
+        prefixes = ('/'.join(segments[:i]) for i in range(1, len(segments) + 1))
+        if any(test(prefix) for prefix in prefixes for test in tests):
+            matches.append(file)
+    return matches
+
+
+def go_embed_patterns(text):
+    """Split go:embed arguments like cmd/go: spaces, "quoted" Go strings and `raw` strings.
+
+    Go also separates arguments with Unicode spaces. Rather than model them,
+    any non-ASCII character fails closed as an unresolvable pattern.
+    """
+    if not text.isascii():
+        raise ValueError(f'non-ASCII go:embed argument {text!r}')
+    patterns, i = [], 0
+    while True:
+        while i < len(text) and text[i] in ' \t':
+            i += 1
+        if i == len(text):
+            return patterns
+        if text[i] == '`':
+            end = text.find('`', i + 1)
+            if end < 0:
+                raise ValueError(f'bad go:embed argument {text[i:]!r}')
+            patterns.append(text[i + 1:end])
+            i = end + 1
+        elif text[i] == '"':
+            match = re.match(r'"(?:\\.|[^"\\])*"', text[i:])
+            value = go_string(match[0]) if match else None
+            if value is None:
+                raise ValueError(f'bad go:embed argument {text[i:]!r}')
+            patterns.append(value)
+            i += match.end()
+        else:
+            end = i
+            while end < len(text) and text[end] not in ' \t':
+                end += 1
+            patterns.append(text[i:end])
+            i = end
+
+
+def doc_references(path, source):
+    """Yield (line, pattern, kind) for each path pattern the source may read.
+
+    kind is 'embed' (Go syntax), 'literal' (any glob dialect) or 'bad' (unparsed go:embed)."""
+    if path.endswith('.go'):
+        # Only string literals read files; comments that cite docs do not.
+        texts = [(line, token) for token, line in go_tokens(source) if token[:1] in '"`']
+        base = posixpath.dirname(path)
+        for line, text in enumerate(source.splitlines(), 1):
+            embed = GO_EMBED.match(text)
+            if embed:
+                try:
+                    patterns = go_embed_patterns(embed[1].strip())
+                except ValueError:
+                    yield line, embed[1].strip(), 'bad'
+                    continue
+                for pattern in patterns:
+                    yield line, posixpath.join(base, pattern.removeprefix('all:')), 'embed'
+    else:
+        texts = [(line, text) for line, text in enumerate(source.splitlines(), 1)
+                 if not text.lstrip().startswith(('#', '//', '/*', '* '))]
+    for line, text in texts:
+        for match in DOC_PATH.finditer(text):
+            reference = match[1].rstrip('.')
+            yield line, reference, 'literal'
+            if '?' in reference:  # Also read ? as the start of a URL query.
+                yield line, reference.split('?', 1)[0], 'literal'
+        if DOC_COMPONENT.search(text):
+            yield line, 'docs', 'literal'
+
+
+def doc_reader_errors(path, source, fallback, files):
+    """Code that reads a docs-only candidate must keep every file it reaches on the full CI path."""
+    if not READER_FILE.search(path) or path in READER_ALLOWLIST:
+        return []
+    errors = []
+    for line, pattern, kind in sorted(set(doc_references(path, source))):
+        try:
+            if kind == 'bad':
+                raise ValueError(pattern)
+            reached = matched_files(pattern, files, go_only=kind == 'embed')
+        except ValueError:
+            errors.append(f'{path}:{line}: cannot resolve path pattern {pattern!r}; write a plain path or a Go path.Match pattern')
+            continue
+        unlisted = [file for file in reached if docs_candidate(file) and not in_fallback(file, fallback)]
+        if unlisted:
+            errors.append(f'{path}:{line}: {pattern} reaches {", ".join(unlisted[:3])}; a docs-only PR '
+                          'would skip this reader, so add the path to scripts/ci/docs-only-fallback.txt')
     return errors
 
 
@@ -195,12 +370,17 @@ def repository_errors(root=ROOT):
     # Include untracked candidate files so the same command works before staging.
     paths = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=root).decode().split('\0')
     errors = []
-    for path in sorted(set(paths) - {''}):
+    fallback = load_fallback()
+    files = sorted(set(paths) - {''})
+    for path in files:
         file = root / path
         if not file.is_file():
             continue
-        source = file.read_text(errors='replace') if path.endswith(('.go', '.md', '.yml', '.yaml')) else ''
+        reader = bool(READER_FILE.search(path))
+        source = file.read_text(errors='replace') if reader or path.endswith(('.go', '.md', '.yml', '.yaml')) else ''
         errors.extend(source_errors(path, source))
+        if reader:
+            errors.extend(doc_reader_errors(path, source, fallback, files))
     errors.extend(release_binary_errors((root / '.golangci.yml').read_text(), (root / 'scripts/release/build-archives.sh').read_text()))
     errors.extend(lint_version_errors((root / 'Makefile').read_text(), (root / '.github/workflows/ci.yml').read_text()))
     return errors
@@ -211,7 +391,7 @@ def main():
     if errors:
         print('\n'.join(errors), file=sys.stderr)
         return 1
-    print('Repository rules passed (behaviour names, Redis endpoints, workflow ports, runner labels, doc paths, lint version, release binaries).')
+    print('Repository rules passed (behaviour names, Redis endpoints, workflow ports, runner labels, doc paths, docs-only readers, lint version, release binaries).')
     return 0
 
 

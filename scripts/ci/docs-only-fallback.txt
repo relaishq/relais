@@ -1,0 +1,23 @@
+# Paths that always take the full CI path, even in a documentation-only PR.
+# Read by scripts/ci/docs_only.py (PR classifier) and scripts/ci/check_rules.py
+# (code that reads a docs/ path or a root-level Markdown file must list it here).
+# An entry covers its path and everything below it. A leading **/ matches at any
+# depth. Wildcards are rejected, so the classifier and the rule match alike.
+
+# Read by tests: cmd/relais-signal/control_policy_test.go, cmd/relais-demo/ptt.test.cjs.
+docs/api_reference.md
+docs/build-an-agent.md
+# Read by pkg/mediaworker/agent_limits_snapshot_interval_test.go.
+docs/adr/0010-pluggable-agents.md
+# Ships in release archives (scripts/release/build-archives.sh).
+README.md
+
+# Build, CI and test inputs, including any Markdown inside them.
+.github/
+Makefile
+go.mod
+go.sum
+scripts/
+**/testdata/
+.golangci.yml
+python/
