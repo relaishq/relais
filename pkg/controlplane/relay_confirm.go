@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -86,6 +87,68 @@ func relayFailureDetail(rec sessionstore.RelayConfirmation) RelayEvent {
 		}
 	}
 	return detail
+}
+
+// CallRelayStatus is a call's relay assignment, accepted confirmation mode and
+// current attempt in private status (ADR 0016 section 7).
+type CallRelayStatus struct {
+	Slot         string              `json:"slot"`
+	Pending      string              `json:"pending,omitempty"`
+	Generation   uint64              `json:"generation"`
+	Confirmation string              `json:"confirmation"` // none, delivery or decode
+	Attempt      *RelayAttemptStatus `json:"attempt,omitempty"`
+}
+
+// RelayAttemptStatus is the saved evidence for one generation. Delivered (C
+// for every required MID) proves packet delivery, not decode; each new
+// generation starts undelivered.
+type RelayAttemptStatus struct {
+	Generation    uint64   `json:"generation"`
+	Slot          string   `json:"slot"`
+	Phase         string   `json:"phase"`
+	Kind          string   `json:"kind"`
+	RequiredMIDs  []string `json:"required_mids"`
+	Delivered     bool     `json:"delivered"`
+	DeliveredMIDs []string `json:"delivered_mids"`
+	DecodedMIDs   []string `json:"decoded_mids"`
+}
+
+// relayStatus reads the call's durable relay record for status. A record
+// that control cannot decode is shown as absent; its owner path discards it.
+func (p *Plane) relayStatus(ctx context.Context, id string) (*CallRelayStatus, error) {
+	a, rec, err := p.store.(sessionstore.RelayConfirmations).RelayConfirmation(ctx, id)
+	if errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) || errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
+		return nil, nil
+	}
+	if err != nil || a.Slot == "" {
+		return nil, err
+	}
+	out := &CallRelayStatus{Slot: a.Slot, Pending: a.Pending, Generation: a.Generation, Confirmation: cmp.Or(rec.Mode, sessionstore.RelayConfirmNone)}
+	if rec.Attempt != nil {
+		out.Attempt = relayAttemptStatus(rec, a)
+	}
+	return out, nil
+}
+
+// relayAttemptStatus derives the phase from the durable predicates, so a
+// commit that supplies the last prerequisite reads as confirmed and a retired
+// generation as aborted before control rewrites the stored phase.
+func relayAttemptStatus(rec sessionstore.RelayConfirmation, a sessionstore.RelayAssignment) *RelayAttemptStatus {
+	t := rec.Attempt
+	phase := t.Phase
+	switch {
+	case rec.Confirmed(a):
+		phase = sessionstore.RelayPhaseConfirmed
+	case rec.Aborted():
+		phase = sessionstore.RelayPhaseAborted
+	case phase == sessionstore.RelayPhasePending && rec.Switched(a):
+		phase = sessionstore.RelayPhaseSwitched
+	}
+	return &RelayAttemptStatus{
+		Generation: t.Generation, Slot: t.Slot, Phase: phase, Kind: t.Kind,
+		RequiredMIDs: append([]string{}, t.Required...), Delivered: sessionstore.Covers(t.Delivered, t.Required),
+		DeliveredMIDs: append([]string{}, t.Delivered...), DecodedMIDs: append([]string{}, t.Decoded...),
+	}
 }
 
 // relayMode returns the call's accepted confirmation mode, saved at create.

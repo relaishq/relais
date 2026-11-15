@@ -903,6 +903,8 @@ type CallStatus struct {
 	MoveCount     uint64         `json:"move_count"`
 	TakeoverCount uint64         `json:"takeover_count"`
 	LastMoveKind  string         `json:"last_move_kind"`
+	// Relay is set only with a configured relay set.
+	Relay *CallRelayStatus `json:"relay,omitempty"`
 }
 
 // Status is the HTTP view of workers and live calls.
@@ -937,6 +939,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	for id, c := range p.calls {
 		calls[id] = c
 	}
+	relays := len(p.relaySet) > 0
 	p.mu.Unlock()
 	for _, c := range calls {
 		p.mu.Lock()
@@ -965,6 +968,11 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 			return Status{}, err
 		}
 
+		if relays {
+			if cs.Relay, err = p.relayStatus(ctx, c.id); err != nil {
+				return Status{}, err
+			}
+		}
 		c.rememberLease(lease)
 		cs.Address, cs.Epoch = lease.Worker, lease.Epoch
 		for i := range status.Workers {

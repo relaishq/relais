@@ -84,7 +84,9 @@ func relayFailurePlane(t *testing.T, store sessionstore.Store, modes ...string) 
 	if len(modes) > 0 {
 		mode = modes[0]
 	}
-	require.NoError(t, p.acceptRelayMode(context.Background(), c, mode))
+	if mode != "" { // "" leaves an ordinary call with no saved mode
+		require.NoError(t, p.acceptRelayMode(context.Background(), c, mode))
+	}
 	return p, a, b.fakeWorker, id
 }
 func waitRelayPending(t *testing.T, store sessionstore.Store, id string) (sessionstore.Lease, sessionstore.RelayAssignment) {
