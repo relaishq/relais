@@ -69,6 +69,35 @@ even after a failed offer. A planned change that cannot switch, or switches
 without confirmation, rolls back to the old slot with a higher generation,
 confirmed under the same mode.
 
+### Planned relay drain (private control API)
+
+`POST /relays/{id}/drain` marks the slot draining, excluding it from new
+placement. At most eight calls change relay at once. Each call gets one attempt
+and up to three retries, waiting 1 s, 2 s and 4 s and picking a target again for
+each retry. A caller without relay-change support or a worker without C is
+reported immediately. Existing change, rollback and episode bounds apply;
+backoff uses the request context and adds no deadline.
+
+A completed report returns HTTP `200`, including partial drains and cancellation:
+
+```json
+{"moves":[{"id":"call-a","from":"r1","to":"r2"},{"id":"call-b","from":"r1","not_movable":true,"error":"controlplane: confirmation_unsupported"}]}
+```
+
+`to` is present only for a confirmed move. `not_movable` and `error` name the
+final failure. Cancellation reports remaining calls with the context error.
+An empty drain returns `{"moves":[]}`. Request-level failures use the error
+response: an unknown slot returns `404`, control not ready returns `503`, and
+an assignment read failure before work starts uses its existing error status.
+The in-process `DrainRelay` API still returns the joined per-call errors.
+
+For a call still on its old slot, private `GET /status` adds the optional reason
+string `relay.not_movable`, for example
+`{"slot":"r1","generation":1,"confirmation":"delivery","not_movable":"controlplane: confirmation_unsupported"}`.
+It records the last drain report for that slot in this control process. A new
+drain clears the old report; successful moves do not show it on another slot.
+This operator report is not persisted across control restarts.
+
 ### Relay change confirmation (ADR 0016 sections 5, 7, 10)
 
 A switch commit alone never completes a relay change. A caller may also send

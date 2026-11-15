@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -465,11 +466,12 @@ func (p *Plane) setRelay(ctx context.Context, lease sessionstore.Lease, from, to
 
 func (p *Plane) relayHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("POST /relays/{id}/drain", func(w http.ResponseWriter, r *http.Request) {
-		if err := p.DrainRelay(r.Context(), r.PathValue("id")); err != nil {
+		result, err := p.drainRelay(r.Context(), r.PathValue("id"))
+		if err != nil && result.Moves == nil {
 			writeError(w, err)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		writeJSON(w, result)
 	})
 	mux.HandleFunc("POST /calls/{id}/relay", func(w http.ResponseWriter, r *http.Request) {
 		if err := p.ChangeRelay(r.Context(), r.PathValue("id"), r.URL.Query().Get("to")); err != nil {
@@ -709,9 +711,33 @@ func (p *Plane) pickRelay(ctx context.Context, exclude string) (string, error) {
 	return best, nil
 }
 
+// RelayMoveResult reports a call's outcome in one planned relay drain.
+// Error names the final failure; To is set only for a confirmed move.
+type RelayMoveResult struct {
+	ID         string `json:"id"`
+	From       string `json:"from"`
+	To         string `json:"to,omitempty"`
+	NotMovable bool   `json:"not_movable,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// RelayDrainResult includes every call selected on the draining slot.
+// HTTP returns 200 for these per-call outcomes, including cancellation.
+// Request-level failures return the existing error response instead.
+type RelayDrainResult struct {
+	Moves []RelayMoveResult `json:"moves"`
+}
+
+// DrainRelay preserves the error-only API for in-process callers. HTTP also
+// exposes each call's result, so a partial drain never hides confirmed moves.
 func (p *Plane) DrainRelay(ctx context.Context, slot string) error {
+	_, err := p.drainRelay(ctx, slot)
+	return err
+}
+
+func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, error) {
 	if err := p.requireMutationReady(); err != nil {
-		return err
+		return RelayDrainResult{}, err
 	}
 	p.relayPlacement.Lock()
 	p.mu.Lock()
@@ -719,53 +745,103 @@ func (p *Plane) DrainRelay(ctx context.Context, slot string) error {
 	if !ok {
 		p.mu.Unlock()
 		p.relayPlacement.Unlock()
-		return mediaworker.ErrRelayUnsupported
+		return RelayDrainResult{}, fmt.Errorf("controlplane: unknown relay slot %q: %w", slot, sessionstore.ErrNotFound)
 	}
 	b.draining = true
 	p.relaySet[slot] = b
-	ids := make([]string, 0, len(p.calls))
-	for id := range p.calls {
-		ids = append(ids, id)
+	calls := make([]*call, 0, len(p.calls))
+	for _, c := range p.calls {
+		calls = append(calls, c)
 	}
 	p.mu.Unlock()
 	p.relayPlacement.Unlock()
+	sort.Slice(calls, func(i, j int) bool { return calls[i].id < calls[j].id })
+	jobs := make([]*call, 0, len(calls))
+	for _, c := range calls {
+		_, a, err := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id)
+		if errors.Is(err, sessionstore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			if ctx.Err() == nil {
+				return RelayDrainResult{}, err
+			}
+			// Cancellation can prevent the authoritative read. Retain known calls
+			// on this slot in the report, without starting another change.
+			c.stateMu.Lock()
+			a.Slot = c.relaySlot
+			c.stateMu.Unlock()
+		}
+		if a.Slot == slot {
+			jobs = append(jobs, c)
+		}
+	}
+	result := RelayDrainResult{Moves: make([]RelayMoveResult, len(jobs))}
+	errs := make([]error, len(jobs))
 	var wg sync.WaitGroup
-	defer wg.Wait()
 	sem := make(chan struct{}, 8)
-	out := make(chan error, len(ids))
-	for _, id := range ids {
-		_, a, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
-		if errors.Is(e, sessionstore.ErrNotFound) {
-			continue
-		}
-		if e != nil {
-			return e
-		}
-		if a.Slot != slot {
-			continue
-		}
+	for i, c := range jobs {
+		c.stateMu.Lock()
+		c.relayNotMovableSlot, c.relayNotMovableReason = "", ""
+		c.stateMu.Unlock()
+		result.Moves[i] = RelayMoveResult{ID: c.id, From: slot}
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
-			wg.Wait()
-			return ctx.Err()
+			errs[i] = ctx.Err()
+			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
-			target, e := p.pickRelay(ctx, slot)
-			if e == nil {
-				e = p.ChangeRelay(ctx, id, target)
-			}
-			out <- e
-		}()
+			result.Moves[i].To, errs[i] = p.drainRelayCall(ctx, c, slot)
+		})
 	}
 	wg.Wait()
-	close(out)
-	var err error
-	for e := range out {
-		err = errors.Join(err, e)
+	var joined error
+	for i, c := range jobs {
+		if err := errs[i]; err != nil {
+			joined = errors.Join(joined, err)
+			reason := strings.Join(strings.Fields(err.Error()), " ")
+			result.Moves[i].NotMovable, result.Moves[i].Error = true, reason
+			c.stateMu.Lock()
+			c.relayNotMovableSlot, c.relayNotMovableReason = slot, reason
+			c.stateMu.Unlock()
+		}
 	}
-	return err
+	return result, joined
+}
+
+func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string) (string, error) {
+	backoff := [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		target, err := p.pickRelay(ctx, slot)
+		if err == nil {
+			err = p.ChangeRelay(ctx, c.id, target)
+		}
+		if err == nil {
+			return target, nil
+		}
+		// A missing caller/worker contract cannot improve by retrying this drain.
+		if errors.Is(err, mediaworker.ErrRelayUnsupported) {
+			// The same error also names a target that became unavailable after
+			// picking it. Only a caller without relay change is permanently blocked.
+			mode, modeErr := p.relayMode(ctx, c)
+			if modeErr == nil && mode == sessionstore.RelayConfirmNone {
+				return "", err
+			}
+		}
+		if errors.Is(err, ErrConfirmationUnsupported) || attempt == len(backoff) {
+			return "", err
+		}
+		timer := time.NewTimer(backoff[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
