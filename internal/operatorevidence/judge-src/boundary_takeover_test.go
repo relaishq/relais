@@ -74,22 +74,11 @@ func judgeRawAndSanitized(t *testing.T, input previewPoolInput) previewMediaSumm
 	return got
 }
 
-// A pool with no boundary takeover that passes keeps its exact summary bytes.
-// The fixture was written before the boundary rule existed. Regenerate only
-// deliberately: RELAIS_UPDATE_BOUNDARY_FIXTURE=1.
+// A pool with no label-only move or takeover verdict keeps its exact summary
+// bytes. The fixture was written before each boundary rule existed (moves on
+// 2026-11-14). Regenerate only deliberately: RELAIS_UPDATE_BOUNDARY_FIXTURE=1.
 func TestNoBoundaryTakeoverKeepsSummaryBytes(t *testing.T) {
 	scenarios := map[string]func(*testing.T) previewPoolInput{
-		"undecided-move": func(t *testing.T) previewPoolInput {
-			input := rawPoolSample()
-			editPoolCalls(t, &input, func(c *callharness.Report) {
-				if c.Moves[0].Kind != "move" {
-					t.Fatal("fixture move changed")
-				}
-				boundaryMove(&c.Moves[0])
-			})
-			qualifiedPool(&input, nil)
-			return input
-		},
 		"failing-kill-time": func(t *testing.T) previewPoolInput {
 			input := rawPoolSample()
 			editSampleTakeover(t, &input, func(m *callharness.MoveReport) {
@@ -105,6 +94,20 @@ func TestNoBoundaryTakeoverKeepsSummaryBytes(t *testing.T) {
 			qualifiedPool(&input, map[[2]int][]string{sampleTakeover: {"clock-coverage-bound"}})
 			return input
 		},
+	}
+	// A move whose content verdicts differ across the interval, not only their
+	// label, keeps the bytes it had before the move rule (2026-11-14).
+	for name, extra := range map[string]string{"failing-interpretation": "no decoded new content after resume before limit", "untrusted-interpretation": "video baseline cannot distinguish live from outage media", "coverage-cause": ""} {
+		scenarios["move-"+name] = func(t *testing.T) previewPoolInput {
+			input := rawPoolSample()
+			editExcludedMove(t, &input, sampleMove, func(m *callharness.MoveReport) { boundaryMoveDisagrees(m, extra) })
+			causes := map[[2]int][]string{}
+			if name == "coverage-cause" {
+				causes[sampleMove] = []string{"clock-coverage-bound"}
+			}
+			qualifiedPool(&input, causes)
+			return input
+		}
 	}
 	got := map[string]json.RawMessage{}
 	for name, build := range scenarios {
@@ -130,7 +133,7 @@ func TestNoBoundaryTakeoverKeepsSummaryBytes(t *testing.T) {
 	}
 	frozen, err := os.ReadFile(name)
 	if err != nil || !bytes.Equal(fixture, frozen) {
-		t.Fatal("MUTATION: boundary-rule-scope: summary bytes without a passing boundary takeover changed", err)
+		t.Fatal("MUTATION: boundary-rule-scope: summary bytes without a label-only verdict changed", err)
 	}
 }
 

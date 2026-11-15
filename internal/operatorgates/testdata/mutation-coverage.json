@@ -641,7 +641,6 @@
     "boundary-other-verdict-ignored",
     "boundary-window-cause-ignored",
     "boundary-window-failure-cleared",
-    "boundary-rule-on-moves",
     "boundary-label-dropped",
     "boundary-label-not-decoded",
     "boundary-row-untrusted",
@@ -665,7 +664,16 @@
     "measure-expired-wait-unpublished",
     "boundary-idle-expiry-unrecorded",
     "collection-sleep-deadline-unrecorded",
-    "context-deadline-wait-unrecorded"
+    "context-deadline-wait-unrecorded",
+    "boundary-move-not-settled",
+    "boundary-move-row-dropped",
+    "boundary-move-disagreement-trusted",
+    "boundary-move-disagreement-bytes",
+    "boundary-move-other-verdict-ignored",
+    "boundary-move-window-cause-ignored",
+    "boundary-move-failure-cleared",
+    "boundary-rows-listed-twice",
+    "boundary-move-row-counted-back-twice"
   ],
   "killed": [
     {
@@ -5370,12 +5378,6 @@
       "evidence": "killed"
     },
     {
-      "id": "boundary-rule-on-moves",
-      "test": "TestNoBoundaryTakeoverKeepsSummaryBytes",
-      "package": "./internal/operatorevidence/judge-src",
-      "evidence": "killed"
-    },
-    {
       "id": "boundary-label-dropped",
       "test": "TestBoundaryTakeoverPassesWhenEveryKillTimePasses",
       "package": "./internal/operatorevidence/judge-src",
@@ -5517,6 +5519,60 @@
       "id": "context-deadline-wait-unrecorded",
       "test": "TestGateWaitsNameExpiredWait/worker-alive-sleep-deadline",
       "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-not-settled",
+      "test": "TestBoundaryMovePassesWhenEveryInterpretationPasses",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-row-dropped",
+      "test": "TestBoundaryMovePassesWhenEveryInterpretationPasses",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-disagreement-trusted",
+      "test": "TestBoundaryMoveVerdictDisagreementStaysUndecided",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-disagreement-bytes",
+      "test": "TestNoBoundaryTakeoverKeepsSummaryBytes",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-other-verdict-ignored",
+      "test": "TestBoundaryMoveStaysUndecidedWhenAnInterpretationDoesNotPass/first-live",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-window-cause-ignored",
+      "test": "TestBoundaryMoveStaysUndecidedWhenAnInterpretationDoesNotPass/window-cause",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-failure-cleared",
+      "test": "TestBoundaryMoveKeepsFailure",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-rows-listed-twice",
+      "test": "TestBoundaryMoveAndTakeoverRowsOnce",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-row-counted-back-twice",
+      "test": "TestBoundaryMoveRowOnceWithExcludedTakeover",
+      "package": "./internal/operatorevidence/judge-src",
       "evidence": "killed"
     }
   ],

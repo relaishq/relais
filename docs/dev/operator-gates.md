@@ -1580,8 +1580,9 @@ The pinned caller already evaluates every kill time in the clock interval
 or the label differs between them, even if every one passes. The judge overlay
 now reads that record before the product judge runs:
 
-- The rule applies to takeovers only, and to `first_content` and
-  `first_new_content` only. No other verdict carries a label.
+- The rule applies to `first_content` and `first_new_content` only. No other
+  verdict carries a label. Since 2026-11-14 it applies to planned moves too
+  (see the next section).
 - A verdict passes when its only reasons are
   `classification-varies-with-clock-interval` and, optionally,
   `duration-bounds-uncertain`. The caller joins the reasons of every kill time
@@ -1612,6 +1613,44 @@ result, because the rule reads the fixed reason codes. The reason shape that
 the rule depends on is fixed by `TestFrameInFlightAtKillLeavesOnlyIntervalReasons`
 and `TestFrameInFlightAtKillKeepsAFailingKillTimeReason` in `pkg/callharness`.
 The change alters the judge executable hash.
+
+### Move label at the event boundary
+
+Owner decision, 2026-11-14 (#251 slice 6, option A). A planned move labels its
+first decoded content in the same way. The comparison uses caller times and
+the move's start and end times, which come from the control clock. A frame
+that the caller receives inside the move's start interval has no decided
+label. An operator run had 8 of its 20 pooled moves undecided for this reason
+alone, with intervals of 3.8 to 15.5 ms, so every gate stayed inconclusive.
+
+The rule above now applies to moves, without other changes:
+
+- The pinned caller classifies a move with the same code as a takeover. It
+  evaluates every start, end, floor and baseline combination in the move's
+  interval (`classifyDistributedEventWithBudget` in
+  `pkg/callharness/distributed_classification.go`). The same agreement step
+  joins the reasons of each combination that fails or is untrusted, and a
+  passing combination has no reason (`measureEvent` in
+  `pkg/callharness/yardstick.go` sets a reason with every failure and every
+  loss of trust). So the same two reasons prove that every combination passes
+  and only the label differs.
+- A label-only verdict on a move passes, and its row is listed in
+  `boundaryMetrics` with the move's phase and event. The label itself stays
+  undetermined.
+- A verdict disagreement stays undecided: any other reason, including an
+  interval evaluation over the budget, keeps the verdict undecided. A window
+  cause of its own keeps the window undecided, a failed window stays failed,
+  and clock coverage still removes trust afterwards. Failure criteria do not
+  change.
+- The counted-back-in judgment of an excluded takeover settles moves too. Only
+  the excluded takeover's rows come from it, so a move row is listed once.
+
+A pool with no label-only move or takeover verdict keeps the same summary
+bytes (`TestNoBoundaryTakeoverKeepsSummaryBytes` now freezes three move
+scenarios). `TestFrameInFlightAtMoveStartLeavesOnlyIntervalReasons` and
+`TestFrameInFlightAtMoveStartKeepsAFailingReason` in `pkg/callharness` fix the
+move's reason shape. The change is in the judge overlay only. The release pins
+do not change, and the judge executable hash does.
 
 Signal brackets optionally retain `signalDiagnostics`: helper CPU IDs before/after,
 thread involuntary/voluntary context-switch deltas, thread CPU time, and priority.

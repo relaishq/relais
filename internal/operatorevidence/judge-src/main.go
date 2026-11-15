@@ -44,8 +44,9 @@ type previewMediaSummary struct {
 	ICERestarts         int    `json:"iceRestarts"`
 
 	Excluded *excludedPool `json:"excluded,omitempty"`
-	// BoundaryMetrics lists takeover verdicts that pass for every kill time in
-	// the clock interval while their label differs (boundary_takeovers.go).
+	// BoundaryMetrics lists move and takeover verdicts that pass for every
+	// event time in the clock interval while their label differs
+	// (boundary_takeovers.go).
 	BoundaryMetrics []undecidedMetric `json:"boundaryMetrics,omitempty"`
 }
 

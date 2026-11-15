@@ -18,14 +18,14 @@ import (
 func TestPaidMediaTimingRemainsStrict(t *testing.T) {
 	input := rawPoolSample()
 	editPoolCalls(t, &input, func(c *callharness.Report) {
-		c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{"first content classification changes within event-time interval; width=1ms"}}
+		c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{disagreeingInterpretation, "first content classification changes within event-time interval; width=1ms"}}
 	})
 	got := pooledPreviewMedia(&input)
 	if got.Status != "inconclusive" || got.InconclusiveMetrics != 2 || got.FailedMetrics != 0 || !got.CompleteMedia || len(got.UndecidedMetrics) != 2 || got.DroppedPhases != 0 {
 		t.Fatal("strict paid judgment changed", got)
 	}
 	for i, row := range got.UndecidedMetrics {
-		if row.Phase != i || row.Event != 0 || row.Metric != "first_content" || len(row.Causes) != 1 || row.Causes[0] != "classification-varies-with-clock-interval" {
+		if row.Phase != i || row.Event != 0 || row.Metric != "first_content" || !reflect.DeepEqual(row.Causes, []string{"classification-varies-with-clock-interval", "trusted-coverage-below-80-percent"}) {
 			t.Fatal("wrong timing diagnostic", row)
 		}
 	}

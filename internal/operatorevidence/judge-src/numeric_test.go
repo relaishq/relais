@@ -17,7 +17,7 @@ func TestNumericTimingDoesNotChangePoolVerdictsOrReasons(t *testing.T) {
 				case "fail":
 					c.DecryptionFailures.AuthTag = 1
 				case "uncertain":
-					c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{"first_content classification changes within event-time interval; width=4ms"}}
+					c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{disagreeingInterpretation, "first_content classification changes within event-time interval; width=4ms"}}
 				}
 			})
 			without := fixturePoolVerdict(&input)
