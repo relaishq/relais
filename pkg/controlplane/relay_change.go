@@ -855,6 +855,7 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 	res = RelayMoveResult{ID: c.id, From: slot}
 	backoff := [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 	failures := 0
+	backoffStep := 0
 	for {
 		if err = ctx.Err(); err != nil {
 			return res, err
@@ -871,6 +872,9 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 				return true, err
 			}
 			before, open, err := p.relayDrainState(ctx, c.id)
+			if errors.Is(err, sessionstore.ErrLeaseLost) {
+				return false, nil
+			}
 			if err != nil {
 				return true, err
 			}
@@ -882,13 +886,12 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 				return false, nil
 			}
 			target, err := p.pickRelay(ctx, slot)
-			if err != nil { // no planned attempt ran
-				return true, err
-			}
-			err = p.ChangeRelay(ctx, c.id, target)
 			if err == nil {
-				res.To = target
-				return true, nil
+				err = p.ChangeRelay(ctx, c.id, target)
+				if err == nil {
+					res.To = target
+					return true, nil
+				}
 			}
 			if relayDrainEnded(err) {
 				return true, err
@@ -897,6 +900,9 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 				return true, ctx.Err()
 			}
 			after, open, readErr := p.relayDrainState(ctx, c.id)
+			if errors.Is(readErr, sessionstore.ErrLeaseLost) {
+				return false, nil
+			}
 			if readErr != nil {
 				return true, readErr
 			}
@@ -907,13 +913,20 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 			// The episode owns recovery. Busy/conflicting operations did not run a
 			// planned attempt and do not consume the drain's failure allowance.
 			if open || after.Slot != slot && after.Pending != "" || errors.Is(err, errRelayUnconfirmed) ||
-				errors.Is(err, ErrMoveInProgress) || errors.Is(err, sessionstore.ErrRelayConflict) {
+				errors.Is(err, ErrMoveInProgress) || errors.Is(err, sessionstore.ErrRelayConflict) ||
+				errors.Is(err, ErrNoTarget) || errors.Is(err, sessionstore.ErrLeaseLost) {
 				return false, nil
 			}
 			unsupported := errors.Is(err, ErrConfirmationUnsupported)
 			if errors.Is(err, mediaworker.ErrRelayUnsupported) {
 				mode, modeErr := p.relayMode(ctx, c)
-				unsupported = unsupported || modeErr == nil && mode == sessionstore.RelayConfirmNone
+				if modeErr != nil {
+					return true, modeErr
+				}
+				unsupported = unsupported || mode == sessionstore.RelayConfirmNone
+				if !unsupported && (mode == sessionstore.RelayConfirmDelivery || mode == sessionstore.RelayConfirmDecode) {
+					return false, nil // the selected target became unavailable
+				}
 			}
 			if unsupported {
 				res.NotMovable = true
@@ -936,13 +949,15 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 		if settled {
 			return res, stepErr
 		}
-		// Episode observations use the current delay without consuming retries.
-		timer := time.NewTimer(backoff[max(0, failures-1)])
+		// Observations advance the delay without consuming planned failures.
+		// Once the schedule is exhausted, keep waiting at its final delay.
+		timer := time.NewTimer(backoff[backoffStep])
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return res, ctx.Err()
 		case <-timer.C:
+			backoffStep = min(backoffStep+1, len(backoff)-1)
 		}
 	}
 }

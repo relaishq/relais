@@ -407,10 +407,13 @@ func TestRelayDrainReasonClearedByLaterChange(t *testing.T) {
 
 // Another transition can consume a generation before our pending CAS is
 // acknowledged. That is not evidence that this drain ran a planned attempt.
-type drainCompetingStore struct{ *sessionstore.Memory }
+type drainCompetingStore struct {
+	*sessionstore.Memory
+	failures atomic.Int64
+}
 
 func (s *drainCompetingStore) CASRelay(ctx context.Context, lease sessionstore.Lease, from, to sessionstore.RelayAssignment) error {
-	if from.Pending == "" && to.Pending != "" {
+	if from.Pending == "" && to.Pending != "" && s.failures.Add(-1) >= 0 {
 		if err := s.Memory.CASRelay(ctx, lease, from, to); err != nil {
 			return err
 		}
@@ -425,17 +428,118 @@ func (s *drainCompetingStore) CASRelay(ctx context.Context, lease sessionstore.L
 }
 
 func TestRelayDrainDoesNotCountAnotherTransition(t *testing.T) {
+	for _, expires := range []bool{false, true} {
+		t.Run(map[bool]string{false: "eventually starts", true: "context expires"}[expires], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				store := &drainCompetingStore{Memory: p.store.(*sessionstore.Memory)}
+				store.failures.Store(4)
+				p.store = store
+				w.store = store
+				ctx := context.Background()
+				if expires {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, 1500*time.Millisecond)
+					defer cancel()
+					store.failures.Store(100)
+				}
+				start := time.Now()
+				result := drainHTTP(t, p, ctx)
+				require.False(t, result.Moves[0].NotMovable)
+				require.Zero(t, result.NotMovable)
+				require.Empty(t, relayStatusOf(t, p, ids[0]).NotMovable)
+				if expires {
+					require.Equal(t, context.DeadlineExceeded.Error(), result.Moves[0].Error)
+					require.Zero(t, w.attempts.Load())
+					require.Equal(t, 1500*time.Millisecond, time.Since(start))
+				} else {
+					require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
+					require.EqualValues(t, 1, w.attempts.Load(), "lease-loss observations do not consume planned attempts")
+					require.InDelta(t, 11, time.Since(start).Seconds(), 0.1)
+				}
+			})
+		})
+	}
+}
+
+func TestRelayDrainTargetLostBeforeAttemptRepicks(t *testing.T) {
+	for _, lost := range []bool{true, false} {
+		t.Run(map[bool]string{true: "lost", false: "draining"}[lost], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				extra := relayTestSlots()[1]
+				extra.Slot.ID = "r3"
+				extra.draining = true
+				p.relaySet["r3"] = extra
+				c, err := p.lookup(ids[0])
+				require.NoError(t, err)
+				require.NoError(t, c.lockControl(context.Background()))
+				held := true
+				defer func() {
+					if held {
+						c.unlockControl()
+					}
+				}()
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				rec := httptest.NewRecorder()
+				done := make(chan struct{})
+				start := time.Now()
+				go func() {
+					defer close(done)
+					p.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/relays/r1/drain", nil).WithContext(ctx))
+				}()
+				// ChangeRelay has picked r2 and now waits at the operation lock.
+				synctest.Wait()
+				c.controlMu.Lock()
+				waiters := c.controlWaiters
+				c.controlMu.Unlock()
+				require.Equal(t, 1, waiters)
+				p.mu.Lock()
+				b := p.relaySet["r2"]
+				b.lost = lost
+				b.draining = !lost
+				p.relaySet["r2"] = b
+				extra.draining = false
+				p.relaySet["r3"] = extra
+				p.mu.Unlock()
+				c.unlockControl()
+				held = false
+				<-done
+				require.Equal(t, http.StatusOK, rec.Code)
+				var result RelayDrainResult
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+				require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r3"}}, result.Moves)
+				require.Zero(t, result.NotMovable)
+				require.Equal(t, []string{"r3"}, w.targets, "rejected target never started a planned attempt")
+				require.InDelta(t, 1, time.Since(start).Seconds(), 0.1)
+			})
+		})
+	}
+}
+
+func TestRelayDrainNoTargetThenTargetAppears(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p, w, _ := drainPlane(t, 1)
-		store := &drainCompetingStore{Memory: p.store.(*sessionstore.Memory)}
-		p.store = store
-		w.store = store
+		p, w, ids := drainPlane(t, 1)
+		b := p.relaySet["r2"]
+		b.draining = true
+		p.relaySet["r2"] = b
+		actorDone := make(chan struct{})
+		go func() {
+			defer close(actorDone)
+			time.Sleep(8 * time.Second)
+			p.mu.Lock()
+			b := p.relaySet["r2"]
+			b.draining = false
+			p.relaySet["r2"] = b
+			p.mu.Unlock()
+		}()
 		start := time.Now()
 		result := drainHTTP(t, p, context.Background())
-		require.False(t, result.Moves[0].NotMovable)
+		<-actorDone
+		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
 		require.Zero(t, result.NotMovable)
-		require.Contains(t, result.Moves[0].Error, sessionstore.ErrLeaseLost.Error())
-		require.Zero(t, w.attempts.Load())
-		require.Less(t, time.Since(start), time.Second)
+		require.EqualValues(t, 1, w.attempts.Load())
+		require.InDelta(t, 11, time.Since(start).Seconds(), 0.1, "wait 1, 2, 4, then keep waiting 4 seconds")
 	})
 }

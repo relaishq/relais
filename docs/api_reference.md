@@ -72,14 +72,18 @@ confirmed under the same mode.
 ### Planned relay drain (private control API)
 
 `POST /relays/{id}/drain` marks the slot draining, excluding it from new
-placement. At most eight calls change relay at once. Each call gets one attempt
-and up to three retries, waiting 1 s, 2 s and 4 s and picking a target again for
-each retry. A caller without relay-change support or a worker without C is
+placement. At most eight calls change relay at once. A failed planned change
+can be retried up to three times, picking a target again for each retry. A caller without relay-change support or a worker without C is
 reported immediately. Sleeping calls release capacity, so other calls can
 start. Before each retry, control reads the current assignment and recovery
 episode. A call already off the draining slot with no pending change is
 reported moved to its current slot. An open recovery episode settles before
 another planned attempt; observing a busy operation does not consume a retry.
+No target, a target lost or draining after selection, and lease loss before the
+pending assignment is saved also retry without consuming that allowance.
+Control re-reads call state and re-picks the target. These waits advance through
+1 s, 2 s and 4 s, then stay at 4 s until the request context ends. A call that
+never starts an attempt still reports the context error without `not_movable`.
 Only failed planned attempts whose pending assignment was accepted and which
 leave the call on the draining slot count toward exhaustion. Change, rollback and
 episode bounds apply; backoff uses the request context and adds no deadline.
@@ -101,8 +105,7 @@ attempt once observed. For example, cancellation can return:
 {"moves":[{"id":"call-a","from":"r1","error":"context canceled"}],"not_movable":0}
 ```
 
-No eligible target or a pre-attempt read failure also reports an error without
-`not_movable`. An empty drain returns `{"moves":[],"not_movable":0}`.
+Other pre-attempt read failures report an error without `not_movable`. An empty drain returns `{"moves":[],"not_movable":0}`.
 Request-level failures use the error response: an unknown slot returns `404`, control not ready returns `503`, and
 an assignment read failure before work starts uses its existing error status.
 The in-process `DrainRelay` API still returns the joined per-call errors.
