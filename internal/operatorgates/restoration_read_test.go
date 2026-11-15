@@ -216,7 +216,7 @@ func TestRestorationRetryPollCap(t *testing.T) {
 			g.session.timing.read = 50 * time.Millisecond
 			began := c.Elapsed()
 			start, finish := c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond)
-			cap := began + 2100*time.Millisecond // First expired reply at +100 ms, then 2P.
+			cap := began + 5100*time.Millisecond // First expired reply at +100 ms, then 5P.
 			calls := 0
 			g.read = func(_ context.Context, end time.Duration) (LeaseRead, error) {
 				calls++
@@ -225,8 +225,8 @@ func TestRestorationRetryPollCap(t *testing.T) {
 				}
 				c.Advance(100 * time.Millisecond)
 				if calls > 1 && mode == "late-fresh" {
-					c.Advance(2 * time.Second)
-					return endpoint(201, 202, false), nil
+					c.Advance(5 * time.Second)
+					return endpoint(201, 205, false), nil
 				}
 				return endpoint(1, 200, true), nil
 			}
@@ -235,7 +235,7 @@ func TestRestorationRetryPollCap(t *testing.T) {
 			var failure *restorationError
 			require.ErrorAs(t, err, &failure)
 			require.Equal(t, "refresh-window-exhausted", failure.stage, "MUTATION: restoration-poll-cap")
-			reads := 9
+			reads := 24
 			if mode == "late-fresh" {
 				reads = 2
 			}
@@ -301,7 +301,59 @@ func TestRestorationRetryLeavesProofHeadroom(t *testing.T) {
 			c.Advance(25 * time.Millisecond)
 		}
 	}
-	err := g.coverRestoration(context.Background(), c.Elapsed()+RestoreReserve+10*time.Second, start, finish)
+	err := g.coverRestoration(context.Background(), c.Elapsed()+RestoreReserve+2*time.Second, start, finish)
 	require.NoError(t, err, "MUTATION: restoration-retry-headroom")
 	require.Equal(t, 2, calls, "MUTATION: restoration-retry-headroom")
+}
+
+func TestRestorationReferenceFreshAtTwoPointFiveSeconds(t *testing.T) {
+	g, c, endpoint := restorationReadFixture(t)
+	start, finish := c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond)
+	staleReply := c.Elapsed()
+	calls := 0
+	nextRow := int64(201)
+	g.read = func(context.Context, time.Duration) (LeaseRead, error) {
+		calls++
+		if calls == 1 {
+			return endpoint(1, 200, true), nil
+		}
+		c.Advance(400 * time.Millisecond)
+		lastRow := c.Wall().Unix() - 1793930000
+		read := endpoint(nextRow, lastRow, c.Elapsed()-staleReply < 2500*time.Millisecond)
+		nextRow = lastRow + 1
+		return read, nil
+	}
+	err := g.coverRestoration(context.Background(), c.Elapsed()+RestoreReserve+10*time.Second, start, finish)
+	require.NoError(t, err, "MUTATION: restoration-lease-window")
+	require.Equal(t, 2500*time.Millisecond, c.Elapsed()-staleReply, "MUTATION: restoration-lease-window")
+	require.Equal(t, 6, calls, "five re-reads reach the fresh reference at 2.5 s")
+}
+
+func TestRestorationReferenceAttemptSlots(t *testing.T) {
+	for _, mode := range []string{"instant", "full-attempt"} {
+		t.Run(mode, func(t *testing.T) {
+			g, c, endpoint := restorationReadFixture(t)
+			start, finish := c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond)
+			staleReply := c.Elapsed()
+			calls := 0
+			g.read = func(context.Context, time.Duration) (LeaseRead, error) {
+				calls++
+				if calls == 1 {
+					return endpoint(1, 200, true), nil
+				}
+				if mode == "full-attempt" {
+					c.Advance(1800 * time.Millisecond)
+				}
+				return endpoint(1, 0, true), nil
+			}
+			err := g.coverRestoration(context.Background(), c.Elapsed()+RestoreReserve+20*time.Second, start, finish)
+			require.EqualError(t, err, "clock-lease-expired", "MUTATION: restoration-reference-slots")
+			slots, elapsed := 33, 3200*time.Millisecond
+			if mode == "full-attempt" {
+				slots, elapsed = 3, 3800*time.Millisecond
+			}
+			require.Equal(t, slots, calls, "MUTATION: restoration-reference-slots")
+			require.Equal(t, elapsed, c.Elapsed()-staleReply, "MUTATION: restoration-reference-slots")
+		})
+	}
 }

@@ -335,16 +335,16 @@ func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, st
 		if err == nil || err.Error() != "clock-lease-expired" {
 			return err
 		}
-		// Bound re-reads to 2P after the first expired reply; never reset this
-		// window on another stale reply or extend the original reserve cutoff.
+		// Bound re-reads to one lease length (5P) after the first expired reply.
+		// Never reset this window or extend the original reserve cutoff.
 		if !retrying {
-			if limit := completed + 2*g.session.timing.poll; limit < end {
+			if limit := completed + time.Duration(clocks.LeaseValidityPolls)*g.session.timing.poll; limit < end {
 				end, cutoffStage = limit, "refresh-window-exhausted"
 			}
 			retrying = true
 		}
 		// One tenth of P (100 ms at reference timing) spaces observations and
-		// leaves proof-processing headroom beside the existing read budget in 2P.
+		// leaves proof-processing headroom beside the existing read budget.
 		spacing := g.session.timing.poll / 10
 		if end-g.clock.Elapsed() < spacing+g.session.timing.leaseAttempt() {
 			return &restorationError{err, cutoffStage}

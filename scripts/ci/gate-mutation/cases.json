@@ -7227,7 +7227,7 @@
     "ID": "restoration-poll-cap-removed",
     "File": "internal/operatorgates/lease_guard.go",
     "Function": "coverRestoration",
-    "Old": "limit := completed + 2*g.session.timing.poll",
+    "Old": "limit := completed + time.Duration(clocks.LeaseValidityPolls)*g.session.timing.poll",
     "New": "limit := end",
     "Test": "TestRestorationRetryPollCap/persistent",
     "Marker": "MUTATION: restoration-poll-cap",
@@ -7261,6 +7261,16 @@
     "New": "spacing := g.session.timing.poll / 5",
     "Test": "TestRestorationRetryLeavesProofHeadroom",
     "Marker": "MUTATION: restoration-retry-headroom",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-lease-window-shortened",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "limit := completed + time.Duration(clocks.LeaseValidityPolls)*g.session.timing.poll",
+    "New": "limit := completed + 2*g.session.timing.poll",
+    "Test": "TestRestorationReferenceFreshAtTwoPointFiveSeconds",
+    "Marker": "MUTATION: restoration-lease-window",
     "Package": "./internal/operatorgates"
   }
 ]

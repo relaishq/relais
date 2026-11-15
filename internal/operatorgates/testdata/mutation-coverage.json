@@ -682,7 +682,8 @@
     "restoration-poll-cap-removed",
     "restoration-next-basis-lost",
     "restoration-stage-snapshot-lost",
-    "restoration-retry-headroom-lost"
+    "restoration-retry-headroom-lost",
+    "restoration-lease-window-shortened"
   ],
   "killed": [
     {
@@ -5635,6 +5636,12 @@
     {
       "id": "restoration-retry-headroom-lost",
       "test": "TestRestorationRetryLeavesProofHeadroom",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-lease-window-shortened",
+      "test": "TestRestorationReferenceFreshAtTwoPointFiveSeconds",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }
