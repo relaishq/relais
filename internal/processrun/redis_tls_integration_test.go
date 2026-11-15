@@ -23,7 +23,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/storage"
-	"github.com/relaishq/relais/pkg/util/bootstrap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -160,7 +159,7 @@ func TestRedisTLSACLIntegration(t *testing.T) {
 			t.Setenv("RELAIS_REDIS_PREFIX", "tls-test:")
 			var config StoreConfig
 			config.ConnectionFlags(flag.NewFlagSet("tls-redis", flag.ContinueOnError))
-			for _, kind := range []string{"session", "frames", "owners", "storage", "bootstrap"} {
+			for _, kind := range []string{"session", "frames", "owners", "storage"} {
 				t.Run(kind, func(t *testing.T) {
 					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					defer cancel()
@@ -181,18 +180,6 @@ func TestRedisTLSACLIntegration(t *testing.T) {
 						}
 					case "owners":
 						client, e := config.OpenOwners(ctx)
-						err = e
-						if client != nil {
-							closeClient = client.Close
-						}
-					case "bootstrap":
-						t.Setenv("RELAIS_STORAGE_TYPE", "redis")
-						t.Setenv("RELAIS_STORAGE_REDIS_URL", addr)
-						t.Setenv("RELAIS_STORAGE_REDIS_PASSWORD", password)
-						// Production process settings must not switch the legacy endpoint or password.
-						t.Setenv("RELAIS_REDIS_ADDR", "must-not-dial.example.invalid:1")
-						t.Setenv("RELAIS_REDIS_PASSWORD", "")
-						_, client, _, e := bootstrap.Init(ctx, "tls-test", "test")
 						err = e
 						if client != nil {
 							closeClient = client.Close

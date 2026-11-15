@@ -69,8 +69,8 @@ Tune thresholds based on expected traffic patterns and claim behavior.
 ## Troubleshooting
 
 - Missing metrics:
-  - Verify Relais Streams + Groups config (environment variables in [the legacy pipeline guide](../legacy/plugin-pipeline.md)).
-  - Confirm Prometheus is scraping the core’s `/metrics` endpoint.
+  - Verify the embedding application enables Streams and consumer groups on `storage.RedisStorage`; the live-call binaries do not enable these frame-storage features.
+  - Confirm Prometheus is scraping the embedding application’s `/metrics` endpoint.
   - Check Relais logs for storage/Redis errors.
 - Grafana panels empty:
   - Ensure the selected time range covers recent activity.
