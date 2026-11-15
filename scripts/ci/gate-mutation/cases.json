@@ -7172,5 +7172,15 @@
     "Test": "TestBoundaryMoveRowOnceWithExcludedTakeover",
     "Marker": "MUTATION: boundary-move-row-twice",
     "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-requires-both-label-only",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "\tsettled := false",
+    "New": "\tif m.Kind == \"move\" && !onlyLabelDiffers(m.Measurement.FirstContentVerdict) {\n\t\treturn\n\t}\n\tsettled := false",
+    "Test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
+    "Marker": "MUTATION: boundary-move-single-verdict",
+    "Package": "./internal/operatorevidence/judge-src"
   }
 ]

@@ -189,3 +189,22 @@ func TestBoundaryMoveRowOnceWithExcludedTakeover(t *testing.T) {
 		t.Fatalf("MUTATION: boundary-move-row-twice: %s %+v", got.Status, got.BoundaryMetrics)
 	}
 }
+
+// A move whose first decoded content passes as usual can still have a
+// label-only first new content. That verdict alone settles the move, with one
+// row.
+func TestBoundaryMoveSettlesOneLabelOnlyVerdict(t *testing.T) {
+	got := boundaryMoveRun(t, func(m *callharness.MoveReport) {
+		boundaryMove(m)
+		v := &m.Measurement
+		v.FirstContentVerdict = callharness.MetricVerdict{Trusted: true}
+		v.Reasons = nil
+		for _, reason := range v.FirstNewContentVerdict.Reasons {
+			v.Reasons = append(v.Reasons, "first new content: "+reason)
+		}
+		m.Distributed.Causes = append([]string{}, v.Reasons...)
+	})
+	if got.Status != "passed" || got.QualifiedMoves != 20 || got.InconclusiveMetrics != 0 || !reflect.DeepEqual(got.BoundaryMetrics, boundaryMoveRows[1:]) {
+		t.Fatalf("MUTATION: boundary-move-single-verdict: %s moves=%d rows=%+v", got.Status, got.QualifiedMoves, got.BoundaryMetrics)
+	}
+}

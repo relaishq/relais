@@ -673,7 +673,8 @@
     "boundary-move-window-cause-ignored",
     "boundary-move-failure-cleared",
     "boundary-rows-listed-twice",
-    "boundary-move-row-counted-back-twice"
+    "boundary-move-row-counted-back-twice",
+    "boundary-move-requires-both-label-only"
   ],
   "killed": [
     {
@@ -5572,6 +5573,12 @@
     {
       "id": "boundary-move-row-counted-back-twice",
       "test": "TestBoundaryMoveRowOnceWithExcludedTakeover",
+      "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "boundary-move-requires-both-label-only",
+      "test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
       "package": "./internal/operatorevidence/judge-src",
       "evidence": "killed"
     }
