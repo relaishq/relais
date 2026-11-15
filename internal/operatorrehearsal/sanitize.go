@@ -107,6 +107,10 @@ func (r *Report) sanitize() {
 		r.CPU.CallerAffinities[i] = publicCPUList(s)
 	}
 	r.CPU.Calibration = cleanCalibration(r.CPU.Calibration)
+	r.CPU.PhaseCauseScope = ""
+	if len(r.CPU.Phases) > 0 {
+		r.CPU.PhaseCauseScope = "receipt-free-calibration"
+	}
 	r.CPU.Phases = append([]Calibration{}, r.CPU.Phases...)
 	for i, c := range r.CPU.Phases {
 		r.CPU.Phases[i] = cleanCalibration(c)

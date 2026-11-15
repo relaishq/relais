@@ -371,3 +371,15 @@ func TestSignalDiagnosticsAreRecordedOnly(t *testing.T) {
 		require.Equal(t, q, e.Qualification())
 	}
 }
+
+func TestRestorationStageSnapshot(t *testing.T) {
+	s, _ := coverageFixtureSession(t)
+	s.clockMissingIntervals = map[string]observe.CoverageBreak{"shared": {Kind: "clock-lease-expired"}}
+	s.clockMissingIntervalStages = map[string]string{"shared": "refresh-window-exhausted"}
+	snapshot := s.coverageSnapshot(clocks.Bounds{})
+	require.Equal(t, "refresh-window-exhausted", snapshot.Public().MissingIntervalStages["shared"], "MUTATION: restoration-stage-snapshot")
+	snapshot.MissingIntervalStages["shared"] = "transport-unknown"
+	require.Equal(t, "refresh-window-exhausted", s.clockMissingIntervalStages["shared"])
+	s.noteClockLoss(clocks.Evidence{Clocks: map[string]clocks.Sample{"shared": {TrackingLog: &clocks.TrackingLog{Rows: []clocks.TrackingRow{{UnixSeconds: 1793930200}}}}}})
+	require.NotContains(t, s.clockMissingIntervalStages, "shared", "a log-loss receipt must not retain a restoration stage")
+}

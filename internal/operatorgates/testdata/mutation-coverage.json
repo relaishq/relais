@@ -674,7 +674,16 @@
     "boundary-move-failure-cleared",
     "boundary-rows-listed-twice",
     "boundary-move-row-counted-back-twice",
-    "boundary-move-requires-both-label-only"
+    "boundary-move-requires-both-label-only",
+    "restoration-expiry-retry-skipped",
+    "restoration-late-read-covered",
+    "restoration-retry-rows-lost",
+    "restoration-proof-stage-lost",
+    "restoration-poll-cap-removed",
+    "restoration-next-basis-lost",
+    "restoration-stage-snapshot-lost",
+    "restoration-retry-headroom-lost",
+    "restoration-lease-window-shortened"
   ],
   "killed": [
     {
@@ -5580,6 +5589,60 @@
       "id": "boundary-move-requires-both-label-only",
       "test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
       "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-expiry-retry-skipped",
+      "test": "TestRestorationExpiredThenFresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-late-read-covered",
+      "test": "TestRestorationRetryBudget/read-over-cutoff",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-retry-rows-lost",
+      "test": "TestRestorationRetryRetainsHistory/bound",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-proof-stage-lost",
+      "test": "TestRollbackContinuousLeaseCoverage/gap",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-poll-cap-removed",
+      "test": "TestRestorationRetryPollCap/persistent",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-next-basis-lost",
+      "test": "TestRestorationEmptyRetryKeepsNextBasis/gap=false",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-stage-snapshot-lost",
+      "test": "TestRestorationStageSnapshot",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-retry-headroom-lost",
+      "test": "TestRestorationRetryLeavesProofHeadroom",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-lease-window-shortened",
+      "test": "TestRestorationReferenceFreshAtTwoPointFiveSeconds",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

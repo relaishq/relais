@@ -23,24 +23,25 @@ func FixedCoverageBounds() Bounds {
 // CoverageEvidence belongs to one run, not individual phases. Its evaluated
 // results qualify judge windows, without supplying admission evidence.
 type CoverageEvidence struct {
-	Falsified            bool                             `json:"falsified"`
-	Version              int                              `json:"version"`
-	FrontendSlot         string                           `json:"frontendSlot"`
-	ControlSlot          string                           `json:"controlSlot"`
-	Bounds               Bounds                           `json:"bounds"`
-	ClockReceiptSHA256   string                           `json:"clockReceiptSha256,omitempty"`
-	Binding              *observe.ClockBinding            `json:"binding,omitempty"`
-	DrainAttempts        []CoverageAttempt                `json:"drainAttempts"`
-	OmittedDrainAttempts int                              `json:"omittedDrainAttempts"`
-	OmittedBrackets      int                              `json:"omittedBrackets"`
-	MissingIntervals     map[string]observe.CoverageBreak `json:"missingIntervals"`
-	MediaTimeOffsetNS    int64                            `json:"mediaTimeOffsetNs"`
-	Attempts             []CoverageAttempt                `json:"attempts"`
-	OmittedAttempts      int                              `json:"omittedAttempts"`
-	KillBrackets         []observe.CoverageBracket        `json:"killBrackets"`
-	Windows              []observe.CoverageWindow         `json:"windows"`
-	Results              []observe.CoverageResult         `json:"results"`
-	DrainComplete        bool                             `json:"drainComplete"`
+	MissingIntervalStages map[string]string                `json:"missingIntervalStages,omitempty"`
+	Falsified             bool                             `json:"falsified"`
+	Version               int                              `json:"version"`
+	FrontendSlot          string                           `json:"frontendSlot"`
+	ControlSlot           string                           `json:"controlSlot"`
+	Bounds                Bounds                           `json:"bounds"`
+	ClockReceiptSHA256    string                           `json:"clockReceiptSha256,omitempty"`
+	Binding               *observe.ClockBinding            `json:"binding,omitempty"`
+	DrainAttempts         []CoverageAttempt                `json:"drainAttempts"`
+	OmittedDrainAttempts  int                              `json:"omittedDrainAttempts"`
+	OmittedBrackets       int                              `json:"omittedBrackets"`
+	MissingIntervals      map[string]observe.CoverageBreak `json:"missingIntervals"`
+	MediaTimeOffsetNS     int64                            `json:"mediaTimeOffsetNs"`
+	Attempts              []CoverageAttempt                `json:"attempts"`
+	OmittedAttempts       int                              `json:"omittedAttempts"`
+	KillBrackets          []observe.CoverageBracket        `json:"killBrackets"`
+	Windows               []observe.CoverageWindow         `json:"windows"`
+	Results               []observe.CoverageResult         `json:"results"`
+	DrainComplete         bool                             `json:"drainComplete"`
 }
 
 // CoverageAttempt keeps only retrospective numeric tracking data. Opaque
@@ -107,6 +108,7 @@ func (e CoverageEvidence) Public() CoverageEvidence {
 	e.Attempts = publicAttempts(e.Attempts)
 	e.DrainAttempts = publicAttempts(e.DrainAttempts)
 	missing := map[string]observe.CoverageBreak{}
+	stages := map[string]string{}
 	for _, slot := range []string{"relay", "shared", "w1", "w2"} {
 		if b, ok := e.MissingIntervals[slot]; ok {
 			switch b.Kind {
@@ -115,10 +117,20 @@ func (e CoverageEvidence) Public() CoverageEvidence {
 			default:
 				b.Kind = "log-loss"
 			}
+			stage := e.MissingIntervalStages[slot]
+			switch stage {
+			case "", "missing-guard", "cached-lease", "missing-row", "transport-unknown", "reserve-exhausted", "refresh-window-exhausted", "endpoint-evidence", "retry-wait", "endpoint-lease", "expired-reference", "old-row-after-event", "endpoint-before-event-end", "row-regression", "continuity-bound", "continuity-break":
+			default:
+				stage = "unavailable"
+			}
 			missing[slot] = b
+			if stage != "" {
+				stages[slot] = stage
+			}
 		}
 	}
 	e.MissingIntervals = missing
+	e.MissingIntervalStages = stages
 
 	e.KillBrackets = append([]observe.CoverageBracket{}, e.KillBrackets...)
 	for i := range e.KillBrackets {

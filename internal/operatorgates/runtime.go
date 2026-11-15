@@ -362,6 +362,14 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			if isLeaseRefusal(coverageErr) {
 				b.Kind = coverageErr.Error()
 			}
+			if r.Session.clockMissingIntervalStages == nil {
+				r.Session.clockMissingIntervalStages = map[string]string{}
+			}
+			r.Session.clockMissingIntervalStages[front] = "missing-guard"
+			var failure *restorationError
+			if errors.As(coverageErr, &failure) {
+				r.Session.clockMissingIntervalStages[front] = failure.stage
+			}
 			r.Session.clockMissingIntervals[front] = b
 			r.Session.mu.Unlock()
 		}
