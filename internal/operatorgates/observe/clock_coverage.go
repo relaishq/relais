@@ -22,7 +22,6 @@ type CoverageBreak struct {
 	FromUnixSeconds int64  `json:"fromUnixSeconds"`
 	UnixSeconds     int64  `json:"unixSeconds"`
 	Kind            string `json:"kind"`
-	ProofStage      string `json:"proofStage,omitempty"`
 }
 type CoverageTimeline struct {
 	Rows         []CoverageRow   `json:"rows"`

@@ -199,9 +199,9 @@ func TestRollbackContinuousLeaseCoverage(t *testing.T) {
 				case "missing", "zero-failed", "mixed-failed", "zero-start", "zero-end", "reversed-move":
 					stage = "cached-lease"
 				}
-				require.Equal(t, stage, missing.ProofStage, "MUTATION: restoration-stage-recording")
-				public := (clocks.CoverageEvidence{MissingIntervals: r.Session.clockMissingIntervals}).Public()
-				require.Equal(t, stage, public.MissingIntervals["shared"].ProofStage, "public receipt must retain the proof stage")
+				require.Equal(t, stage, r.Session.clockMissingIntervalStages["shared"], "MUTATION: restoration-stage-recording")
+				public := (clocks.CoverageEvidence{MissingIntervals: r.Session.clockMissingIntervals, MissingIntervalStages: r.Session.clockMissingIntervalStages}).Public()
+				require.Equal(t, stage, public.MissingIntervalStages["shared"], "public receipt must retain the proof stage")
 				kind := "clock-lease-missing"
 				switch mode {
 				case "expired", "no-budget", "restore-budget", "context-budget":

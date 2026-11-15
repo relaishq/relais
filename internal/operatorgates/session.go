@@ -59,28 +59,29 @@ type Session struct {
 	uncertainties   []operator.Uncertainty
 	uncertaintySink func(operator.Uncertainty)
 
-	leaseReadObserved         func(LeaseRead, time.Duration)
-	hostReadObserved          func(HostReadTiming)
-	lastHostReadDone          time.Duration
-	liveLeaseGuard            *LeaseGuard
-	clockArtifacts            operator.ClockBindingArtifacts
-	clockBinding              *observe.ClockBinding
-	clockCoverageFalsified    bool
-	clockAttempts             []clocks.Evidence
-	clockAttemptsOmitted      int
-	clockDrainAttempts        []clocks.Evidence
-	clockDrainAttemptsOmitted int
-	clockBracketsOmitted      int
-	clockMissingIntervals     map[string]observe.CoverageBreak
-	clockBrackets             []observe.CoverageBracket
-	clockCursors              map[string]json.RawMessage
-	clockProbeFile            string
-	clockProbeRefresh         sync.Mutex
-	clockProbeCursor          json.RawMessage
-	clockProbeHistory         clocks.ProbeHistory
-	inventoryComponents       map[string][]string
-	observationFailureSink    func(string, string, error)
-	timing                    timingBudget
+	leaseReadObserved          func(LeaseRead, time.Duration)
+	hostReadObserved           func(HostReadTiming)
+	lastHostReadDone           time.Duration
+	liveLeaseGuard             *LeaseGuard
+	clockArtifacts             operator.ClockBindingArtifacts
+	clockBinding               *observe.ClockBinding
+	clockCoverageFalsified     bool
+	clockAttempts              []clocks.Evidence
+	clockAttemptsOmitted       int
+	clockDrainAttempts         []clocks.Evidence
+	clockDrainAttemptsOmitted  int
+	clockBracketsOmitted       int
+	clockMissingIntervals      map[string]observe.CoverageBreak
+	clockMissingIntervalStages map[string]string
+	clockBrackets              []observe.CoverageBracket
+	clockCursors               map[string]json.RawMessage
+	clockProbeFile             string
+	clockProbeRefresh          sync.Mutex
+	clockProbeCursor           json.RawMessage
+	clockProbeHistory          clocks.ProbeHistory
+	inventoryComponents        map[string][]string
+	observationFailureSink     func(string, string, error)
+	timing                     timingBudget
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {

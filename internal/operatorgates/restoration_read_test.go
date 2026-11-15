@@ -101,7 +101,7 @@ func TestRestorationExpiredThenFresh(t *testing.T) {
 	err := g.coverRestoration(context.Background(), c.Elapsed()+RestoreReserve+10*time.Second, start, finish)
 	require.NoError(t, err, "MUTATION: restoration-fresh-retry")
 	require.Equal(t, 2, calls)
-	require.Equal(t, 1400*time.Millisecond, c.Elapsed()-began, "retry spacing must follow the two-second poll")
+	require.Equal(t, 1200*time.Millisecond, c.Elapsed()-began, "retry spacing must follow the two-second poll")
 }
 
 func TestRestorationRetryRetainsHistory(t *testing.T) {
@@ -152,10 +152,11 @@ func TestRestorationRetryBudget(t *testing.T) {
 	for _, mode := range []string{"persistent-expiry", "transport-unknown", "read-over-cutoff", "pause-over-cutoff", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			g, c, endpoint := restorationReadFixture(t)
+			g.session.timing.read = 300 * time.Millisecond
 			now := c.Elapsed()
 			start, finish := c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond)
-			// Reference attempt is 1.8 s; only three starts fit at 0, 0.2, 0.4 s.
-			cutoff := now + 2200*time.Millisecond
+			// A 1.4 s attempt fits at 0, 0.1, 0.2 s before this earlier cutoff.
+			cutoff := now + 1600*time.Millisecond
 			calls, pauses := 0, 0
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -174,7 +175,7 @@ func TestRestorationRetryBudget(t *testing.T) {
 			}
 			g.pause = func(_ context.Context, d time.Duration) error {
 				pauses++
-				require.Equal(t, 200*time.Millisecond, d, "spacing follows the configured poll period")
+				require.Equal(t, 100*time.Millisecond, d, "spacing follows the configured poll period")
 				c.Advance(d)
 				if mode == "pause-over-cutoff" {
 					c.Advance(3 * time.Second)
@@ -206,4 +207,101 @@ func TestRestorationRetryBudget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRestorationRetryPollCap(t *testing.T) {
+	for _, mode := range []string{"persistent", "late-fresh"} {
+		t.Run(mode, func(t *testing.T) {
+			g, c, endpoint := restorationReadFixture(t)
+			g.session.timing.read = 50 * time.Millisecond
+			began := c.Elapsed()
+			start, finish := c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond)
+			cap := began + 2100*time.Millisecond // First expired reply at +100 ms, then 2P.
+			calls := 0
+			g.read = func(_ context.Context, end time.Duration) (LeaseRead, error) {
+				calls++
+				if calls > 1 {
+					require.Equal(t, cap, end, "MUTATION: restoration-poll-cap")
+				}
+				c.Advance(100 * time.Millisecond)
+				if calls > 1 && mode == "late-fresh" {
+					c.Advance(2 * time.Second)
+					return endpoint(201, 202, false), nil
+				}
+				return endpoint(1, 200, true), nil
+			}
+			err := g.coverRestoration(context.Background(), began+RestoreReserve+10*time.Second, start, finish)
+			require.EqualError(t, err, "clock-lease-expired", "MUTATION: restoration-poll-cap")
+			var failure *restorationError
+			require.ErrorAs(t, err, &failure)
+			require.Equal(t, "refresh-window-exhausted", failure.stage, "MUTATION: restoration-poll-cap")
+			reads := 9
+			if mode == "late-fresh" {
+				reads = 2
+			}
+			require.Equal(t, reads, calls, "MUTATION: restoration-poll-cap")
+		})
+	}
+}
+
+func TestRestorationEmptyRetryKeepsNextBasis(t *testing.T) {
+	for _, gap := range []bool{false, true} {
+		t.Run(fmt.Sprint("gap=", gap), func(t *testing.T) {
+			g, c, endpoint := restorationReadFixture(t)
+			calls := 0
+			g.read = func(context.Context, time.Duration) (LeaseRead, error) {
+				calls++
+				switch calls {
+				case 1:
+					return endpoint(1, 200, true), nil
+				case 2:
+					c.Advance(time.Second)
+					return endpoint(1, 0, false), nil
+				default:
+					if gap {
+						return endpoint(300, 301, false), nil
+					}
+					return endpoint(201, 207, false), nil
+				}
+			}
+			cover := func() error {
+				return g.coverRestoration(context.Background(), c.Elapsed()+RestoreReserve+10*time.Second, c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond))
+			}
+			require.NoError(t, cover())
+			delay := 6 * time.Second
+			if gap {
+				delay = 100 * time.Second
+			}
+			c.Advance(delay)
+			err := cover()
+			if gap {
+				require.EqualError(t, err, "clock-lease-missing", "MUTATION: restoration-next-basis")
+			} else {
+				require.NoError(t, err, "MUTATION: restoration-next-basis")
+			}
+			require.Equal(t, 3, calls, "MUTATION: restoration-next-basis")
+		})
+	}
+}
+
+func TestRestorationRetryLeavesProofHeadroom(t *testing.T) {
+	g, c, endpoint := restorationReadFixture(t)
+	start, finish := c.Wall().Add(-100*time.Millisecond), c.Wall().Add(-90*time.Millisecond)
+	calls := 0
+	g.read = func(context.Context, time.Duration) (LeaseRead, error) {
+		calls++
+		if calls == 1 {
+			return endpoint(1, 200, true), nil
+		}
+		c.Advance(time.Second)
+		return endpoint(201, 201, false), nil
+	}
+	g.restorationReadObserved = func(LeaseRead, time.Duration, time.Duration) {
+		if calls == 1 {
+			c.Advance(25 * time.Millisecond)
+		}
+	}
+	err := g.coverRestoration(context.Background(), c.Elapsed()+RestoreReserve+10*time.Second, start, finish)
+	require.NoError(t, err, "MUTATION: restoration-retry-headroom")
+	require.Equal(t, 2, calls, "MUTATION: restoration-retry-headroom")
 }

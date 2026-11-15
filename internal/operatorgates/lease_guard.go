@@ -288,17 +288,20 @@ func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, st
 		end = min(end, g.clock.Elapsed()+time.Until(deadline)-RestoreReserve)
 	}
 	history := clocks.Evidence{Clocks: map[string]clocks.Sample{}}
+	retrying := false
+	cutoffStage := "reserve-exhausted"
 	for {
 		started := g.clock.Elapsed()
 		read, err := g.readAttempt(ctx, end)
 		accepted := g.accept(read)
+		completed := g.clock.Elapsed()
 		if g.restorationReadObserved != nil {
-			g.restorationReadObserved(read, started, g.clock.Elapsed())
+			g.restorationReadObserved(read, started, completed)
 		}
 		if err != nil {
 			stage := "transport-unknown"
 			if end-started < g.session.timing.leaseAttempt() {
-				stage = "reserve-exhausted"
+				stage = cutoffStage
 			}
 			return &restorationError{err, stage}
 		} // Unknown transport never triggers another read.
@@ -306,7 +309,7 @@ func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, st
 			return &restorationError{accepted, "endpoint-evidence"}
 		}
 		if g.clock.Elapsed() >= end {
-			return &restorationError{fault("clock-lease-expired"), "reserve-exhausted"}
+			return &restorationError{fault("clock-lease-expired"), cutoffStage}
 		}
 		// Host cursors consume each delta, even when its endpoint lease is expired.
 		// Keep every row and break, with the latest endpoint, for the original proof.
@@ -320,14 +323,31 @@ func (g *LeaseGuard) coverRestoration(ctx context.Context, end time.Duration, st
 			history.Clocks[slot] = sample
 		}
 		err = g.restorationProof(before, LeaseRead{Evidence: history}, start, finish)
+		if err == nil {
+			// A successful proof retains the next restoration's basis even when the
+			// final delta was empty. Unproved history never replaces that basis.
+			g.mu.Lock()
+			for slot, sample := range history.Clocks {
+				g.samples[slot] = sample
+			}
+			g.mu.Unlock()
+		}
 		if err == nil || err.Error() != "clock-lease-expired" {
 			return err
 		}
-		// One fifth of the existing host poll period (200 ms at reference timing)
-		// spaces fresh observations without adding a deadline or changing validity.
-		spacing := g.session.timing.poll / 5
+		// Bound re-reads to 2P after the first expired reply; never reset this
+		// window on another stale reply or extend the original reserve cutoff.
+		if !retrying {
+			if limit := completed + 2*g.session.timing.poll; limit < end {
+				end, cutoffStage = limit, "refresh-window-exhausted"
+			}
+			retrying = true
+		}
+		// One tenth of P (100 ms at reference timing) spaces observations and
+		// leaves proof-processing headroom beside the existing read budget in 2P.
+		spacing := g.session.timing.poll / 10
 		if end-g.clock.Elapsed() < spacing+g.session.timing.leaseAttempt() {
-			return &restorationError{err, "reserve-exhausted"}
+			return &restorationError{err, cutoffStage}
 		}
 		if err := g.pause(ctx, spacing); err != nil {
 			return &restorationError{err, "retry-wait"}

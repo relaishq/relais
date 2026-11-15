@@ -7217,10 +7217,50 @@
     "ID": "restoration-proof-stage-lost",
     "File": "internal/operatorgates/runtime.go",
     "Function": "step",
-    "Old": "b.ProofStage = failure.stage",
-    "New": "b.ProofStage = \"\"",
+    "Old": "r.Session.clockMissingIntervalStages[front] = failure.stage",
+    "New": "r.Session.clockMissingIntervalStages[front] = \"\"",
     "Test": "TestRollbackContinuousLeaseCoverage/gap",
     "Marker": "MUTATION: restoration-stage-recording",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-poll-cap-removed",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "limit := completed + 2*g.session.timing.poll",
+    "New": "limit := end",
+    "Test": "TestRestorationRetryPollCap/persistent",
+    "Marker": "MUTATION: restoration-poll-cap",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-next-basis-lost",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "g.samples[slot] = sample",
+    "New": "_ = slot; _ = sample",
+    "Test": "TestRestorationEmptyRetryKeepsNextBasis/gap=false",
+    "Marker": "MUTATION: restoration-next-basis",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-stage-snapshot-lost",
+    "File": "internal/operatorgates/clock_coverage.go",
+    "Function": "coverageSnapshot",
+    "Old": "MissingIntervalStages: stages",
+    "New": "MissingIntervalStages: nil",
+    "Test": "TestRestorationStageSnapshot",
+    "Marker": "MUTATION: restoration-stage-snapshot",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-retry-headroom-lost",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "spacing := g.session.timing.poll / 10",
+    "New": "spacing := g.session.timing.poll / 5",
+    "Test": "TestRestorationRetryLeavesProofHeadroom",
+    "Marker": "MUTATION: restoration-retry-headroom",
     "Package": "./internal/operatorgates"
   }
 ]

@@ -39,7 +39,8 @@ func TestCoveragePublicLeaseCause(t *testing.T) {
 		if kind == "private-clock-source" {
 			stage = "private-proof-stage"
 		}
-		e.MissingIntervals = map[string]observe.CoverageBreak{"shared": {FromUnixSeconds: 1793930010, UnixSeconds: 1793930010, Kind: kind, ProofStage: stage}}
+		e.MissingIntervals = map[string]observe.CoverageBreak{"shared": {FromUnixSeconds: 1793930010, UnixSeconds: 1793930010, Kind: kind}}
+		e.MissingIntervalStages = map[string]string{"shared": stage}
 		raw, err := json.Marshal(e)
 		if err != nil {
 			t.Fatal(err)
@@ -61,7 +62,7 @@ func TestCoveragePublicLeaseCause(t *testing.T) {
 			}
 			stage = "unavailable"
 		}
-		if decoded.MissingIntervals["shared"].ProofStage != stage {
+		if decoded.MissingIntervalStages["shared"] != stage {
 			t.Fatal("proof stage lost from JSON receipt", decoded)
 		}
 		if decoded.MissingIntervals["shared"].Kind != want || len(decoded.Results) != 1 || !slices.Equal(decoded.Results[0].Causes, []string{cause}) {
@@ -113,5 +114,29 @@ func TestSignalDiagnosticsPublicBytes(t *testing.T) {
 	stripped, err := json.Marshal(public)
 	if err != nil || !bytes.Equal(before, stripped) {
 		t.Fatal("existing report bytes changed")
+	}
+}
+
+func TestCoverageProofStagesOutsideDecoder(t *testing.T) {
+	if reflect.TypeFor[observe.CoverageBreak]().NumField() != 3 {
+		t.Fatal("MUTATION: restoration-stage-outside-decoder: decoder type changed")
+	}
+	e := CoverageEvidence{MissingIntervals: map[string]observe.CoverageBreak{"shared": {Kind: "clock-lease-missing"}}, MissingIntervalStages: map[string]string{"shared": "missing-row", "relay": "missing-row", "private-source": "private-proof"}}
+	raw, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		MissingIntervals      map[string]map[string]json.RawMessage `json:"missingIntervals"`
+		MissingIntervalStages map[string]string                     `json:"missingIntervalStages"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := wire.MissingIntervals["shared"]["proofStage"]; ok {
+		t.Fatal("MUTATION: restoration-stage-outside-decoder: decoder receipt changed")
+	}
+	if len(wire.MissingIntervalStages) != 1 || wire.MissingIntervalStages["shared"] != "missing-row" {
+		t.Fatal("MUTATION: restoration-stage-outside-decoder: sibling stage missing")
 	}
 }
