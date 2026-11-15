@@ -285,9 +285,10 @@ func (p *Plane) decisionCAS(ctx context.Context, id string, at sessionstore.Rela
 		}
 	}
 	to.Commit = from.Commit
+	written := time.Now()
 	err := store.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
 	if err == nil {
-		p.recordRelayWrite(id, at, from, to)
+		p.recordRelayWrite(id, at, from, to, written)
 		return nil
 	}
 	if errors.Is(err, sessionstore.ErrRelayConflict) || errors.Is(err, sessionstore.ErrRelayTransition) || errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrRelayConfirmationInvalid) || errors.Is(err, sessionstore.ErrRelayAttemptExpired) || errors.Is(err, sessionstore.ErrRelayTooEarly) {
@@ -295,7 +296,8 @@ func (p *Plane) decisionCAS(ctx context.Context, id string, at sessionstore.Rela
 	}
 	gotA, got, e := store.RelayConfirmation(ctx, id)
 	if e == nil && gotA == at && sameRelayRecord(got, to) {
-		p.recordRelayWrite(id, at, from, to)
+		// Metrics count only acknowledged writes: an identical record may be
+		// another writer's, so a proven read-back is not counted.
 		return nil
 	}
 	return err

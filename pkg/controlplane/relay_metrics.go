@@ -77,17 +77,19 @@ func (m *relayMetrics) event(slot, event string) { m.changes.WithLabelValues(slo
 
 // relayTiming is this control's own observation of a call's current attempt.
 // Times saved by another control are never used: they come from another
-// host's clock.
+// host's clock. Hooks can run out of order (a delayed switch reply after the
+// confirmation), so the confirmation is timed once both times are known.
 type relayTiming struct {
-	generation        uint64
-	started, switched time.Time
+	generation                   uint64
+	started, switched, confirmed time.Time
+	timed                        bool
 }
 
-// recordRelayWrite records the events that one proven confirmation write
-// decided. Only the writer of a transition records it, so a later read of the
-// saved state (a retry, a replay after restart) records nothing.
-func (p *Plane) recordRelayWrite(id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation) {
-	now := time.Now()
+// recordRelayWrite records the events that one acknowledged confirmation
+// write decided; written is when that write was sent. Only the writer of a
+// transition records it, so a later read of the saved state (a retry, a
+// replay after restart) records nothing.
+func (p *Plane) recordRelayWrite(id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, written time.Time) {
 	m := p.relayMetrics
 	if ep := to.Episode; ep != nil && ep.Outcome == sessionstore.RelayEpisodeEnded && (from.Episode == nil || from.Episode.Outcome != sessionstore.RelayEpisodeEnded) {
 		slot := at.Slot
@@ -128,18 +130,23 @@ func (p *Plane) recordRelayWrite(id string, at sessionstore.RelayAssignment, fro
 	}
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
+	timing := &c.relayTiming
 	if begun {
-		c.relayTiming = relayTiming{generation: t.Generation, started: now}
-	} else if c.relayTiming.generation != t.Generation {
-		c.relayTiming = relayTiming{generation: t.Generation} // begun by another control
+		*timing = relayTiming{generation: t.Generation, started: written}
+	} else if timing.generation != t.Generation {
+		*timing = relayTiming{generation: t.Generation} // begun by another control
 	}
 	if switched {
-		if !c.relayTiming.started.IsZero() {
-			m.switchTime.WithLabelValues(t.Slot).Observe(now.Sub(c.relayTiming.started).Seconds())
+		timing.switched = written
+		if !timing.started.IsZero() {
+			m.switchTime.WithLabelValues(t.Slot).Observe(max(0, written.Sub(timing.started)).Seconds())
 		}
-		c.relayTiming.switched = now
 	}
-	if confirmed && !c.relayTiming.switched.IsZero() {
-		m.confirmation.WithLabelValues(t.Slot, to.Mode).Observe(now.Sub(c.relayTiming.switched).Seconds())
+	if confirmed {
+		timing.confirmed = written
+	}
+	if !timing.timed && !timing.switched.IsZero() && !timing.confirmed.IsZero() {
+		timing.timed = true
+		m.confirmation.WithLabelValues(t.Slot, to.Mode).Observe(max(0, timing.confirmed.Sub(timing.switched)).Seconds())
 	}
 }

@@ -146,10 +146,14 @@ change metrics (no call or session labels; `slot` is a configured slot ID):
 
 Confirmation events are recorded by the control whose store write makes the
 transition, so a retry or a restarted control that finds the decision saved
-records nothing. A write whose outcome stays unknown is not counted. Times use
-only this control's own clock: a restarted control does not time an attempt
-whose start or switch another control observed. Counters reset when control
-restarts.
+records nothing. Only an acknowledged write counts: a write whose reply is lost
+is not counted, even when a read-back proves the record, because an identical
+record can be another writer's (a rare under-count, never a double count).
+Times are taken when each write is sent, on this control's own clock. A
+confirmation whose write is acknowledged before the switch write's reply is
+still timed once, when that reply arrives. A restarted control does not time an
+attempt whose start or switch another control observed. Counters reset when
+control restarts.
 
 ## Fixed-pool admission and telemetry
 

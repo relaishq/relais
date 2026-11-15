@@ -2,9 +2,11 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,7 +123,7 @@ func TestRecordRelayWriteTransitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := New(&fakeRelay{}, sessionstore.NewMemory())
 			p.relayMetrics.exposeSlot("r2")
-			p.recordRelayWrite("unknown-call", committed, tc.from, tc.to)
+			p.recordRelayWrite("unknown-call", committed, tc.from, tc.to, time.Now())
 			require.Equal(t, tc.want, relayEvents(t, p, "r2"))
 		})
 	}
@@ -131,7 +133,7 @@ func TestRecordRelayWriteTransitions(t *testing.T) {
 	open := sessionstore.RelayConfirmation{Mode: "delivery", Episode: &sessionstore.RelayEpisode{Seq: 1, Token: "e", Outcome: sessionstore.RelayEpisodeOpen}}
 	ended := open
 	ended.Episode = &sessionstore.RelayEpisode{Seq: 1, Token: "e", Outcome: sessionstore.RelayEpisodeEnded}
-	p.recordRelayWrite("unknown-call", sessionstore.RelayAssignment{Slot: "r1"}, open, ended)
+	p.recordRelayWrite("unknown-call", sessionstore.RelayAssignment{Slot: "r1"}, open, ended, time.Now())
 	require.Equal(t, relayEventCounts(0, 0, 0, 0, 0, 0, 1), relayEvents(t, p, "r1"))
 }
 
@@ -185,8 +187,10 @@ func TestRelayMetricsCountRollback(t *testing.T) {
 }
 
 // Failure path: the episode's end is counted once by the control whose write
-// decided it, including a write whose reply was lost but whose read-back
-// proves it. A retry, and a successor control, find it saved and add nothing.
+// was acknowledged. A write whose reply was lost is not counted even when its
+// read-back proves it landed: a read-back cannot tell this writer's write
+// from an identical one by another writer (a rare, accepted under-count).
+// A retry, and a successor control, find the end saved and add nothing.
 func TestRelayMetricsCountFailedEndOnce(t *testing.T) {
 	for _, lose := range []bool{false, true} {
 		t.Run(map[bool]string{false: "acknowledged", true: "reply lost"}[lose], func(t *testing.T) {
@@ -210,7 +214,11 @@ func TestRelayMetricsCountFailedEndOnce(t *testing.T) {
 				require.Equal(t, relayEnded, p.endRelayEpisode(context.Background(), c, token, "relay_change_failed", false))
 				store.lose.Store(false)
 				require.Equal(t, relayEnded, p.endRelayEpisode(context.Background(), c, token, "relay_change_failed", false), "a retry follows the saved end")
-				require.Equal(t, relayEventCounts(0, 0, 0, 0, 0, 0, 1), relayEvents(t, p, "r2"), "the end names the episode's attempt slot")
+				failed := float64(1)
+				if lose {
+					failed = 0
+				}
+				require.Equal(t, relayEventCounts(0, 0, 0, 0, 0, 0, failed), relayEvents(t, p, "r2"), "the end names the episode's attempt slot")
 				require.Equal(t, relayEventCounts(0, 0, 0, 0, 0, 0, 0), relayEvents(t, p, "r1"))
 
 				next := successorPlane(t, store, a.fakeWorker, b)
@@ -304,4 +312,134 @@ func TestRelayMetricsAbsentWithoutRelaySet(t *testing.T) {
 	p := New(&fakeRelay{}, sessionstore.NewMemory())
 	body := planeMetricsBody(p)
 	require.NotContains(t, body, "relais_control_relay_")
+}
+
+// lostConflictStore, while armed, turns a refused confirmation write into an
+// uncertain error, as when a losing writer's conflict reply is lost.
+type lostConflictStore struct {
+	relayStore
+	armed atomic.Bool
+}
+
+func (s *lostConflictStore) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	err := s.relayStore.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+	if s.armed.Load() && errors.Is(err, sessionstore.ErrRelayConflict) {
+		return errors.New("store reply lost")
+	}
+	return err
+}
+
+// Two writers send the same transition from the same read (for example two
+// identical A reports). The winner is acknowledged; the loser's conflict
+// reply is lost and its read-back finds the identical record. The read-back
+// still settles the loser's outcome, but only the acknowledged writer counts.
+func TestRelayMetricsLoserReadBackNotCounted(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, backing sessionstore.Store) {
+		store := &lostConflictStore{relayStore: backing.(relayStore)}
+		p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+		stopRelayRecoveries(t, p)
+		now := time.Now()
+		seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
+			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(time.Minute), StoreDeadline: now.Add(time.Minute)})
+		at, from, err := store.RelayConfirmation(context.Background(), id)
+		require.NoError(t, err)
+		to := from
+		decoded := *from.Attempt
+		decoded.Decoded = []string{"0"}
+		to.Attempt = &decoded
+		store.armed.Store(true)
+		require.NoError(t, p.casRelayConfirmation(context.Background(), id, at, from, to, time.Time{}), "the winner is acknowledged")
+		require.NoError(t, p.casRelayConfirmation(context.Background(), id, at, from, to, time.Time{}), "the loser's read-back still settles its outcome")
+		require.Equal(t, relayEventCounts(0, 0, 0, 1, 0, 0, 0), relayEvents(t, p, "r2"))
+	})
+}
+
+// switchParkStore, while armed, applies the first write that records a
+// switch observation and then holds its reply until released.
+type switchParkStore struct {
+	relayStore
+	armed            atomic.Bool
+	parked, released chan struct{}
+}
+
+func (s *switchParkStore) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	err := s.relayStore.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+	if err == nil && to.Attempt != nil && to.Attempt.Phase == sessionstore.RelayPhaseSwitched && s.armed.CompareAndSwap(true, false) {
+		close(s.parked)
+		<-s.released
+	}
+	return err
+}
+
+// The switch observation commits but its reply is delayed; A then confirms
+// first. The confirmation is still timed once, from the switch observation,
+// when the delayed switch reply arrives.
+func TestRelayMetricsConfirmationBeforeDelayedSwitchReply(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, backing sessionstore.Store) {
+		store := &switchParkStore{relayStore: backing.(relayStore), parked: make(chan struct{}), released: make(chan struct{})}
+		store.armed.Store(true)
+		p, worker, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+		worker.noDelivery.Store(true)
+		server := httptest.NewServer(p.Handler())
+		defer server.Close()
+		done := make(chan error, 1)
+		go func() { done <- p.ChangeRelay(context.Background(), id, "r2") }()
+		waitAttempt(t, store, id, 1)
+		commitPending(t, store, id)
+		select {
+		case <-store.parked:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the switch observation was never written")
+		}
+		require.Equal(t, http.StatusNoContent, postProgress(t, server.URL+"/calls/"+id+"/media-progress", "application/json", `{"generation":1,"decoded_mids":["0"]}`).StatusCode)
+		require.Equal(t, sessionstore.RelayPhaseConfirmed, attemptOf(t, store, id).Attempt.Phase)
+		close(store.released)
+		require.NoError(t, <-done)
+		require.Equal(t, relayEventCounts(1, 1, 0, 1, 1, 0, 0), relayEvents(t, p, "r2"))
+		require.Equal(t, float64(1), switchTimes(t, p, "r2"))
+		require.Equal(t, float64(1), confirmationTimes(t, p, "r2", sessionstore.RelayConfirmDecode))
+	})
+}
+
+// Each attempt is timed once, in either hook order. Later writes for the
+// same confirmed generation (an episode completion) add no sample.
+func TestRelayTimingRecordedOncePerAttempt(t *testing.T) {
+	for _, switchFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "switch reply first", false: "confirmation first"}[switchFirst], func(t *testing.T) {
+			p := New(&fakeRelay{}, sessionstore.NewMemory())
+			p.relayMetrics.exposeSlot("r2")
+			p.rebuildCall(sessionstore.Lease{SessionID: "call"})
+			at := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
+			attempt := func(phase string, decoded []string) sessionstore.RelayConfirmation {
+				return sessionstore.RelayConfirmation{Mode: sessionstore.RelayConfirmDecode, Commit: sessionstore.RelayCommit{Switched: 1},
+					Attempt: &sessionstore.RelayAttempt{Generation: 1, Slot: "r2", Phase: phase, Required: []string{"0"}, Decoded: decoded}}
+			}
+			start := time.Now()
+			p.recordRelayWrite("call", at, sessionstore.RelayConfirmation{Mode: sessionstore.RelayConfirmDecode}, attempt("pending", nil), start)
+			switchWrite := func() {
+				p.recordRelayWrite("call", at, attempt("pending", nil), attempt("switched", nil), start.Add(time.Second))
+			}
+			if switchFirst {
+				switchWrite()
+			}
+			p.recordRelayWrite("call", at, attempt("switched", nil), attempt("confirmed", []string{"0"}), start.Add(3*time.Second))
+			if !switchFirst {
+				require.Zero(t, confirmationTimes(t, p, "r2", sessionstore.RelayConfirmDecode), "not timed before the switch is known")
+				switchWrite()
+			}
+			completed := attempt("confirmed", []string{"0"})
+			completed.Episode = &sessionstore.RelayEpisode{Seq: 1, Outcome: sessionstore.RelayEpisodeCompleted}
+			p.recordRelayWrite("call", at, attempt("confirmed", []string{"0"}), completed, start.Add(4*time.Second))
+			require.Equal(t, float64(1), switchTimes(t, p, "r2"))
+			require.Equal(t, float64(1), confirmationTimes(t, p, "r2", sessionstore.RelayConfirmDecode))
+			var parser expfmt.TextParser
+			families, err := parser.TextToMetricFamilies(strings.NewReader(planeMetricsBody(p)))
+			require.NoError(t, err)
+			for _, m := range families["relais_control_relay_confirmation_seconds"].Metric {
+				if labelsMatch(m, map[string]string{"slot": "r2", "confirmation": "decode"}) {
+					require.InDelta(t, 2.0, m.Histogram.GetSampleSum(), 1e-9, "confirmation minus switch, by send time")
+				}
+			}
+		})
+	}
 }
