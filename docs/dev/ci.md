@@ -19,7 +19,8 @@ race run of `TestRelayUncertainTransferSurvives` with Redis required, and the
 memory timing smoke in parallel jobs. Evidence judge tests run separately: PRs
 use a deterministic required/optional field sample; main/nightly/manual runs use
 full sweeps. Named regressions, pinned-release comparisons and all owned mutants
-run on PRs. The smoke retains 20 planned moves,
+run on PRs; the owned mutants run in their own `gate-mutation` job, in parallel
+with the race tests. The smoke retains 20 planned moves,
 20 hard kills, planned sequence wrap, and the full consent windows. Short mode reduces the
 baseline echo calls to 5 s; some fault scenarios retain their fixed duration.
 It skips `TestPlannedHandoverKeepsConsent` and the Redis-only uncertainty
