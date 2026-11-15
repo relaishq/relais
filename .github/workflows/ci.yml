@@ -113,7 +113,7 @@ jobs:
   # Making it required in GitHub settings is a separate admin decision.
   # always() turns a failed dependency into a failed check, rather than a skip.
   build:
-    needs: [quality, unit-tests, timing-smoke, call-harness, compatibility]
+    needs: [quality, unit-tests, gate-mutation, timing-smoke, call-harness, compatibility]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -122,6 +122,7 @@ jobs:
           COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
+          MUTATION_RESULT: ${{ needs.gate-mutation.result }}
           SMOKE_RESULT: ${{ needs.timing-smoke.result }}
           HARNESS_RESULT: ${{ needs.call-harness.result }}
           EVENT_NAME: ${{ github.event_name }}
@@ -129,6 +130,7 @@ jobs:
           test "$COMPATIBILITY_RESULT" = success
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
+          test "$MUTATION_RESULT" = success
           test "$HARNESS_RESULT" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$SMOKE_RESULT" = success
@@ -185,6 +187,18 @@ jobs:
         env:
           JUDGE_FLAGS: ${{ github.event_name == 'pull_request' && '-short' || '' }}
         run: make test-unit
+
+  # Owned operator gate mutants run beside the race tests, not after them.
+  gate-mutation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
       - name: Kill operator gate mutants
         run: |
           go test -count=1 ./scripts/ci/gate-mutation
