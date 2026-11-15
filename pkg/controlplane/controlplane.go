@@ -127,6 +127,7 @@ type call struct {
 	relayWake      chan struct{}               // guarded by stateMu; wakes the single event stream
 	relayEvent     *RelayEvent                 // guarded by stateMu
 	relayRejected  bool                        // guarded by stateMu; applies only to relayEvent
+	relayTiming    relayTiming                 // guarded by stateMu; this control's own attempt times for metrics
 	intent         *sessionstore.ControlIntent // guarded by mu
 	terminal       bool                        // reads hold mu or the plane registry lock; writes hold both
 	lease          sessionstore.Lease          // guarded by stateMu; last observed placed tenure
@@ -167,6 +168,7 @@ type Plane struct {
 	restart         *restartState
 	inventory       keyInventoryCache
 	metrics         planeMetrics
+	relayMetrics    *relayMetrics
 	mu              sync.Mutex
 	relay           Relay
 	store           sessionstore.Store
@@ -208,6 +210,7 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 		lossesByCause:   make(map[string]uint64),
 		pendingWorkers:  make(map[string]bool),
 		refusals:        map[string]uint64{"no_target": 0, "at_capacity": 0},
+		relayMetrics:    newRelayMetrics(),
 		ttl:             config.LeaseTTL,
 		incomingChanged: make(chan struct{}),
 		workerChanged:   make(chan struct{}),

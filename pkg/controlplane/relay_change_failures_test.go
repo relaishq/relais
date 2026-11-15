@@ -70,12 +70,7 @@ func relayFailurePlane(t *testing.T, store sessionstore.Store, modes ...string) 
 	b := &relayProtocolWorker{fakeWorker: &fakeWorker{store: store, addr: netip.MustParseAddrPort("127.0.0.1:17002"), running: map[string]bool{}}}
 	require.NoError(t, p.Register("a", a.addr, a))
 	require.NoError(t, p.Register("b", b.addr, b))
-	var slots []RelayBinding
-	for i, id := range []string{"r1", "r2"} {
-		addr := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(18001+i))
-		slots = append(slots, RelayBinding{Slot: mediaworker.RelaySlot{ID: id, Leg: addr, Public: addr}, Relay: &fakeRelay{}})
-	}
-	require.NoError(t, p.ConfigureRelaySet(context.Background(), slots))
+	require.NoError(t, p.ConfigureRelaySet(context.Background(), relayTestSlots()))
 	id, _, err := p.Create(context.Background(), "offer", "a")
 	require.NoError(t, err)
 	c, err := p.lookup(id)
@@ -89,6 +84,17 @@ func relayFailurePlane(t *testing.T, store sessionstore.Store, modes ...string) 
 	}
 	return p, a, b.fakeWorker, id
 }
+
+// relayTestSlots is the two-slot set r1, r2.
+func relayTestSlots() []RelayBinding {
+	var slots []RelayBinding
+	for i, id := range []string{"r1", "r2"} {
+		addr := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(18001+i))
+		slots = append(slots, RelayBinding{Slot: mediaworker.RelaySlot{ID: id, Leg: addr, Public: addr}, Relay: &fakeRelay{}})
+	}
+	return slots
+}
+
 func waitRelayPending(t *testing.T, store sessionstore.Store, id string) (sessionstore.Lease, sessionstore.RelayAssignment) {
 	t.Helper()
 	var lease sessionstore.Lease

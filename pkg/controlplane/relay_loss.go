@@ -79,7 +79,8 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 	p.mu.Lock()
 	binding := p.relaySet[slot]
 	if binding.lostAt.IsZero() {
-		binding.lostAt = time.Now()
+		binding.lostAt = time.Now() // the decision; retries keep it
+		p.relayMetrics.losses.WithLabelValues(slot).Inc()
 	}
 	if binding.lossUnaffected == nil {
 		binding.lossUnaffected = make(map[string]bool)
