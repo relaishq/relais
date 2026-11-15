@@ -199,6 +199,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
+      # The mutation baseline builds tests with GOPROXY=off, so download
+      # every module first; unit-tests used to do this before the mutants.
+      - name: Download Go modules
+        run: go mod download
       - name: Kill operator gate mutants
         run: |
           go test -count=1 ./scripts/ci/gate-mutation
