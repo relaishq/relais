@@ -81,6 +81,15 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	qualifiedPool(&boundary, nil)
 	qualifiedPool(&undecidedBoundary, nil)
 	cases = append(cases, boundary, undecidedBoundary)
+	// A boundary move (2026-11-14) passes or stays undecided in the same overlay.
+	boundaryMovePool, undecidedMovePool := rawPoolSample(), rawPoolSample()
+	editExcludedMove(t, &boundaryMovePool, sampleMove, func(m *callharness.MoveReport) { boundaryMove(m) })
+	editExcludedMove(t, &undecidedMovePool, sampleMove, func(m *callharness.MoveReport) {
+		boundaryMoveDisagrees(m, "no decoded new content after resume before limit")
+	})
+	qualifiedPool(&boundaryMovePool, nil)
+	qualifiedPool(&undecidedMovePool, nil)
+	cases = append(cases, boundaryMovePool, undecidedMovePool)
 	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
 	for _, commit := range commits {
 		if err := pinnedCommit(ctx, root, commit); err != nil {

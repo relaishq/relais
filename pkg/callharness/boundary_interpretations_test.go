@@ -67,3 +67,58 @@ func TestFrameInFlightAtKillKeepsAFailingKillTimeReason(t *testing.T) {
 	require.Len(t, m.FirstContentVerdict.Reasons, 2)
 	require.Contains(t, m.FirstContentVerdict.Reasons[0], "first_content classification changes within event-time interval;")
 }
+
+// A planned move uses the same classification. Its start time comes from the
+// control clock, so a receipt inside the move's start interval has no decided
+// label either (owner decision 2026-11-14, option A).
+func frameInFlightAtMoveStart(t *testing.T) *recorder {
+	t.Helper()
+	r := frameInFlightAtKill(t)
+	r.moves[0].kind = "move"
+	r.moves[0].event.Kind = "move"
+	r.moves[0].event.Result.Kind = "move"
+	return r
+}
+
+// The judge reads a move's reasons as it reads a takeover's: every evaluated
+// start and end time passes, so only the interval reason and the duration
+// bounds remain.
+func TestFrameInFlightAtMoveStartLeavesOnlyIntervalReasons(t *testing.T) {
+	r := frameInFlightAtMoveStart(t)
+	move := r.measureMoves(r.hungUpAt, 1)[0]
+	require.Equal(t, "move", move.Kind)
+	m := move.Measurement
+	for name, v := range map[string]MetricVerdict{"first_content": m.FirstContentVerdict, "first_new_content": m.FirstNewContentVerdict} {
+		require.False(t, v.Trusted, name)
+		require.False(t, v.Failed, name)
+		require.Len(t, v.Reasons, 2, name)
+		require.Contains(t, v.Reasons[0], name+" classification changes within event-time interval;")
+		require.Contains(t, v.Reasons[1], "duration=[")
+	}
+	require.True(t, m.Inconclusive)
+	require.Equal(t, "inconclusive", move.Distributed.WindowOutcome)
+	labels := map[string]bool{}
+	for _, c := range move.Distributed.Timing.Candidates {
+		require.True(t, c.Trusted && !c.Failed, c.Metric+" "+c.Label)
+		if c.Metric == "first_content" {
+			labels[c.Label] = true
+		}
+	}
+	require.True(t, labels["cache"], labels)
+	require.Greater(t, len(labels), 1, labels)
+	require.Zero(t, move.Distributed.Timing.OmittedCandidates)
+}
+
+// A move start that fails keeps its own reason before the interval reason.
+func TestFrameInFlightAtMoveStartKeepsAFailingReason(t *testing.T) {
+	r := frameInFlightAtMoveStart(t)
+	r.tracks[0].video.frames = r.tracks[0].video.frames[:1]
+	m := r.measureMoves(r.hungUpAt, 1)[0].Measurement
+	v := m.FirstNewContentVerdict
+	require.False(t, v.Trusted)
+	require.False(t, v.Failed)
+	require.Equal(t, "no decoded new content after resume before limit", v.Reasons[0])
+	require.Contains(t, v.Reasons[1], "first_new_content classification changes within event-time interval;")
+	require.Len(t, m.FirstContentVerdict.Reasons, 2)
+	require.Contains(t, m.FirstContentVerdict.Reasons[0], "first_content classification changes within event-time interval;")
+}

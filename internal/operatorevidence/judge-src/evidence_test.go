@@ -45,12 +45,17 @@ func TestSanitizedArtifactRejudgesRawPhases(t *testing.T) {
 				input = previewPoolInput{RunID: in.RunID, Phases: []previewMediaInput{in}}
 			}
 			if fixture, ok := timing[mode]; ok {
+				// A label-only move verdict passes (2026-11-14); keep it undecided.
+				reasons := []string{fixture.reason}
+				if fixture.cause == "classification-varies-with-clock-interval" {
+					reasons = []string{disagreeingInterpretation, fixture.reason}
+				}
 				replaceCall(t, &input, func(c *callharness.Report) {
 					switch fixture.target {
 					case "first_content":
-						c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{fixture.reason}}
+						c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: reasons}
 					case "first_new_content":
-						c.Moves[0].Measurement.FirstNewContentVerdict = callharness.MetricVerdict{Reasons: []string{fixture.reason}}
+						c.Moves[0].Measurement.FirstNewContentVerdict = callharness.MetricVerdict{Reasons: reasons}
 					case "distributed_window":
 						c.Moves[0].Distributed.WindowOutcome = "inconclusive"
 						c.Moves[0].Distributed.Causes = []string{fixture.reason}

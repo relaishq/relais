@@ -6844,16 +6844,6 @@
     "Package": "./internal/operatorevidence/judge-src"
   },
   {
-    "ID": "boundary-rule-on-moves",
-    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
-    "Function": "settleBoundaryTakeover",
-    "Old": "if m.Kind != \"takeover\" {",
-    "New": "if false {",
-    "Test": "TestNoBoundaryTakeoverKeepsSummaryBytes",
-    "Marker": "MUTATION: boundary-rule-scope",
-    "Package": "./internal/operatorevidence/judge-src"
-  },
-  {
     "ID": "boundary-label-dropped",
     "File": "internal/operatorevidence/judge-src/main.go",
     "Function": "previewMediaQualified",
@@ -7092,5 +7082,105 @@
     "Test": "TestGateWaitsNameExpiredWait/worker-alive-sleep-deadline",
     "Marker": "MUTATION: expired-wait-scope",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-move-not-settled",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "\tsettled := false",
+    "New": "\tif m.Kind == \"move\" {\n\t\treturn\n\t}\n\tsettled := false",
+    "Test": "TestBoundaryMovePassesWhenEveryInterpretationPasses",
+    "Marker": "MUTATION: boundary-move-undecided",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-row-dropped",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "boundaryRows",
+    "Old": "if !metric.verdict.Trusted || !onlyLabelDiffers(",
+    "New": "if m.Kind == \"move\" || !metric.verdict.Trusted || !onlyLabelDiffers(",
+    "Test": "TestBoundaryMovePassesWhenEveryInterpretationPasses",
+    "Marker": "MUTATION: boundary-move-label-dropped",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-disagreement-trusted",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "onlyLabelDiffers",
+    "Old": "if len(v.Reasons) == 0 || len(v.Reasons) > 2 || timingCause(v.Reasons[0]) != boundaryCauses[0] {",
+    "New": "if !slices.ContainsFunc(v.Reasons, func(reason string) bool { return timingCause(reason) == boundaryCauses[0] }) {\n\t\treturn false\n\t}\n\tif true {\n\t\treturn true\n\t}\n\tif len(v.Reasons) == 0 || len(v.Reasons) > 2 || timingCause(v.Reasons[0]) != boundaryCauses[0] {",
+    "Test": "TestBoundaryMoveVerdictDisagreementStaysUndecided",
+    "Marker": "MUTATION: boundary-move-disagreement-trusted",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-disagreement-bytes",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "onlyLabelDiffers",
+    "Old": "if len(v.Reasons) == 0 || len(v.Reasons) > 2 || timingCause(v.Reasons[0]) != boundaryCauses[0] {",
+    "New": "if !slices.ContainsFunc(v.Reasons, func(reason string) bool { return timingCause(reason) == boundaryCauses[0] }) {\n\t\treturn false\n\t}\n\tif true {\n\t\treturn true\n\t}\n\tif len(v.Reasons) == 0 || len(v.Reasons) > 2 || timingCause(v.Reasons[0]) != boundaryCauses[0] {",
+    "Test": "TestNoBoundaryTakeoverKeepsSummaryBytes",
+    "Marker": "MUTATION: boundary-rule-scope",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-other-verdict-ignored",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "v.Inconclusive = v.Inconclusive || !verdict.Trusted",
+    "New": "v.Inconclusive = v.Inconclusive && !verdict.Trusted",
+    "Test": "TestBoundaryMoveStaysUndecidedWhenAnInterpretationDoesNotPass/first-live",
+    "Marker": "MUTATION: boundary-move-partial-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-window-cause-ignored",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "if !slices.Contains(boundaryCauses, timingCause(cause)) {",
+    "New": "if cause == \"\" {",
+    "Test": "TestBoundaryMoveStaysUndecidedWhenAnInterpretationDoesNotPass/window-cause",
+    "Marker": "MUTATION: boundary-move-partial-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-failure-cleared",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "if v.Inconclusive || d.WindowOutcome != \"inconclusive\" {",
+    "New": "if v.Inconclusive {",
+    "Test": "TestBoundaryMoveKeepsFailure",
+    "Marker": "MUTATION: boundary-move-hides-failure",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-rows-listed-twice",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "previewMediaQualified",
+    "Old": "out.BoundaryMetrics = boundaryRows(r)",
+    "New": "out.BoundaryMetrics = append(boundaryRows(r), boundaryRows(r)...)",
+    "Test": "TestBoundaryMoveAndTakeoverRowsOnce",
+    "Marker": "MUTATION: boundary-rows-duplicated",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-row-counted-back-twice",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "excludedBoundaryRows",
+    "Old": "if slices.ContainsFunc(back.Excluded.Takeovers, func(e excludedTakeover) bool { return e.Phase == row.Phase && e.Event == row.Event }) {",
+    "New": "if true {",
+    "Test": "TestBoundaryMoveRowOnceWithExcludedTakeover",
+    "Marker": "MUTATION: boundary-move-row-twice",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "boundary-move-requires-both-label-only",
+    "File": "internal/operatorevidence/judge-src/boundary_takeovers.go",
+    "Function": "settleBoundaryTakeover",
+    "Old": "\tsettled := false",
+    "New": "\tif m.Kind == \"move\" && !onlyLabelDiffers(m.Measurement.FirstContentVerdict) {\n\t\treturn\n\t}\n\tsettled := false",
+    "Test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
+    "Marker": "MUTATION: boundary-move-single-verdict",
+    "Package": "./internal/operatorevidence/judge-src"
   }
 ]

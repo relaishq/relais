@@ -26,10 +26,10 @@ type PhaseDiagnostic struct {
 	Issue              observe.EvidenceIssue `json:"issue"`
 }
 
-// Summary is the judge's pooled result. BoundaryMetrics lists takeover verdicts
-// that pass for every kill time in the clock interval while their content
-// label differs (#446). The judge trusts them and keeps the label here. The
-// member is absent when there is none.
+// Summary is the judge's pooled result. BoundaryMetrics lists move and takeover
+// verdicts that pass for every event time in the clock interval while their
+// content label differs (#446 for takeovers, 2026-11-14 for moves). The judge
+// trusts them and keeps the label here. The member is absent when there is none.
 type Summary struct {
 	CompleteMedia      bool              `json:"completeMedia"`
 	LostCalls          int               `json:"lostCalls"`

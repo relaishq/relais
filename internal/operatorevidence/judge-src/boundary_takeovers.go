@@ -12,8 +12,13 @@ import (
 // comes from another clock. The pinned caller evaluates every kill time in the
 // clock interval. When the label differs between them, it leaves the verdict
 // undecided, even if every kill time passes.
+//
+// Owner decision 2026-11-14 (#251 slice 6, option A): the same rule applies to
+// a planned move. The pinned caller evaluates every start and end time in the
+// move's interval with the same classification code, so the same reasons prove
+// that every one passes and only the label differs.
 
-// boundaryMetric is one takeover verdict that carries a content label.
+// boundaryMetric is one move or takeover verdict that carries a content label.
 type boundaryMetric struct {
 	name    string
 	verdict *callharness.MetricVerdict
@@ -23,9 +28,9 @@ func boundaryMetrics(m *callharness.MoveReport) []boundaryMetric {
 	return []boundaryMetric{{"first_content", &m.Measurement.FirstContentVerdict}, {"first_new_content", &m.Measurement.FirstNewContentVerdict}}
 }
 
-// onlyLabelDiffers reports a verdict whose every evaluated kill time passed.
-// The caller joins the reasons of each kill time that is untrusted or failed,
-// then adds the interval reason and the duration bounds. A passing kill time
+// onlyLabelDiffers reports a verdict whose every evaluated event time passed.
+// The caller joins the reasons of each event time that is untrusted or failed,
+// then adds the interval reason and the duration bounds. A passing event time
 // has no reason. So these two reasons alone prove that only the label differs.
 // The fixed reason codes also match sanitized evidence.
 func onlyLabelDiffers(v callharness.MetricVerdict) bool {
@@ -37,11 +42,11 @@ func onlyLabelDiffers(v callharness.MetricVerdict) bool {
 
 var boundaryCauses = []string{"classification-varies-with-clock-interval", "duration-bounds-uncertain"}
 
-// settleBoundaryTakeovers trusts each takeover verdict that passes for every
-// kill time. The verdict keeps its reasons as the boundary label. The window
-// passes again only when every content verdict is trusted and the window has
-// no cause but those reasons. Run it before the product judge and clock
-// qualification.
+// settleBoundaryTakeovers trusts each move or takeover verdict that passes
+// for every event time. The verdict keeps its reasons as the boundary label.
+// The window passes again only when every content verdict is trusted and the
+// window has no cause but those reasons. Run it before the product judge and
+// clock qualification.
 func settleBoundaryTakeovers(r *loadgen.RunReport) {
 	for _, p := range r.Processes {
 		for _, c := range p.Calls {
@@ -55,10 +60,9 @@ func settleBoundaryTakeovers(r *loadgen.RunReport) {
 	}
 }
 
+// settleBoundaryTakeover applies to both kinds that callCollections admits:
+// move and takeover.
 func settleBoundaryTakeover(m *callharness.MoveReport) {
-	if m.Kind != "takeover" {
-		return
-	}
 	settled := false
 	for _, metric := range boundaryMetrics(m) {
 		if !metric.verdict.Trusted && onlyLabelDiffers(*metric.verdict) {
