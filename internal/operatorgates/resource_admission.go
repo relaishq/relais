@@ -130,7 +130,21 @@ func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRunti
 		},
 	}, end)
 	result.Admission = &admitted
-	out := ProcedureResult{Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media}
+	return admissionProcedureResult(admitted, idle)
+}
+
+func admissionProcedureResult(admitted AdmissionResult, idle *WaitDiagnostic) ProcedureResult {
+	out := ProcedureResult{Completed: admitted.Completed, Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media, Process: ProcessEvidence{CompletedSteps: admitted.CompletedSteps}}
+	// Preserve the first measurement error across both populations: survivor
+	// first, then boundary. The gate's operational reason can instead name a
+	// later boundary error; it does not replace this procedure diagnostic.
+	out.ProcedureReason = admitted.Survivor.Measurement.ErrorReason
+	if out.ProcedureReason == "" {
+		out.ProcedureReason = admitted.Boundary.Measurement.ErrorReason
+	}
+	if out.ProcedureReason == "" {
+		out.ProcedureReason = diagnosticCode(admitted.Reason)
+	}
 	// Keep the latest expired wait: boundary, then idle, then survivor.
 	for _, w := range []*WaitDiagnostic{admitted.Boundary.ExpiredWait, idle, admitted.Survivor.ExpiredWait} {
 		if w != nil {

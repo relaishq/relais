@@ -505,8 +505,21 @@ priority; `omittedUndecidedMetrics` and `omittedPhaseDiagnostics` count any rows
 that do not fit, while total counters stay unchanged. Each list stops at its
 first row that does not fit. It contains no resource output. Inconclusive
 diagnostics have a reason even when procedure execution completed. Legacy gate
-reasons remain unchanged. These additive
-fields keep result schema version 1. Preparation consumes the caller's original
+reasons remain unchanged. Failover and load count
+successful observation/measurement callbacks and confirmed product steps; load also counts
+the confirmed survivor stop and independent idle check. Observation polling makes
+`completedSteps` timing-dependent; do not compare this count across runs.
+Completion does not imply
+media qualification. The first measurement error is retained as a fixed
+`measurement.errorReason` and procedure reason, alongside existing counters.
+These diagnostic codes never supply an operational stop reason. A telemetry
+cutoff can end polling while the collector finishes within its reserved window.
+For load, the procedure diagnostic retains the survivor's first error before the
+boundary's; a later boundary outcome can independently own the gate reason.
+A refused synchronous-primary observation identifies the first failed condition
+in this order: `durability`, `availability`, `primary`. Raw store values and
+callback text are never retained in these codes. These additive fields keep
+result schema version 1. Preparation consumes the caller's original
 window; procedure and restoration leave two minutes each for collection and stop.
 
 The resource-backed runner owns preparation, gate admission, process/release
@@ -1308,7 +1321,7 @@ The frontend also needs `--output RUN_LOCAL_FILE` and all three
 `--peer control=http://PRIVATE_IPV4:PORT`, `--peer w1=...`, `--peer w2=...`.
 Use an isolated private network: this unauthenticated helper accepts private IPv4,
 bypasses proxies, timestamps after TCP connect, and probes at 1 Hz (750 ms socket
-timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–6300 s and the launcher
+timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–10,800 s and the launcher
 passes `--until-unix-ns` to preserve the original run deadline. Shutdown is
 cooperative; stalled peers can delay exit beyond that deadline.
 

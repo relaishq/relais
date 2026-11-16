@@ -344,7 +344,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 					out = runResourceAdmission(ctx, s, runtime, caller, boundary, launchers, end, c.Token, &result)
 				case operator.Failover:
 					m := RunMeasureGate(ctx, gate, process, runtime.measurePorts(caller, 1), end)
-					out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{ExpiredWait: m.ExpiredWait}}
+					out = measureProcedureResult(m)
 				default:
 					out = RunProcessGate(ctx, gate, process, p, end)
 				}
@@ -471,4 +471,9 @@ func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime,
 	}
 	stopDeadline := min(clock.Elapsed()+callerStopReserve, stopEnd)
 	return Stopped(stop(ctx, stopDeadline), out)
+}
+
+// measureProcedureResult projects measurement outcomes into sequence accounting.
+func measureProcedureResult(m MeasureResult) ProcedureResult {
+	return ProcedureResult{Completed: m.Completed, ProcedureReason: m.Measurement.ErrorReason, Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{CompletedSteps: m.CompletedSteps, ExpiredWait: m.ExpiredWait}}
 }

@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
@@ -78,7 +79,7 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 		return 2
 	}
 	until, err := strconv.ParseInt(plan.HelpersUntilUnixMS, 10, 64)
-	valid := err == nil && *latencyMS >= 0 && *latencyMS <= 150000 && *pollSeconds >= 0 && *pollSeconds <= 300 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(inventory.Slots, plan.FrontendSlot) && slices.Contains(inventory.Slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(inventory.Slots)
+	valid := err == nil && until <= clock.now().Add(operatorgates.SessionMaximum).UnixMilli() && *latencyMS >= 0 && *latencyMS <= 150000 && *pollSeconds >= 0 && *pollSeconds <= 300 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(inventory.Slots, plan.FrontendSlot) && slices.Contains(inventory.Slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(inventory.Slots)
 	for _, slot := range inventory.Slots {
 		address, err := netip.ParseAddr(plan.Addresses[slot])
 		valid = valid && err == nil && address.Is4()

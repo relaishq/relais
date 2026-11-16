@@ -1,0 +1,105 @@
+package operatorgates
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/relaishq/relais/pkg/operator"
+)
+
+type accountingStore struct {
+	roundTripStore
+	before StoreObservation
+}
+
+func (s *accountingStore) Observe(ctx context.Context, end time.Duration) (StoreObservation, error) {
+	if !s.changed {
+		return s.before, nil
+	}
+	return s.roundTripStore.Observe(ctx, end)
+}
+
+// Characterize both production conversions and their public projection before
+// changing the lost completion and refusal accounting.
+func TestLegacyMeasurementProcedureAccounting(t *testing.T) {
+	for _, gate := range []operator.Gate{operator.Failover, operator.Load} {
+		for _, path := range []string{"success", "refusal", "error"} {
+			t.Run(fmt.Sprintf("%s/%s", gate, path), func(t *testing.T) {
+				w, p := newRoundTripWorld(t, false)
+				ports := MeasurePorts{ProcedurePorts: p, Calls: 1, Observe: w.runtime.Observe,
+					Store:       &accountingStore{before: StoreObservation{Primary: "before", Available: true, Durability: "sync"}},
+					BeforeFault: func(context.Context, time.Duration) error { return nil }, MarkFault: func(context.Context) error { return nil },
+					Collect: func(context.Context, time.Duration) <-chan MeasurementCollection {
+						ch := make(chan MeasurementCollection, 1)
+						ch <- MeasurementCollection{}
+						close(ch)
+						return ch
+					},
+				}
+				if path == "refusal" {
+					if gate == operator.Failover {
+						ports.Store = &accountingStore{before: StoreObservation{Primary: "before", Available: true, Durability: "async"}}
+					} else {
+						ports.Observe = func(context.Context, time.Duration) (MeasurementObservation, error) {
+							return MeasurementObservation{}, fault("missing-live-inventory")
+						}
+					}
+				}
+				if path == "error" {
+					ports.Observe = func(context.Context, time.Duration) (MeasurementObservation, error) {
+						return MeasurementObservation{}, errors.New("unsafe raw payload 192.0.2.1")
+					}
+				}
+				measured := RunMeasureGate(context.Background(), gate, w.runtime.Config, ports, GateMaximum)
+				out := measureProcedureResult(measured)
+				if gate == operator.Load {
+					admitted := RunAdmission(context.Background(), AdmissionPorts{Survivor: func(context.Context, time.Duration) MeasureResult { return measured }, StopSurvivor: func(context.Context, time.Duration) bool { return true }, Idle: func(context.Context, time.Duration) error { return nil }, Boundary: func(context.Context, time.Duration) MeasureResult { return measured }}, GateMaximum)
+					out = admissionProcedureResult(admitted, nil)
+				}
+				wantReason := ""
+				if path == "error" {
+					wantReason = "command-result-unknown"
+				}
+				if measured.Status != operator.Inconclusive || measured.Reason != wantReason || out.Completed || out.Process.CompletedSteps != 0 || out.Reason != wantReason {
+					t.Fatalf("MUTATION: measurement-accounting: measured=%+v procedure=%+v", measured, out)
+				}
+				s, _ := fixtureSession(t)
+				seq := SequenceResult{Gates: []operator.GateResult{out.GateResult(gate)}, Procedures: []ProcedureResult{out}}
+				s.retainGateDiagnostics(&seq, nil)
+				raw, err := json.Marshal(s.Final(seq.Gates).Diagnostics)
+				if err != nil {
+					t.Fatal(err)
+				}
+				procedureReason := wantReason
+				if procedureReason == "" {
+					procedureReason = "procedure-incomplete"
+				}
+				gateReason := procedureReason
+				want := fmt.Sprintf(`[{"reason":%q,"gate":%q,"procedure":{"completed":false,"reason":%q,"completedSteps":0},"poolPending":false,"callerStopped":false}]`, gateReason, gate, procedureReason)
+				if string(raw) != want {
+					t.Fatalf("MUTATION: measurement-diagnostics: got %s want %s", raw, want)
+				}
+			})
+		}
+	}
+}
+
+// These expose the two inlined conversions in the archived baseline. The outer
+// test checks that both literals match the baseline production source.
+func measureProcedureResult(m MeasureResult) ProcedureResult {
+	return ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{ExpiredWait: m.ExpiredWait}}
+}
+func admissionProcedureResult(admitted AdmissionResult, idle *WaitDiagnostic) ProcedureResult {
+	out := ProcedureResult{Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media}
+	for _, w := range []*WaitDiagnostic{admitted.Boundary.ExpiredWait, idle, admitted.Survivor.ExpiredWait} {
+		if w != nil {
+			out.Process.ExpiredWait = w
+			break
+		}
+	}
+	return out
+}

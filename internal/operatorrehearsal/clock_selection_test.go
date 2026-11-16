@@ -629,6 +629,12 @@ func TestClockAdmissionTiming(t *testing.T) {
 }
 
 func TestRehearsalHelpersCoverFreshGateWindow(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("python3 is required in CI for the embedded helper lifetime check")
+		}
+		t.Skip("python3 is unavailable locally; embedded helper lifetime check requires python3")
+	}
 	base := time.Unix(1793930000, 0)
 	clock := &operatorgates.FakeClock{Now: base}
 	type command struct {
