@@ -61,7 +61,7 @@ func measurementScenarios() map[string]func(*testing.T) *WaitDiagnostic {
 			start := clock.Elapsed()
 			r := RunMeasureGate(context.Background(), operator.Load, g.c, measureFixture(g, clock, 2, &reads), g.end)
 			intervals(t, reads, 5*time.Second)
-			if r.Status != operator.Inconclusive || r.Reason != "" || r.Measurement.MissingSamples != 14 || reads[len(reads)-1]-start != time.Minute {
+			if r.Status != operator.Inconclusive || r.Reason != "missing-live-inventory" || r.Measurement.MissingSamples != 14 || reads[len(reads)-1]-start != time.Minute {
 				t.Fatalf("calls-settled result changed %+v %v", r, reads[len(reads)-1]-start)
 			}
 			return r.ExpiredWait

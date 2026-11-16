@@ -1289,8 +1289,8 @@
     "GuardFingerprint": "dd15e3ca13740d1fa328ca067e9ff34860001819ef9aa32ff35218cca0a15056",
     "File": "internal/operatorgates/measurement.go",
     "Function": "measureDefinition",
-    "Old": "before.Durability != \"sync\" || ",
-    "New": "",
+    "Old": "case before.Durability != \"sync\":",
+    "New": "case false:",
     "Test": "TestMeasurementDefinitionOracle/d17df4b9dd26c99a.json/0",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -7067,8 +7067,8 @@
     "ID": "collection-sleep-deadline-unrecorded",
     "File": "internal/operatorgates/measurement.go",
     "Function": "RunMeasureGate",
-    "Old": "_ = wait.end(err)\n\t\t\t\tbreak",
-    "New": "break",
+    "Old": "_ = wait.end(err)",
+    "New": "_ = err",
     "Test": "TestMeasurementWaitsNameExpiredWait/collection-complete/sleep-deadline",
     "Marker": "MUTATION: measurement-expired-wait",
     "Package": "./internal/operatorgates"
@@ -7417,5 +7417,135 @@
     "Test": "TestRehearsalHelpersCoverFreshGateWindow",
     "Marker": "MUTATION: rehearsal-helper-cap",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "measurement-conversion-drops-completion",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "measureProcedureResult",
+    "Old": "Completed: m.Completed",
+    "New": "Completed: false",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/failover/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "measurement-conversion-drops-steps",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "measureProcedureResult",
+    "Old": "CompletedSteps: m.CompletedSteps",
+    "New": "CompletedSteps: 0",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/failover/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "admission-conversion-drops-completion",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "Completed: admitted.Completed",
+    "New": "Completed: false",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/load/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "admission-conversion-drops-steps",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "CompletedSteps: admitted.CompletedSteps",
+    "New": "CompletedSteps: 0",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/load/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "measurement-error-reason-discarded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainError",
+    "Old": "m.ErrorReason = diagnosticCode(code(err))",
+    "New": "m.ErrorReason = \"\"",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/observe",
+    "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "measurement-error-first-cause-overwritten",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainError",
+    "Old": "err != nil && m.ErrorReason == \"\"",
+    "New": "err != nil",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/collection-observe",
+    "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "measurement-error-marks-complete",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "definitionCompleted && r.Reason == \"\"",
+    "New": "definitionCompleted",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/persist",
+    "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "failover-refusal-wrong-condition",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "fault(\"missing-synchronous-primary:durability\")",
+    "New": "fault(\"missing-synchronous-primary:primary\")",
+    "Package": "./internal/operatorgates",
+    "Test": "TestFailoverPrimaryRefusalReason/durability",
+    "Marker": "MUTATION: failover-primary-refusal"
+  },
+  {
+    "ID": "failover-recovery-error-discarded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "measurement.retainError(err)",
+    "New": "measurement.retainError(nil)",
+    "Package": "./internal/operatorgates",
+    "Test": "TestFailoverRecoveryMeasurementError",
+    "Marker": "MUTATION: failover-recovery-error"
+  },
+  {
+    "ID": "admission-only-one-population-completes",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunAdmission",
+    "Old": "r.Survivor.Completed && r.Boundary.Completed",
+    "New": "r.Survivor.Completed || r.Boundary.Completed",
+    "Package": "./internal/operatorgates",
+    "Test": "TestAdmissionPartialAccounting/boundary",
+    "Marker": "MUTATION: admission-partial-accounting"
+  },
+  {
+    "ID": "admission-discards-survivor-reason",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunAdmission",
+    "Old": "r.CompletedSteps = r.Survivor.CompletedSteps\n\tr.Reason = r.Survivor.Reason",
+    "New": "r.CompletedSteps = r.Survivor.CompletedSteps\n\tr.Reason = \"\"",
+    "Package": "./internal/operatorgates",
+    "Test": "TestAdmissionRetainsSurvivorError",
+    "Marker": "MUTATION: admission-survivor-error"
+  },
+  {
+    "ID": "paid-clock-admit-helper-lifetime-unbounded",
+    "File": "cmd/relais-gates/clock_admit.go",
+    "Function": "clockAdmit",
+    "Old": "until <= clock.now().Add(operatorgates.SessionMaximum).UnixMilli()",
+    "New": "until <= clock.now().Add(2*operatorgates.SessionMaximum).UnixMilli()",
+    "Package": "./cmd/relais-gates",
+    "Test": "TestClockAdmitHelperLifetimeBound/1ms",
+    "Marker": "MUTATION: clock-admit-helper-lifetime"
+  },
+  {
+    "ID": "measurement-evidence-error-latches-session",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainEvidenceError",
+    "Old": "err = fault(fallback)",
+    "New": "err = fault(\"command-result-unknown\")",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/collection-unclassified",
+    "Marker": "MUTATION: measurement-error-retention"
   }
 ]

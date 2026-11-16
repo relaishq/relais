@@ -51,6 +51,9 @@ type MeasurementCollection struct {
 	Err      error
 }
 type Measurement struct {
+	// ErrorReason retains the first classified measurement error, never callback
+	// text. MissingSamples continues to count every missing observation.
+	ErrorReason               string   `json:"errorReason,omitempty"`
 	ENAAllowanceDelta         *uint64  `json:"enaAllowanceDelta,omitempty"`
 	ENAKnownAllowanceDelta    *uint64  `json:"enaKnownAllowanceDelta,omitempty"`
 	RedisWriteP99UpperSeconds *float64 `json:"redisWriteP99UpperSeconds,omitempty"`
@@ -68,13 +71,32 @@ type Measurement struct {
 	AdmittedCalls             *int     `json:"admittedCalls,omitempty"`
 }
 type MeasureResult struct {
-	Status      operator.Verdict `json:"status"`
-	Reason      string           `json:"reason,omitempty"`
-	Media       *MediaSummary    `json:"media,omitempty"`
-	Measurement Measurement      `json:"measurement"`
+	// Completion is independent of media qualification. Steps count successful
+	// measurement callbacks plus the procedure's confirmed product steps.
+	Completed      bool             `json:"completed"`
+	CompletedSteps int              `json:"completedSteps"`
+	Status         operator.Verdict `json:"status"`
+	Reason         string           `json:"reason,omitempty"`
+	Media          *MediaSummary    `json:"media,omitempty"`
+	Measurement    Measurement      `json:"measurement"`
 	// ExpiredWait names the polling wait that the gate budget or its own
 	// window ended, if any. It never changes the status or reason.
 	ExpiredWait *WaitDiagnostic `json:"expiredWait,omitempty"`
+}
+
+func (m *Measurement) retainError(err error) {
+	if err != nil && m.ErrorReason == "" {
+		m.ErrorReason = diagnosticCode(code(err))
+	}
+}
+
+// Evidence reads and local persistence do not establish an uncertain remote
+// effect. Keep their errors visible without turning them into a command latch.
+func (m *Measurement) retainEvidenceError(err error, fallback string) {
+	if code(err) == "command-result-unknown" {
+		err = fault(fallback)
+	}
+	m.retainError(err)
 }
 
 func liveMeasurement(s *controlplane.Status, reg *Registration, c *ProcessConfig, calls int) error {
@@ -162,6 +184,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		}
 		if err == nil {
 			rows = append(rows, o)
+			g.evidence.CompletedSteps++
 		}
 		if err != nil {
 			return nil, err
@@ -169,6 +192,8 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		return &rows[len(rows)-1], nil
 	}
 	err := g.measureDefinition(ctx, gate, p, observe, &r.Measurement)
+	definitionCompleted := err == nil
+	r.Measurement.retainError(err)
 	switch code(err) {
 	case "known-call-loss", "compatibility-refused":
 		failed = true
@@ -187,6 +212,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	}
 	if len(g.down) > 0 && !g.unknown {
 		if err = g.restoreWorkers(ctx); err != nil {
+			r.Measurement.retainError(err)
 			if code(err) == "known-call-loss" {
 				failed = true
 			}
@@ -221,6 +247,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			}
 			if p.Clock.Elapsed() >= g.end {
 				r.Measurement.MissingSamples++
+				r.Measurement.retainError(fault("gate-deadline"))
 				wait.expired()
 				break
 			}
@@ -229,6 +256,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 				var o *MeasurementObservation
 				if o, err = observe(); err != nil {
 					r.Measurement.MissingSamples++
+					r.Measurement.retainError(err)
 				} else {
 					wait.observe(observedState(o, c.Parameters.Workers))
 				}
@@ -237,6 +265,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			// is bounded by the original gate deadline, never a renewed wait budget.
 			if err = p.Sleep(ctx, min(15*time.Second, max(time.Duration(0), g.end-p.Clock.Elapsed()))); err != nil {
 				_ = wait.end(err)
+				r.Measurement.retainEvidenceError(err, "measurement-wait-failed")
 				break
 			}
 		}
@@ -264,6 +293,9 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		}
 		if collection.Err != nil {
 			r.Measurement.MissingSamples++
+			r.Measurement.retainEvidenceError(collection.Err, "measurement-collection-failed")
+		} else {
+			g.evidence.CompletedSteps++
 		}
 		r.Media = collection.Evidence.Media
 		if collection.Evidence.KnownAllowanceViolation {
@@ -273,10 +305,14 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	if p.Persist != nil {
 		if err = p.Persist(ctx, rows); err != nil {
 			r.Measurement.MissingSamples++
+			r.Measurement.retainEvidenceError(err, "measurement-persist-failed")
+		} else {
+			g.evidence.CompletedSteps++
 		}
 	}
 	summary := SummarizeObservations(rows)
 	summary.MissingSamples += r.Measurement.MissingSamples
+	summary.ErrorReason = r.Measurement.ErrorReason
 	summary.RecoveredMS = r.Measurement.RecoveredMS
 	summary.PrimaryChanged = r.Measurement.PrimaryChanged
 	summary.SynchronousDurability = r.Measurement.SynchronousDurability
@@ -293,6 +329,11 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	} else if r.Reason == "" && (procedureLate || p.Clock.Elapsed() >= collectionEnd) {
 		r.Reason = "gate-deadline"
 	}
+	if r.Reason == "" {
+		r.Reason = r.Measurement.ErrorReason
+	}
+	r.Completed = definitionCompleted && r.Reason == "" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd
+	r.CompletedSteps = g.evidence.CompletedSteps
 	r.ExpiredWait = g.evidence.ExpiredWait
 	return r
 }
@@ -343,8 +384,14 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 		if err != nil {
 			return err
 		}
-		if before.Durability != "sync" || !before.Available || before.Primary == "" {
-			return fault("missing-synchronous-primary")
+		g.evidence.CompletedSteps++
+		switch {
+		case before.Durability != "sync":
+			return fault("missing-synchronous-primary:durability")
+		case !before.Available:
+			return fault("missing-synchronous-primary:availability")
+		case before.Primary == "":
+			return fault("missing-synchronous-primary:primary")
 		}
 		ready, err := observe()
 		if err != nil {
@@ -360,9 +407,11 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 		if err = p.BeforeFault(ctx, g.end); err != nil {
 			return err
 		}
+		g.evidence.CompletedSteps++
 		if err = p.MarkFault(ctx); err != nil {
 			return err
 		}
+		g.evidence.CompletedSteps++
 		at := p.Clock.Elapsed()
 		if p.Clock.Elapsed() >= g.end {
 			return fault("gate-deadline")
@@ -370,6 +419,7 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 		if err = p.Store.Failover(ctx, g.end); err != nil {
 			return err
 		}
+		g.evidence.CompletedSteps++
 		recovery := g.startWait("failover-primary-recovered")
 		for p.Clock.Elapsed() < g.end {
 			recovery.poll()
@@ -384,7 +434,9 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 					return err
 				}
 				measurement.MissingSamples++
+				measurement.retainError(err)
 			} else {
+				g.evidence.CompletedSteps++
 				o.Store = &current
 				state = append(state[:len(state)-1], storeState(current, before.Primary)...)
 			}

@@ -698,7 +698,20 @@
     "restoration-next-basis-lost",
     "restoration-stage-snapshot-lost",
     "restoration-retry-headroom-lost",
-    "restoration-lease-window-shortened"
+    "restoration-lease-window-shortened",
+    "measurement-conversion-drops-completion",
+    "measurement-conversion-drops-steps",
+    "admission-conversion-drops-completion",
+    "admission-conversion-drops-steps",
+    "measurement-error-reason-discarded",
+    "measurement-error-first-cause-overwritten",
+    "measurement-error-marks-complete",
+    "failover-refusal-wrong-condition",
+    "failover-recovery-error-discarded",
+    "admission-only-one-population-completes",
+    "admission-discards-survivor-reason",
+    "paid-clock-admit-helper-lifetime-unbounded",
+    "measurement-evidence-error-latches-session"
   ],
   "killed": [
     {
@@ -5747,6 +5760,84 @@
     {
       "id": "restoration-lease-window-shortened",
       "test": "TestRestorationReferenceFreshAtTwoPointFiveSeconds",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-conversion-drops-completion",
+      "test": "TestMeasurementProcedureAccounting/failover/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-conversion-drops-steps",
+      "test": "TestMeasurementProcedureAccounting/failover/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-conversion-drops-completion",
+      "test": "TestMeasurementProcedureAccounting/load/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-conversion-drops-steps",
+      "test": "TestMeasurementProcedureAccounting/load/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-error-reason-discarded",
+      "test": "TestMeasurementErrorRetention/observe",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-error-first-cause-overwritten",
+      "test": "TestMeasurementErrorRetention/collection-observe",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-error-marks-complete",
+      "test": "TestMeasurementErrorRetention/persist",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-refusal-wrong-condition",
+      "test": "TestFailoverPrimaryRefusalReason/durability",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-recovery-error-discarded",
+      "test": "TestFailoverRecoveryMeasurementError",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-only-one-population-completes",
+      "test": "TestAdmissionPartialAccounting/boundary",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-discards-survivor-reason",
+      "test": "TestAdmissionRetainsSurvivorError",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "paid-clock-admit-helper-lifetime-unbounded",
+      "test": "TestClockAdmitHelperLifetimeBound/1ms",
+      "package": "./cmd/relais-gates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-evidence-error-latches-session",
+      "test": "TestMeasurementErrorRetention/collection-unclassified",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

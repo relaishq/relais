@@ -226,6 +226,8 @@ type AdmissionPorts struct {
 	Boundary        func(context.Context, time.Duration) MeasureResult
 }
 type AdmissionResult struct {
+	Completed          bool
+	CompletedSteps     int
 	Survivor, Boundary MeasureResult
 	Status             operator.Verdict
 	Reason             string
@@ -233,6 +235,8 @@ type AdmissionResult struct {
 
 func RunAdmission(ctx context.Context, p AdmissionPorts, end time.Duration) AdmissionResult {
 	r := AdmissionResult{Survivor: p.Survivor(ctx, end), Status: operator.Inconclusive}
+	r.CompletedSteps = r.Survivor.CompletedSteps
+	r.Reason = r.Survivor.Reason
 	if r.Survivor.Status == operator.Failure {
 		r.Status = operator.Failure
 	}
@@ -244,6 +248,7 @@ func RunAdmission(ctx context.Context, p AdmissionPorts, end time.Duration) Admi
 		r.Reason = "command-result-unknown"
 		return r
 	}
+	r.CompletedSteps++ // Confirmed survivor stop.
 	if err := p.Idle(ctx, end); err != nil {
 		r.Reason = code(err)
 		if code(err) == "known-call-loss" {
@@ -251,11 +256,14 @@ func RunAdmission(ctx context.Context, p AdmissionPorts, end time.Duration) Admi
 		}
 		return r
 	}
+	r.CompletedSteps++ // Confirmed independent idle check.
 	if p.Clock != nil && end-p.Clock.Elapsed() < p.BoundaryMinimum {
 		r.Reason = "gate-deadline"
 		return r
 	}
 	r.Boundary = p.Boundary(ctx, end)
+	r.CompletedSteps += r.Boundary.CompletedSteps
+	r.Completed = r.Survivor.Completed && r.Boundary.Completed
 	if r.Boundary.Status == operator.Failure {
 		r.Status = operator.Failure
 	}
