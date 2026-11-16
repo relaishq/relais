@@ -117,7 +117,24 @@ func TestReadinessRejectsIncompleteAccounting(t *testing.T) {
 					t.Fatal("no non-replayable control")
 				}
 			case "changed-guard":
-				value["killed"].([]any)[0].(map[string]any)["guardFingerprint"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				// Change an original case: additional cases are outside the
+				// original ledger digest, and new rows may sit first in the list.
+				additional := map[string]bool{}
+				for _, id := range value["additionalProtocolCases"].([]any) {
+					additional[id.(string)] = true
+				}
+				found := false
+				for _, row := range value["killed"].([]any) {
+					entry := row.(map[string]any)
+					if !additional[entry["id"].(string)] {
+						entry["guardFingerprint"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatal("no original killed case")
+				}
 			case "unproved-retirement":
 				value["retired"].([]any)[0].(map[string]any)["successorMutation"] = "missing"
 			}
