@@ -267,6 +267,9 @@ func RunAdmission(ctx context.Context, p AdmissionPorts, end time.Duration) Admi
 	if r.Boundary.Status == operator.Failure {
 		r.Status = operator.Failure
 	}
+	// A boundary outcome owns the gate reason even if the survivor retained an
+	// earlier measurement diagnostic. admissionProcedureResult preserves that
+	// first error separately as the procedure reason.
 	if r.Boundary.Reason != "" {
 		r.Reason = r.Boundary.Reason
 	}

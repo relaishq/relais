@@ -72,7 +72,8 @@ type Measurement struct {
 }
 type MeasureResult struct {
 	// Completion is independent of media qualification. Steps count successful
-	// measurement callbacks plus the procedure's confirmed product steps.
+	// observation/measurement callbacks plus confirmed product steps. Polling
+	// frequency makes this count timing-dependent and not comparable across runs.
 	Completed      bool             `json:"completed"`
 	CompletedSteps int              `json:"completedSteps"`
 	Status         operator.Verdict `json:"status"`
@@ -93,7 +94,8 @@ func (m *Measurement) retainError(err error) {
 // Evidence reads and local persistence do not establish an uncertain remote
 // effect. Keep their errors visible without turning them into a command latch.
 func (m *Measurement) retainEvidenceError(err error, fallback string) {
-	if code(err) == "command-result-unknown" {
+	switch code(err) {
+	case "gate-deadline", "command-result-unknown", "restore-failed", "interrupted":
 		err = fault(fallback)
 	}
 	m.retainError(err)
@@ -247,7 +249,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			}
 			if p.Clock.Elapsed() >= g.end {
 				r.Measurement.MissingSamples++
-				r.Measurement.retainError(fault("gate-deadline"))
+				r.Measurement.retainError(fault("measurement-telemetry-cutoff"))
 				wait.expired()
 				break
 			}
@@ -256,7 +258,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 				var o *MeasurementObservation
 				if o, err = observe(); err != nil {
 					r.Measurement.MissingSamples++
-					r.Measurement.retainError(err)
+					r.Measurement.retainEvidenceError(err, "measurement-observation-failed")
 				} else {
 					wait.observe(observedState(o, c.Parameters.Workers))
 				}
@@ -301,6 +303,9 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		if collection.Evidence.KnownAllowanceViolation {
 			failed = true
 		}
+	} else if p.Collect != nil {
+		r.Measurement.MissingSamples++
+		r.Measurement.retainError(fault("measurement-collection-failed"))
 	}
 	if p.Persist != nil {
 		if err = p.Persist(ctx, rows); err != nil {
@@ -329,10 +334,9 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	} else if r.Reason == "" && (procedureLate || p.Clock.Elapsed() >= collectionEnd) {
 		r.Reason = "gate-deadline"
 	}
-	if r.Reason == "" {
-		r.Reason = r.Measurement.ErrorReason
-	}
-	r.Completed = definitionCompleted && r.Reason == "" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd
+	// Measurement diagnostics never become operational stop reasons. Only the
+	// procedure/restore/deadline paths above own those decisions.
+	r.Completed = definitionCompleted && r.Measurement.ErrorReason == "" && r.Reason == "" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd
 	r.CompletedSteps = g.evidence.CompletedSteps
 	r.ExpiredWait = g.evidence.ExpiredWait
 	return r

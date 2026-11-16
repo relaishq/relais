@@ -466,7 +466,7 @@ func TestMeasureMissingSampleDoesNotStopSuccessors(t *testing.T) {
 					return MeasurementObservation{}, fault("missing-live-inventory")
 				},
 			}, end)
-			if m.Measurement.MissingSamples != 1 || m.Reason != "missing-live-inventory" || m.Status != operator.Inconclusive {
+			if m.Measurement.MissingSamples != 1 || m.Reason != "" || m.Status != operator.Inconclusive {
 				t.Fatal("missing sample classification changed", m)
 			}
 			return ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media}

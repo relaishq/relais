@@ -96,3 +96,26 @@ func TestUnusedPendingReasonIsRejected(t *testing.T) {
 		t.Fatal("unused pending reason remains allow-listed")
 	}
 }
+
+// Measurement-only diagnostics must not expand the legacy public gate and
+// stop-event allow-list. These are the outputs from 5175913.
+func TestRolloutPublicReasonsKeepLegacyClassification(t *testing.T) {
+	for _, reason := range []string{"known-call-loss", "compatibility-refused", "missing-takeover-receipt", "missing-move-receipt", "missing-trial-inventory", "missing-trial-call", "missing-trial-identity", "invalid-gate", "missing-live-inventory", "missing-fault-registration", "precondition-failed:caller", "measurement-collection-failed", "missing-synchronous-primary:durability"} {
+		t.Run(reason, func(t *testing.T) {
+			s, _ := fixtureSession(t)
+			s.gates = []operator.Gate{operator.Rollout}
+			seq := SequenceResult{Gates: []operator.GateResult{{Gate: operator.Rollout, Status: operator.Failure, Reason: reason}}, Procedures: []ProcedureResult{{Status: operator.Failure, Reason: reason, ProcedureReason: reason}}}
+			s.retainGateDiagnostics(&seq, nil)
+			s.Halt(reason)
+			final := s.Final(seq.Gates)
+			if ErrorCategory("Error", reason) != "unclassified" || final.Gates[0].Reason != "unclassified" || diagnosticCode(reason) != reason {
+				t.Fatalf("MUTATION: legacy-public-reason: reason=%q final=%+v", reason, final)
+			}
+			for _, event := range final.Trace {
+				if event.Event == "latch" && event.Code != "unclassified" {
+					t.Fatalf("MUTATION: legacy-public-reason: stop=%+v", event)
+				}
+			}
+		})
+	}
+}

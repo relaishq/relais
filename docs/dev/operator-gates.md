@@ -505,11 +505,17 @@ priority; `omittedUndecidedMetrics` and `omittedPhaseDiagnostics` count any rows
 that do not fit, while total counters stay unchanged. Each list stops at its
 first row that does not fit. It contains no resource output. Inconclusive
 diagnostics have a reason even when procedure execution completed. Legacy gate
-reasons remain unchanged outside measurement procedures. Failover and load count
-successful measurement callbacks and confirmed product steps; load also counts
-the confirmed survivor stop and independent idle check. Completion does not imply
+reasons remain unchanged. Failover and load count
+successful observation/measurement callbacks and confirmed product steps; load also counts
+the confirmed survivor stop and independent idle check. Observation polling makes
+`completedSteps` timing-dependent; do not compare this count across runs.
+Completion does not imply
 media qualification. The first measurement error is retained as a fixed
 `measurement.errorReason` and procedure reason, alongside existing counters.
+These diagnostic codes never supply an operational stop reason. A telemetry
+cutoff can end polling while the collector finishes within its reserved window.
+For load, the procedure diagnostic retains the survivor's first error before the
+boundary's; a later boundary outcome can independently own the gate reason.
 A refused synchronous-primary observation identifies the first failed condition
 in this order: `durability`, `availability`, `primary`. Raw store values and
 callback text are never retained in these codes. These additive fields keep

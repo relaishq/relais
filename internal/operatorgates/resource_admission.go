@@ -135,6 +135,9 @@ func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRunti
 
 func admissionProcedureResult(admitted AdmissionResult, idle *WaitDiagnostic) ProcedureResult {
 	out := ProcedureResult{Completed: admitted.Completed, Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media, Process: ProcessEvidence{CompletedSteps: admitted.CompletedSteps}}
+	// Preserve the first measurement error across both populations: survivor
+	// first, then boundary. The gate's operational reason can instead name a
+	// later boundary error; it does not replace this procedure diagnostic.
 	out.ProcedureReason = admitted.Survivor.Measurement.ErrorReason
 	if out.ProcedureReason == "" {
 		out.ProcedureReason = admitted.Boundary.Measurement.ErrorReason

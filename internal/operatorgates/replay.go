@@ -169,19 +169,12 @@ func (c Corpus) Fixture(name string) (OracleFixture, error) {
 func ErrorCategory(name, message string) string {
 	if name == "Error" {
 		switch message {
-		case "Missing pre-fault registration":
-			return "missing-fault-registration"
 		case "Preview deadline expired", "Preview admission expired", "Caller preparation failed", "Caller preparation deadline", "Caller job unconfirmed", "Invalid dispatch scope", "DNS preparation missing", "Caller role missing", "Caller campaign missing",
 			"Caller preparation deadline:identity-path", "Caller preparation deadline:runner-preparing",
 			"command-result-unknown", "gate-deadline", "interrupted", "caller-not-near", "precondition-unhealthy", "precondition-failed", "not-implemented", "prior-gate-stopped",
 			"gate-caller-bounds-differ", "clock-binding-missing", "clock-binding-invalid", "clock-binding-run-differ", "clock-binding-roles-differ", "clock-binding-leap-differ", "clock-binding-digest-differ", "clock-binding-policy-differ", "clock-binding-selection-differ", "clock-binding-readback-differ",
 			"clock-history-invalid", "clock-history-incomplete", "clock-history-limit", "clock-history-gap", "clock-history-precision", "clock-history-changed", "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ",
 			"clock-timing-invalid", "clock-timing-lease-validity", "clock-timing-judge-reserve", "clock-timing-restore-reserve",
-			"measurement-collection-failed", "measurement-persist-failed", "measurement-wait-failed",
-			"missing-synchronous-primary:durability", "missing-synchronous-primary:availability", "missing-synchronous-primary:primary",
-			"missing-independent-admission-inventory", "missing-fault-proof", "missing-fault-registration", "missing-live-inventory", "missing-trial-inventory",
-			"missing-trial-call", "missing-trial-identity", "missing-move-receipt", "missing-takeover-receipt", "invalid-gate",
-			"precondition-failed:caller", "precondition-failed:caller-evidence", "known-call-loss", "compatibility-refused",
 			"unsupported-capability", "protocol-error", "duplicate-result", "invalid-refusal", "invalid-blob", "gate-failed", "restore-failed", "unclassified":
 			return message
 		}

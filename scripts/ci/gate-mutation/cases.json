@@ -7482,7 +7482,7 @@
     "ID": "measurement-error-marks-complete",
     "File": "internal/operatorgates/measurement.go",
     "Function": "RunMeasureGate",
-    "Old": "definitionCompleted && r.Reason == \"\"",
+    "Old": "definitionCompleted && r.Measurement.ErrorReason == \"\"",
     "New": "definitionCompleted",
     "Package": "./internal/operatorgates",
     "Test": "TestMeasurementErrorRetention/persist",
@@ -7547,5 +7547,85 @@
     "Package": "./internal/operatorgates",
     "Test": "TestMeasurementErrorRetention/collection-unclassified",
     "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "measurement-cutoff-uses-stop-code",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Measurement.retainError(fault(\"measurement-telemetry-cutoff\"))",
+    "New": "r.Measurement.retainError(fault(\"gate-deadline\"))",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+    "Marker": "MUTATION: measurement-collection-reserve"
+  },
+  {
+    "ID": "measurement-observation-stop-code-unmapped",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Measurement.retainEvidenceError(err, \"measurement-observation-failed\")",
+    "New": "r.Measurement.retainError(err)",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementCollectionReserveDoesNotStopSequence/observation-deadline",
+    "Marker": "MUTATION: measurement-collection-reserve"
+  },
+  {
+    "ID": "measurement-diagnostic-promoted-to-stop",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Completed = definitionCompleted && r.Measurement.ErrorReason == \"\" && r.Reason == \"\" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd",
+    "New": "if r.Reason == \"\" { r.Reason = r.Measurement.ErrorReason }\n\tr.Completed = definitionCompleted && r.Measurement.ErrorReason == \"\" && r.Reason == \"\" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+    "Marker": "MUTATION: measurement-collection-reserve"
+  },
+  {
+    "ID": "measurement-skipped-collection-unreported",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "else if p.Collect != nil {",
+    "New": "else if false {",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementSkippedCollectionIsIncomplete",
+    "Marker": "MUTATION: measurement-skipped-collection"
+  },
+  {
+    "ID": "measurement-skipped-collection-completes",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "definitionCompleted && r.Measurement.ErrorReason == \"\"",
+    "New": "definitionCompleted",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementSkippedCollectionIsIncomplete",
+    "Marker": "MUTATION: measurement-skipped-collection"
+  },
+  {
+    "ID": "measurement-codes-expand-public-reasons",
+    "File": "internal/operatorgates/replay.go",
+    "Function": "ErrorCategory",
+    "Old": "switch message {",
+    "New": "switch message {\n\t\tcase \"known-call-loss\": return message",
+    "Package": "./internal/operatorgates",
+    "Test": "TestRolloutPublicReasonsKeepLegacyClassification/known-call-loss",
+    "Marker": "MUTATION: legacy-public-reason"
+  },
+  {
+    "ID": "measurement-evidence-deadline-unmapped",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainEvidenceError",
+    "Old": "case \"gate-deadline\", \"command-result-unknown\", \"restore-failed\", \"interrupted\":",
+    "New": "case \"command-result-unknown\":",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementEvidenceStopCodesAreDiagnosticOnly/gate-deadline",
+    "Marker": "MUTATION: measurement-diagnostic-stop-code"
+  },
+  {
+    "ID": "admission-boundary-overwrites-first-diagnostic",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "out.ProcedureReason = admitted.Survivor.Measurement.ErrorReason",
+    "New": "out.ProcedureReason = admitted.Boundary.Measurement.ErrorReason",
+    "Package": "./internal/operatorgates",
+    "Test": "TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome",
+    "Marker": "MUTATION: admission-first-diagnostic"
   }
 ]

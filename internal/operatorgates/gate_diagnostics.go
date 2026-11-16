@@ -9,6 +9,15 @@ import (
 
 func diagnosticCode(reason string) string {
 	switch reason {
+	case "Missing pre-fault registration":
+		return "missing-fault-registration"
+	case "measurement-collection-failed", "measurement-persist-failed", "measurement-wait-failed",
+		"measurement-telemetry-cutoff", "measurement-observation-failed",
+		"missing-synchronous-primary:durability", "missing-synchronous-primary:availability", "missing-synchronous-primary:primary",
+		"missing-independent-admission-inventory", "missing-fault-proof", "missing-fault-registration", "missing-trial-inventory",
+		"missing-trial-call", "missing-trial-identity", "missing-move-receipt", "missing-takeover-receipt", "invalid-gate",
+		"precondition-failed:caller", "precondition-failed:caller-evidence":
+		return reason
 	case "", "missing-live-call", "missing-live-inventory", "restore-unsettled", "restore-unconfirmed",
 		"known-call-loss", "compatibility-refused", "known-relay-failure", "relay-self-fence", "relay-continuity-failed",
 		"procedure-incomplete", "media-unavailable", "media-undecided", "media-refresh-unavailable",

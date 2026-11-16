@@ -711,7 +711,15 @@
     "admission-only-one-population-completes",
     "admission-discards-survivor-reason",
     "paid-clock-admit-helper-lifetime-unbounded",
-    "measurement-evidence-error-latches-session"
+    "measurement-evidence-error-latches-session",
+    "measurement-cutoff-uses-stop-code",
+    "measurement-observation-stop-code-unmapped",
+    "measurement-diagnostic-promoted-to-stop",
+    "measurement-skipped-collection-unreported",
+    "measurement-skipped-collection-completes",
+    "measurement-codes-expand-public-reasons",
+    "measurement-evidence-deadline-unmapped",
+    "admission-boundary-overwrites-first-diagnostic"
   ],
   "killed": [
     {
@@ -5838,6 +5846,54 @@
     {
       "id": "measurement-evidence-error-latches-session",
       "test": "TestMeasurementErrorRetention/collection-unclassified",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-cutoff-uses-stop-code",
+      "test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-observation-stop-code-unmapped",
+      "test": "TestMeasurementCollectionReserveDoesNotStopSequence/observation-deadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-diagnostic-promoted-to-stop",
+      "test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-skipped-collection-unreported",
+      "test": "TestMeasurementSkippedCollectionIsIncomplete",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-skipped-collection-completes",
+      "test": "TestMeasurementSkippedCollectionIsIncomplete",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-codes-expand-public-reasons",
+      "test": "TestRolloutPublicReasonsKeepLegacyClassification/known-call-loss",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-evidence-deadline-unmapped",
+      "test": "TestMeasurementEvidenceStopCodesAreDiagnosticOnly/gate-deadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-boundary-overwrites-first-diagnostic",
+      "test": "TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

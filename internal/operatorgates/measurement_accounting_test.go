@@ -26,8 +26,8 @@ func (s *accountingStore) Observe(ctx context.Context, end time.Duration) (Store
 	return s.roundTripStore.Observe(ctx, end)
 }
 
-// Pin both production conversions and their public projection. These six paths
-// were first run against the original lost completion and refusal accounting.
+// Pin both current production conversions and their public projection. The
+// executable legacy characterization separately retains the six old outputs.
 func TestMeasurementProcedureAccounting(t *testing.T) {
 	for _, gate := range []operator.Gate{operator.Failover, operator.Load} {
 		for _, path := range []string{"success", "refusal", "error"} {
@@ -86,7 +86,11 @@ func TestMeasurementProcedureAccounting(t *testing.T) {
 						procedureSteps = 4
 					}
 				}
-				if measured.Status != operator.Inconclusive || measured.Reason != wantReason || measured.Measurement.ErrorReason != wantReason || measured.Completed != completed || measured.CompletedSteps != measuredSteps || out.Completed != completed || out.Process.CompletedSteps != procedureSteps || out.Reason != wantReason {
+				outcomeReason := ""
+				if path == "error" {
+					outcomeReason = "command-result-unknown"
+				}
+				if measured.Status != operator.Inconclusive || measured.Reason != outcomeReason || measured.Measurement.ErrorReason != wantReason || measured.Completed != completed || measured.CompletedSteps != measuredSteps || out.Completed != completed || out.Process.CompletedSteps != procedureSteps || out.Reason != outcomeReason {
 					t.Fatalf("MUTATION: measurement-accounting: measured=%+v procedure=%+v", measured, out)
 				}
 				s, _ := fixtureSession(t)
@@ -97,7 +101,10 @@ func TestMeasurementProcedureAccounting(t *testing.T) {
 					t.Fatal(err)
 				}
 				procedureReason := wantReason
-				gateReason := wantReason
+				gateReason := outcomeReason
+				if !completed && gateReason == "" {
+					gateReason = "procedure-incomplete"
+				}
 				reasonJSON := ""
 				if procedureReason != "" {
 					reasonJSON = fmt.Sprintf(`,"reason":%q`, procedureReason)
@@ -133,7 +140,7 @@ func TestFailoverPrimaryRefusalReason(t *testing.T) {
 			s.gates = []operator.Gate{operator.Failover}
 			seq := s.RunSequence(context.Background(), SequencePorts{Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult { return out }})
 			final := s.Final(seq.Gates)
-			if m.Completed || store.changed || m.Reason != want || m.Measurement.ErrorReason != want || m.CompletedSteps != 2 || m.Measurement.MissingSamples != 2 || final.Diagnostics[0].Procedure.Reason != want || final.Diagnostics[0].Reason != want || final.Gates[0].Reason != want {
+			if m.Completed || store.changed || m.Reason != "" || m.Measurement.ErrorReason != want || m.CompletedSteps != 2 || m.Measurement.MissingSamples != 2 || final.Diagnostics[0].Procedure.Reason != want || final.Diagnostics[0].Reason != "procedure-incomplete" || final.Gates[0].Reason != "" {
 				t.Fatalf("MUTATION: failover-primary-refusal: measured=%+v final=%+v", m, final)
 			}
 		})
@@ -201,7 +208,7 @@ func TestMeasurementErrorRetention(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if m.Completed || m.Measurement.MissingSamples < 1 || m.Measurement.ErrorReason != want || m.Reason != want || s.Latched() || final.Diagnostics[0].Procedure.Reason != want || len(raw) > 1024 || strings.Contains(string(raw), "unsafe") || strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "192.0.2.1") {
+			if m.Completed || m.Measurement.MissingSamples < 1 || m.Measurement.ErrorReason != want || m.Reason != "" || s.Latched() || final.Diagnostics[0].Procedure.Reason != want || len(raw) > 1024 || strings.Contains(string(raw), "unsafe") || strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "192.0.2.1") {
 				t.Fatalf("MUTATION: measurement-error-retention: measured=%+v diagnostic=%s", m, raw)
 			}
 			if phase == "collection-observe" && m.Measurement.MissingSamples != 3 {
@@ -305,7 +312,7 @@ func TestMeasurementWarmupRefusalReason(t *testing.T) {
 	p := measureFixture(g, clock, 1, &reads)
 	p.Store = &roundTripStore{}
 	m := RunMeasureGate(context.Background(), operator.Failover, g.c, p, g.end)
-	if m.Completed || m.Reason != "missing-fault-registration" || m.Measurement.ErrorReason != "missing-fault-registration" {
+	if m.Completed || m.Reason != "" || m.Measurement.ErrorReason != "missing-fault-registration" {
 		t.Fatalf("missing warmup refusal: %+v", m)
 	}
 }
@@ -331,5 +338,22 @@ func TestAdmissionRetainsSurvivorError(t *testing.T) {
 	final := s.Final(seq.Gates)
 	if !boundary || r.Completed || r.Reason != reason || out.Reason != reason || out.ProcedureReason != reason || s.Latched() || out.Process.CompletedSteps != 5 || final.Diagnostics[0].Procedure.Reason != reason {
 		t.Fatalf("MUTATION: admission-survivor-error: result=%+v procedure=%+v", r, out)
+	}
+}
+
+func TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome(t *testing.T) {
+	r := RunAdmission(context.Background(), AdmissionPorts{
+		Survivor: func(context.Context, time.Duration) MeasureResult {
+			return MeasureResult{Status: operator.Inconclusive, Reason: "precondition-failed", Measurement: Measurement{ErrorReason: "missing-live-inventory"}}
+		},
+		StopSurvivor: func(context.Context, time.Duration) bool { return true },
+		Idle:         func(context.Context, time.Duration) error { return nil },
+		Boundary: func(context.Context, time.Duration) MeasureResult {
+			return MeasureResult{Status: operator.Inconclusive, Reason: "caller-not-near", Measurement: Measurement{ErrorReason: "measurement-collection-failed"}}
+		},
+	}, time.Minute)
+	out := admissionProcedureResult(r, nil)
+	if out.ProcedureReason != "missing-live-inventory" || out.Reason != "caller-not-near" {
+		t.Fatalf("MUTATION: admission-first-diagnostic: %+v", out)
 	}
 }
