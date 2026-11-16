@@ -217,6 +217,8 @@ func (d *Deployment) Boot(ctx context.Context) error {
 		return err
 	}
 	timeArgs := insertBeforeImage(d.runArgs("time", TimeIP, image, false), []string{"--cap-drop", "SYS_TIME", "--entrypoint", "sh"})
+	// No ratelimit is configured: the reference can answer every client's 8 s
+	// poll, including its initial iburst. Only this disposable subnet is allowed.
 	timeArgs = append(timeArgs, "-c", `printf 'local stratum 1\nallow `+d.Topology.Subnet+`\n' > /etc/chrony-reference.conf && exec chronyd -d -x -u root -f /etc/chrony-reference.conf`)
 	if err = d.startContainer(ctx, "time", "time", timeArgs); err != nil {
 		return err
@@ -239,7 +241,7 @@ func (d *Deployment) Boot(ctx context.Context) error {
 			return x
 		}
 		bundle["store-ca.pem"] = ca
-		bundle["chrony.conf"] = []byte("server " + TimeIP + " prefer iburst minpoll 0 maxpoll 0\ndriftfile /var/lib/chrony/drift\nlog tracking\nlogdir /var/log/chrony\nmaxclockerror 1\n")
+		bundle["chrony.conf"] = []byte(fmt.Sprintf("server %s prefer iburst minpoll %d maxpoll %d\ndriftfile /var/lib/chrony/drift\nlog tracking\nlogdir /var/log/chrony\nmaxclockerror 1\n", TimeIP, rehearsalPollExponent, rehearsalPollExponent))
 		bundle["chronyd.conf"] = []byte(chronyDropIn)
 		dir := filepath.Join(d.Work, "hosts", slot)
 		if x = writeFiles(dir, bundle); x != nil {

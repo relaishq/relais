@@ -95,12 +95,16 @@ func (r *rehearsal) recordClockSelection(ctx context.Context) {
 	// An unresolved role leaves its slot empty, which refuses helper startup.
 	front, _ := inventory.ComponentSlot(components, "signal")
 	control, _ := inventory.ComponentSlot(components, "control")
-	a := ClockAdmission{RunID: r.run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: addresses, Output: r.c.Output, Host: r.clockHostCommand}
-	a.HelpersUntil = r.clock.Wall().Add(rehearsalHelperMaximum)
+	a := r.clockAdmission(front, control, addresses)
 	p := a.ports()
 	// The rehearsal also proves the clock-select CLI against the in-process selector.
 	p.selectBounds = r.selectClockBounds
 	r.recordClockSelectionReport(collectClockSelection(ctx, a.RunID, front, control, p))
+}
+
+func (r *rehearsal) clockAdmission(front, control string, addresses map[string]string) ClockAdmission {
+	timing := rehearsalClockTiming()
+	return ClockAdmission{RunID: r.run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: addresses, Output: r.c.Output, Host: r.clockHostCommand, HelpersUntil: r.clock.Wall().Add(rehearsalHelperMaximum), PollPeriod: time.Duration(timing.PollSeconds) * time.Second, HostReadLatency: time.Duration(timing.HostReadLatencyMS) * time.Millisecond}
 }
 
 func (r *rehearsal) recordClockSelectionReport(result *ClockSelectionReport) {

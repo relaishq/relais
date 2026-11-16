@@ -13,6 +13,13 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
+// Keep chrony's exponent and both hosted timing inputs on the same poll.
+const rehearsalPollExponent = 3
+
+func rehearsalClockTiming() operatorgates.ClockTiming {
+	return operatorgates.ClockTiming{PollSeconds: 1 << rehearsalPollExponent, HostReadLatencyMS: 400}
+}
+
 func (r *rehearsal) leaseProbeFiles() map[string]string {
 	files := map[string]string{}
 	for slot, h := range r.topology.Hosts {
@@ -26,7 +33,7 @@ func (r *rehearsal) leaseProbeFiles() map[string]string {
 	return files
 }
 func (r *rehearsal) clockConfig(judge string) operatorgates.ResourceConfig {
-	return operatorgates.ResourceConfig{ClockPolicy: rehearsalClockPolicy(), ClockLeapMode: "unsmeared", Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: judge, Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
+	return operatorgates.ResourceConfig{ClockTiming: rehearsalClockTiming(), ClockPolicy: rehearsalClockPolicy(), ClockLeapMode: "unsmeared", Parameters: r.parameters(), Pins: r.pins, Bounds: r.report.Bounds, Architecture: "x86_64", Token: r.topology.Secrets["SignalToken"], JudgeBinary: judge, Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
 }
 func (r *rehearsal) bindAdmission(ctx context.Context, scenario operator.Scenario) error {
 	clean := func() bool { return r.session != nil && !r.session.Latched() && len(r.session.Uncertainties()) == 0 }

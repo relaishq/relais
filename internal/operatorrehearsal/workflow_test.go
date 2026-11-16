@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,8 +18,9 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		On          map[string]any    `yaml:"on"`
 		Permissions map[string]string `yaml:"permissions"`
 		Jobs        map[string]struct {
-			RunsOn string `yaml:"runs-on"`
-			Steps  []struct {
+			RunsOn         string `yaml:"runs-on"`
+			TimeoutMinutes int    `yaml:"timeout-minutes"`
+			Steps          []struct {
 				Name, Run, Uses string
 				If              string `yaml:"if"`
 				ContinueOnError bool   `yaml:"continue-on-error"`
@@ -45,6 +47,9 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 	job := w.Jobs["rehearsal"]
 	if job.RunsOn != "ubuntu-24.04" {
 		t.Fatal(job.RunsOn)
+	}
+	if job.TimeoutMinutes != 180 || time.Duration(job.TimeoutMinutes)*time.Minute != rehearsalHelperMaximum {
+		t.Fatal("hosted job and clock helper deadlines differ", job.TimeoutMinutes, rehearsalHelperMaximum)
 	}
 	tokens, uploads, execute := 0, 0, false
 	chowned, summaries := false, 0
