@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,10 @@ import (
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 )
+
+// rehearsalHelperMaximum matches the hosted job limit. Helpers cover setup
+// and the fresh gate window; disposable teardown still owns their cleanup.
+const rehearsalHelperMaximum = 180 * time.Minute
 
 const clockProbePath = "/run/relais-clock-probes.bin"
 
@@ -93,9 +96,7 @@ func (r *rehearsal) recordClockSelection(ctx context.Context) {
 	front, _ := inventory.ComponentSlot(components, "signal")
 	control, _ := inventory.ComponentSlot(components, "control")
 	a := ClockAdmission{RunID: r.run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: addresses, Output: r.c.Output, Host: r.clockHostCommand}
-	if until, _ := strconv.ParseInt(r.boundInit.EndUnixMS, 10, 64); until != 0 {
-		a.HelpersUntil = time.UnixMilli(until)
-	}
+	a.HelpersUntil = r.clock.Wall().Add(rehearsalHelperMaximum)
 	p := a.ports()
 	// The rehearsal also proves the clock-select CLI against the in-process selector.
 	p.selectBounds = r.selectClockBounds

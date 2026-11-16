@@ -507,7 +507,7 @@ first row that does not fit. It contains no resource output. Inconclusive
 diagnostics have a reason even when procedure execution completed. Legacy gate
 reasons remain unchanged. These additive
 fields keep result schema version 1. Preparation consumes the caller's original
-window; procedure and restoration leave one minute each for collection and stop.
+window; procedure and restoration leave two minutes each for collection and stop.
 
 The resource-backed runner owns preparation, gate admission, process/release
 procedures, caller brokers, the evidence pool and the pinned judge. Host steps
@@ -524,8 +524,8 @@ caller/mailbox operations carry their already-defined `admission-boundary`
 manifest phase. Old peers omit the marker and are refused before effects.
 Private configuration must supply `admission.survivorSeconds` and
 `admission.boundarySeconds`. The combined media duration plus the existing
-seven-minute campaign reserve must fit the 20-minute procedure cap. The separate
-caller maximum is 22 minutes; no deadline is renewed. Boundary fit is checked
+seven-minute campaign reserve must fit the separate 20-minute load admission cap. The separate
+caller maximum is 33 minutes; no deadline is renewed. Boundary fit is checked
 after the actual survivor stop and idle wait, then again after boundary startup.
 
 `PrepareCallers` proves both setups before survivor begin. The public
@@ -623,7 +623,7 @@ operation-specific JSON. No generic shell-command adapter is provided.
 
 Request IDs and Unix milliseconds are decimal strings. Init supplies the
 original armed time and absolute end, at most 105 minutes apart. The engine maps
-remaining time to its elapsed clock once. Gate windows are at most 20 minutes;
+remaining time to its elapsed clock once. Gate windows are at most 31 minutes;
 mutation windows end at minute 103 and final pooling ends by minute 105. Wall
 clock changes do not extend these bounds. Each request carries its absolute end
 and remaining milliseconds. The adapter must clamp its wait to both. Each active gate fixes its cutoff once;
@@ -817,7 +817,7 @@ spool and judge copy, saves `head-caller-evidence.json` (with
 report's `headCaller` section. `Evaluate` never reads that section, so the pinned
 verdict is unchanged. The phase is skipped when the pinned session latched. It
 shares the deployment and teardown: an unconfirmed head-caller stop still fails
-`cleanup`. It adds about 20 minutes. `callerTiming`, at the top level for pinned
+`cleanup`. It adds about 30 minutes. `callerTiming`, at the top level for pinned
 phases and in `headCaller`, lists per call the probe count, probe-capacity
 invalidation, gaps over 30 s between probe sends (frontend restarts leave about
 140 s in rollout and upgrade-rollback), and per move or takeover the nearest
@@ -1043,16 +1043,35 @@ one initial clock probe and one every ten seconds, so ten-probe registration
 needs at least ninety seconds after loader startup. The media calibration runs
 for 180 seconds so a 1.25-second phased first interval stays below the judge's
 1% budget, within a six-minute caller runtime limit.
+The pinned rehearsal sequence gets a fresh Init after negative controls, clock
+selection, calibration and the final idle check. Setup keeps its own bounded
+session. The new Init retains the selected clock receipt and scenario identity;
+it starts the unchanged 103-minute mutation and 105-minute session windows once.
+A setup latch or uncertainty refuses the sequence. Clock helpers have a finite
+180-minute lifetime to cover both setup and the fresh window; container teardown
+owns their cleanup. The host helper accepts 1–10,800 seconds, matching
+`rehearsalHelperMaximum`. `TestRehearsalHelpersCoverFreshGateWindow` executes the
+embedded Python with each captured background command, with serving and time
+mocked, so a Go/Python lifetime mismatch fails locally. The paid path still
+supplies its existing session deadline. At three 84-byte records per second,
+180 minutes produces about 2.72 MB, below the unchanged 4 MiB probe-file cap.
+The head-caller Init also starts a fresh session after the
+pinned sequence and head idle check. It keeps the same clock receipt, replaces
+only its scenario identity for the head caller, and rejects a prior latch or
+uncertainty. The paid path is unchanged.
 Caller preparation, including the ten-probe registration, precedes each fresh
-20-minute gate window. Campaign admission uses one elapsed-clock snapshot so a
-1,200-second minimum fits a full window exactly. Before launch, the caller's
-separate 22-minute manifest includes startup and must fit media plus 120 seconds; both windows stay
+31-minute gate window. Campaign admission uses one elapsed-clock snapshot.
+Part A media lasts 1,500 seconds, with a 1,800-second campaign minimum: one
+minute for startup and two minutes each for collection and stop. Relay deploy
+keeps 600 seconds of media; failover and load keep their existing media plans.
+Before launch, the separate 33-minute manifest includes startup and must fit
+media plus the unchanged 120-second manifest guard; both windows stay
 clamped to the original session cutoff, with mutations ending by minute 103.
-Procedure/restoration ends at least two minutes before the caller cutoff,
-collection ends one minute before it, and stop stays within that cutoff.
+Procedure/restoration ends at least four minutes before the caller cutoff,
+collection ends two minutes before it, and stop stays within that cutoff.
 The archived 21-minute manifest rejection in `26b5fb0694a332d7.json`, event 7,
 retains its original bytes. `TestOracleCallerManifests` explicitly checks that
-case under the new 22-minute policy; native manifest tests also reject a window
+case under the 33-minute policy; native manifest tests also reject a window
 one millisecond above the new maximum.
 Their UDP bind uses the runner's route source for the relay, with port zero;
 the loader rejects wildcard bind addresses. The bridge checks the staged loader
@@ -1453,10 +1472,11 @@ latency that passes these rules can still end a gate at its deadline.
 
 An unknown or late lease read still latches the session; the budget only
 changes when a reply is late. `TestSlowHostReadsGateSequence` runs a rollout
-with five moves and three kills on a fake transport at P = 8 s and four seconds
+with the rollout target of seven moves and seven takeovers on a fake transport
+at P = 8 s and four seconds
 for each action, with no `clock-lease-*` or `clock-coverage-*` cause. This is a
 fake-clock test, not a measurement of a remote transport. It gives the
-procedure the whole 20 minutes.
+procedure the whole 31 minutes.
 
 `-coverage-adapter FILE` starts a second adapter process (absolute path, no
 arguments, the fixed adapter environment) for the trailing coverage drain. Each
@@ -1661,3 +1681,74 @@ priority before any subprocess or exit polling, and records `unchanged` if denie
 A restoration error records `nice--20-restore-failed`; the helper remains finite.
 These fields never qualify evidence or change a verdict. Missing/malformed
 optional diagnostics are ignored; existing bracket timestamps remain authoritative.
+
+
+### Part A trial margin
+
+The regular rollout, control-restart and upgrade-rollback targets are 7/7,
+7/6 and 6/3 moves/takeovers. Together they supply 20 moves and 16 takeovers.
+Six excluded kills can leave the required ten qualified takeovers without
+using replacements, provided all other trials qualify. Moves have no spare
+trials. The pooled qualification thresholds remain 20 moves and 10 takeovers.
+The replacement cap remains two per run. Upgrade replacements still wait until
+rollback completes, and the measured-cycle time guard remains unchanged.
+`TestPartATrialMargin` runs each regular population with two excluded kills and
+the replacement budget exhausted. `TestReleaseReplacementWaitsForRollback` and
+`TestReplacementSkippedWhenTimeShort` retain the scheduling guards.
+
+Three maximum A gate windows total 93 minutes, below the unchanged 103-minute
+mutation window and 105-minute session maximum. Preparation and other work also
+consume the session. Paid Part A keeps its existing arming: reach the first
+gate's preparation within about 17 minutes of arming to leave room for the
+remaining gates. The reported A3 run reached its first media start about two
+minutes after the session's first host read; that read is not the arm timestamp.
+
+The rehearsal excludes controls, clock selection and calibration from the pinned
+sequence's budget. Runs 43751193751, 43743583263 and 43702549913 supplied during
+review measured 7m37s–8m19s from the earlier setup arming to rollout preparation,
+and about 111 seconds between each media phase and the next. The campaign test
+uses 8m20s of setup, the new 1,500-second A media phases (the former 1,020 seconds
+plus 480 seconds), 600 seconds for relay deploy, and 111 seconds per gate for
+caller preparation and trailing work. All four gates finish in about 92m24s
+from the fresh arming. That leaves 10m36s before mutation cutoff, and the same
+margin after allowing the full two-minute pool reserve before session end.
+`TestCampaignsFitAfterCalibrationAndCallerPreparation`, `TestPinnedInitExcludesSetup`
+and `TestRehearsalUsesSessionResourceRequests` pin this separation and margin.
+
+The job limit stays 180 minutes. The timing model places the head phase after
+8m20s setup, 92m24s pinned execution, two minutes of pinned pooling and a
+two-minute head idle check: 104m44s from the earlier setup arming. Its fresh Init
+admits one rollout with 25 minutes of media and 111 seconds of overhead. Two
+minutes of head pooling and three minutes of teardown give about 136m35s total,
+leaving about 43m25s for earlier release preparation, builds, boot and artifact
+handling. Allowing the full 33-minute head caller window and a separate
+one-minute release reserve instead gives about 143m44s. These are budget
+estimates, not a new hosted-run result.
+
+`TestHeadCampaignFitsAfterPinnedSequence` starts after the modelled pinned run,
+including pooling and head idle time. It requires head preparation and rollout
+to run, and checks that the head phase, pooling and teardown fit inside the
+helpers' finite 180-minute lifetime even if helpers started at the earlier
+setup arm. The actual clock-selection start is later. This test fails with
+`gate-deadline` when head Init reuses the pre-setup timestamps.
+
+Clock-coverage requests use each fresh Init's arming as `RunStartUnixMS`.
+Earlier calibration or pinned-period tracking is marked as before that run;
+historical rows can still be read for receipt binding and remain in retained
+tracking timelines. The later sequence qualifies its own fault windows, not
+calibration as another trial. The selected clock receipt and the forward-sticky
+clock-falsification state still cross the sequence boundary; fresh arming does
+not restore lost clock trust.
+
+Part B has two gates: their 62-minute combined maximum also fits. Load admission
+validity keeps its separate 20-minute cap, including the seven-minute reserve;
+survivor and boundary media together remain limited to 13 minutes. Each phase
+also retains its 1,200-second ceiling. The doubled collection and stop reserves
+use four minutes of the existing seven-minute load reserve.
+
+Caller plans accept up to 1,680 seconds (28 minutes). The 33-minute caller
+maximum leaves five minutes for startup, collection and stop at that ceiling.
+`TestCallerPlanDurationCeiling`, `TestResourceDeadlineArithmetic` and
+`TestCallerWindowPreservesCampaignFitReserve` pin these limits. An excluded kill
+that leaves `trial-count-insufficient` remains a rehearsal failure, as checked
+by `TestRehearsalExcludedKillCounts`.

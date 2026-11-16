@@ -165,6 +165,21 @@
   ],
   "pending": [],
   "additionalProtocolCases": [
+    "helper-rehearsal-lifetime-cap",
+    "head-init-reuses-setup-window",
+    "pinned-init-reuses-setup-window",
+    "pinned-sequence-reuses-setup-window",
+    "load-admission-inherits-part-a-limit",
+    "rehearsal-helpers-expire-with-setup",
+    "part-a-media-margin",
+    "part-a-rollout-trial-margin",
+    "part-a-restart-trial-margin",
+    "part-a-duration-scope",
+    "gate-maximum-margin",
+    "caller-maximum-margin",
+    "caller-plan-margin",
+    "caller-collection-margin",
+    "caller-stop-margin",
     "protocol-publication-fence",
     "protocol-write-deadline",
     "protocol-adapter-expiry",
@@ -686,6 +701,96 @@
     "restoration-lease-window-shortened"
   ],
   "killed": [
+    {
+      "id": "helper-rehearsal-lifetime-cap",
+      "test": "TestRehearsalHelpersCoverFreshGateWindow",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "head-init-reuses-setup-window",
+      "test": "TestHeadCampaignFitsAfterPinnedSequence",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "pinned-init-reuses-setup-window",
+      "test": "TestCampaignsFitAfterCalibrationAndCallerPreparation",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "pinned-sequence-reuses-setup-window",
+      "test": "TestRehearsalUsesSessionResourceRequests",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "load-admission-inherits-part-a-limit",
+      "test": "TestLoadAdmissionKeepsTwentyMinuteLimit",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-helpers-expire-with-setup",
+      "test": "TestRehearsalHelpersCoverFreshGateWindow",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-media-margin",
+      "test": "TestPartATrialMargin",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-rollout-trial-margin",
+      "test": "TestPartATrialMargin",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-restart-trial-margin",
+      "test": "TestPartATrialMargin",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-duration-scope",
+      "test": "TestCampaignLimitsPreserveOtherGates",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-maximum-margin",
+      "test": "TestCampaignLimitsPreserveOtherGates",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-maximum-margin",
+      "test": "TestCallerPlanDurationCeiling",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-plan-margin",
+      "test": "TestCallerPlanDurationCeiling",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-collection-margin",
+      "test": "TestResourceDeadlineArithmetic/gate-first",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stop-margin",
+      "test": "TestResourceDeadlineArithmetic/gate-first",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
     {
       "id": "unknown-not-latched",
       "owner": "P1",

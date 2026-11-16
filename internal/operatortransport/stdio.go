@@ -310,6 +310,9 @@ func (p *Pipe) Poll() (operator.Frame, error, bool) {
 	}
 }
 
+// requestMaximum bounds one request independently of gate and caller lifetimes.
+const requestMaximum = 20 * time.Minute
+
 var ErrExpired = errors.New("deadline-before-submission")
 
 func expired(r operator.Request, now time.Time) bool {
@@ -326,7 +329,7 @@ func RequestContext(parent context.Context, r operator.Request) (context.Context
 		return nil, nil, ErrExpired
 	}
 	end, _ := strconv.ParseInt(r.DeadlineUnixMS, 10, 64)
-	remaining := min(r.RemainingMS, end-now.UnixMilli(), int64((20 * time.Minute).Milliseconds()))
+	remaining := min(r.RemainingMS, end-now.UnixMilli(), requestMaximum.Milliseconds())
 	ctx, cancel := context.WithTimeout(parent, time.Duration(remaining)*time.Millisecond)
 	if err := ctx.Err(); err != nil {
 		cancel()

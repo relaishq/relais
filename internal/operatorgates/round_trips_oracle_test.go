@@ -174,8 +174,8 @@ func newRoundTripWorld(t *testing.T, batch bool) (*roundTripWorld, ProcedurePort
 
 // Upgrade/rollback includes three bounded post-restoration lease read sets.
 var procedureHostCounts = map[operator.Gate]map[string]int{
-	operator.Rollout:         {"clock": 44, "drain": 2, "freeze": 1, "inventory": 96, "move": 5, "replace": 5, "status": 31, "unfreeze": 1, "worker-down": 3, "worker-empty": 2, "worker-start": 5, "worker-stop": 2},
-	operator.ControlRestart:  {"clock": 48, "control-start": 2, "control-stop": 2, "drain": 1, "inventory": 116, "move": 6, "replace": 6, "status": 38, "worker-down": 5, "worker-empty": 1, "worker-start": 6, "worker-stop": 1},
+	operator.Rollout:         {"clock": 60, "drain": 2, "freeze": 1, "inventory": 144, "move": 5, "replace": 9, "status": 47, "unfreeze": 1, "worker-down": 7, "worker-empty": 2, "worker-start": 9, "worker-stop": 2},
+	operator.ControlRestart:  {"clock": 56, "control-start": 2, "control-stop": 2, "drain": 1, "inventory": 140, "move": 6, "replace": 8, "status": 46, "worker-down": 7, "worker-empty": 1, "worker-start": 8, "worker-stop": 1},
 	operator.UpgradeRollback: {"clock": 44, "control-start": 2, "control-stop": 2, "drain": 4, "freeze": 2, "inventory": 188, "move": 3, "relay-inspect": 4, "relay-replenish": 2, "relay-stage": 2, "relay-stop": 2, "replace": 7, "signal-start": 2, "signal-stop": 2, "status": 39, "unfreeze": 1, "worker-down": 3, "worker-empty": 4, "worker-start": 7, "worker-stop": 4},
 	operator.RelayDeploy:     {"clock": 4, "inventory": 12, "relay-inspect": 2, "relay-replenish": 1, "relay-stage": 1, "relay-stop": 1, "status": 1},
 	operator.Failover:        {"clock": 12, "inventory": 20, "move": 1, "replace": 1, "status": 9, "telemetry": 12, "worker-down": 1, "worker-start": 1, "worker-status": 6},
@@ -206,7 +206,7 @@ func TestProcedureRoundTripCounts(t *testing.T) {
 				} else {
 					out = RunProcessGate(context.Background(), gate, w.runtime.Config, p, GateMaximum)
 				}
-				if want := map[operator.Gate]time.Duration{operator.Rollout: 690 * time.Second, operator.ControlRestart: 750 * time.Second, operator.UpgradeRollback: 720 * time.Second, operator.RelayDeploy: 90 * time.Second}[gate]; w.fixedWaits != want {
+				if want := map[operator.Gate]time.Duration{operator.Rollout: 930 * time.Second, operator.ControlRestart: 870 * time.Second, operator.UpgradeRollback: 720 * time.Second, operator.RelayDeploy: 90 * time.Second}[gate]; w.fixedWaits != want {
 					t.Fatalf("fixed waits changed: got %s want %s", w.fixedWaits, want)
 				}
 				if !out.Completed {

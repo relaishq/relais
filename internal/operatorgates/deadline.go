@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const GateMaximum = 20 * time.Minute
+const GateMaximum = 31 * time.Minute
 const MutationWindow = 103 * time.Minute
 const SessionMaximum = 105 * time.Minute
 const PoolReserve = 2 * time.Minute

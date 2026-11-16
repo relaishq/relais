@@ -895,7 +895,7 @@ func TestSequenceReleasesCallers(t *testing.T) {
 			result := s.RunSequence(context.Background(), SequencePorts{
 				Minimum: func(g operator.Gate) time.Duration {
 					if mode == "skipped" && g == operator.Rollout {
-						return 21 * time.Minute
+						return GateMaximum + time.Minute
 					}
 					return 0
 				},
@@ -1015,7 +1015,7 @@ func (c *advancingGateClock) Elapsed() time.Duration {
 }
 
 func TestSequenceFullLengthCampaignAfterPreparation(t *testing.T) {
-	for _, elapsed := range []time.Duration{5 * time.Minute, 84 * time.Minute} {
+	for _, elapsed := range []time.Duration{5 * time.Minute, 74 * time.Minute} {
 		t.Run(elapsed.String(), func(t *testing.T) {
 			s, initial := fixtureSession(t)
 			clock := &advancingGateClock{FakeClock: *initial}
@@ -1023,7 +1023,7 @@ func TestSequenceFullLengthCampaignAfterPreparation(t *testing.T) {
 			clock.Advance(elapsed)
 			prepared, commands := 0, 0
 			result := s.RunSequence(context.Background(), SequencePorts{
-				Minimum: func(operator.Gate) time.Duration { return 1020*time.Second + 180*time.Second },
+				Minimum: CampaignMinimum,
 				Prepare: func(_ context.Context, _ operator.Gate, end, gateEnd time.Duration) error {
 					prepared++
 					if end > gateEnd || end <= clock.Elapsed()+120*time.Second {

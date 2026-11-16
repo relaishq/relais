@@ -66,8 +66,21 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	r.report.Bounds = binding.Selection.Receipt.Bounds
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err = r.runResourceSequence(ctx, init, r.pinnedSequence()); err != nil {
+	// Setup has consumed the measured worst-case time before gates are armed.
+	r.clock = operatorgates.NewRealClock()
+	setupArmed := now.Add(-8*time.Minute - 20*time.Second)
+	init.ArmedAtUnixMS = strconv.FormatInt(setupArmed.UnixMilli(), 10)
+	init.EndUnixMS = strconv.FormatInt(setupArmed.Add(operatorgates.SessionMaximum).UnixMilli(), 10)
+	r.boundInit = init
+	r.session, err = operatorgates.NewSession(r.run, init, r.clock)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err = r.runPinnedSequence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r.session.Budget.Remaining() < operatorgates.SessionMaximum-time.Second || r.session.Budget.MutationEnd() < operatorgates.MutationWindow-time.Second {
+		t.Fatal("MUTATION: rehearsal-session-arming: setup consumed the resource session", r.session.Budget.Remaining(), r.session.Budget.MutationEnd())
 	}
 	if calls != 4 || r.session == nil || !r.session.Latched() || len(r.report.Gates) != 1 || r.report.Gates[0].Reason != "command-result-unknown" || r.report.Gates[0].ProcedureCompleted {
 		t.Fatalf("MUTATION: rehearsal-session-seam calls=%d gates=%+v", calls, r.report.Gates)
