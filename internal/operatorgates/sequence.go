@@ -236,7 +236,6 @@ type AdmissionResult struct {
 func RunAdmission(ctx context.Context, p AdmissionPorts, end time.Duration) AdmissionResult {
 	r := AdmissionResult{Survivor: p.Survivor(ctx, end), Status: operator.Inconclusive}
 	r.CompletedSteps = r.Survivor.CompletedSteps
-	r.Reason = r.Survivor.Reason
 	if r.Survivor.Status == operator.Failure {
 		r.Status = operator.Failure
 	}

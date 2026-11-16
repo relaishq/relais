@@ -24,6 +24,16 @@ func TestMeasurementAccountingLegacyCharacterization(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	// Local source copies may retain .git without the historical baseline.
+	// CI must exercise the archive path and fail if its history is incomplete.
+	if os.Getenv("CI") == "" {
+		probe := exec.CommandContext(ctx, "git", "cat-file", "-e", "5175913^{commit}")
+		probe.Dir = "../.."
+		if err := probe.Run(); err != nil {
+			t.Skip("legacy characterization requires the local baseline commit")
+		}
+	}
+
 	env := []string{}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
