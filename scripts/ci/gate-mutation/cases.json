@@ -7359,5 +7359,44 @@
     "Test": "TestResourceDeadlineArithmetic/gate-first",
     "Marker": "MUTATION: resource-deadline-arithmetic",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pinned-init-reuses-setup-window",
+    "File": "internal/operatorrehearsal/resource_server.go",
+    "Function": "pinnedInit",
+    "Old": "return init",
+    "New": "return r.boundInit",
+    "Test": "TestCampaignsFitAfterCalibrationAndCallerPreparation",
+    "Marker": "MUTATION: rehearsal-fresh-arm",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "pinned-sequence-reuses-setup-window",
+    "File": "internal/operatorrehearsal/resource_server.go",
+    "Function": "runPinnedSequence",
+    "Old": "r.pinnedInit()",
+    "New": "r.boundInit",
+    "Test": "TestRehearsalUsesSessionResourceRequests",
+    "Marker": "MUTATION: rehearsal-session-arming",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "load-admission-inherits-part-a-limit",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "valid",
+    "Old": "p.minimum() <= loadAdmissionMaximum",
+    "New": "p.minimum() <= GateMaximum",
+    "Test": "TestLoadAdmissionKeepsTwentyMinuteLimit",
+    "Marker": "MUTATION: load-admission-limit",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rehearsal-helpers-expire-with-setup",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Old": "rehearsalHelperMaximum = 180 * time.Minute",
+    "New": "rehearsalHelperMaximum = 105 * time.Minute",
+    "Test": "TestRehearsalHelpersCoverFreshGateWindow",
+    "Marker": "MUTATION: rehearsal-helper-window",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

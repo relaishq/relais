@@ -14,12 +14,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/stretchr/testify/require"
@@ -624,4 +626,33 @@ func TestClockAdmissionTiming(t *testing.T) {
 			t.Fatal("MUTATION: admission-timing", c.latency, c.poll, seed, setup, window, err)
 		}
 	}
+}
+
+func TestRehearsalHelpersCoverFreshGateWindow(t *testing.T) {
+	base := time.Unix(1793930000, 0)
+	clock := &operatorgates.FakeClock{Now: base}
+	helpers := 0
+	a := ClockAdmission{FrontendSlot: "relay", ControlSlot: "shared", Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, Now: clock.Wall, HelpersUntil: base.Add(rehearsalHelperMaximum)}
+	clock.Advance(8*time.Minute + 20*time.Second)
+	r := &rehearsal{clock: clock}
+	init := r.pinnedInit()
+	gateEnd, err := strconv.ParseInt(init.EndUnixMS, 10, 64)
+	require.NoError(t, err)
+	a.Host = func(_ context.Context, _ string, background bool, _ []byte, args ...string) (string, error) {
+		if !background {
+			return "", nil
+		}
+		helpers++
+		for i, arg := range args {
+			if arg == "--until-unix-ns" {
+				until, e := strconv.ParseInt(args[i+1], 10, 64)
+				if e != nil || time.Unix(0, until).Before(time.UnixMilli(gateEnd)) || until != base.Add(180*time.Minute).UnixNano() {
+					t.Fatal("MUTATION: rehearsal-helper-window", until, e)
+				}
+			}
+		}
+		return "", nil
+	}
+	require.NoError(t, a.startHelpers(context.Background()))
+	require.Equal(t, 4, helpers)
 }

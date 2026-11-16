@@ -13,6 +13,9 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
+// loadAdmissionMaximum keeps load plans independent of Part A gate margins.
+const loadAdmissionMaximum = 20 * time.Minute
+
 // AdmissionPlan retains the campaign's explicit durations and seven-minute
 // combined preparation/stop reserve within the gate window.
 type AdmissionPlan struct {
@@ -24,7 +27,7 @@ func (p AdmissionPlan) minimum() time.Duration {
 	return (time.Duration(p.SurvivorSeconds)+time.Duration(p.BoundarySeconds))*time.Second + 7*time.Minute
 }
 func (p AdmissionPlan) valid() bool {
-	return p.SurvivorSeconds > 0 && p.SurvivorSeconds <= 1200 && p.BoundarySeconds > 0 && p.BoundarySeconds <= 1200 && p.minimum() <= GateMaximum
+	return p.SurvivorSeconds > 0 && p.SurvivorSeconds <= 1200 && p.BoundarySeconds > 0 && p.BoundarySeconds <= 1200 && p.minimum() <= loadAdmissionMaximum
 }
 
 // resourceCallers routes the existing two-phase launcher interface to separate

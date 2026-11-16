@@ -79,3 +79,15 @@ func TestResourceDeadlineArithmetic(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadAdmissionKeepsTwentyMinuteLimit(t *testing.T) {
+	for _, row := range []struct {
+		survivor, boundary int
+		valid              bool
+	}{{390, 390, true}, {390, 391, false}, {1, 1200, false}, {900, 900, false}} {
+		p := AdmissionPlan{SurvivorSeconds: row.survivor, BoundarySeconds: row.boundary}
+		if p.valid() != row.valid {
+			t.Fatal("MUTATION: load-admission-limit", p, row.valid)
+		}
+	}
+}

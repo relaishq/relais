@@ -524,7 +524,7 @@ caller/mailbox operations carry their already-defined `admission-boundary`
 manifest phase. Old peers omit the marker and are refused before effects.
 Private configuration must supply `admission.survivorSeconds` and
 `admission.boundarySeconds`. The combined media duration plus the existing
-seven-minute campaign reserve must fit the 31-minute procedure cap. The separate
+seven-minute campaign reserve must fit the separate 20-minute load admission cap. The separate
 caller maximum is 33 minutes; no deadline is renewed. Boundary fit is checked
 after the actual survivor stop and idle wait, then again after boundary startup.
 
@@ -1043,6 +1043,13 @@ one initial clock probe and one every ten seconds, so ten-probe registration
 needs at least ninety seconds after loader startup. The media calibration runs
 for 180 seconds so a 1.25-second phased first interval stays below the judge's
 1% budget, within a six-minute caller runtime limit.
+The pinned rehearsal sequence gets a fresh Init after negative controls, clock
+selection, calibration and the final idle check. Setup keeps its own bounded
+session. The new Init retains the selected clock receipt and scenario identity;
+it starts the unchanged 103-minute mutation and 105-minute session windows once.
+A setup latch or uncertainty refuses the sequence. Clock helpers have a finite
+180-minute lifetime to cover both setup and the fresh window; container teardown
+owns their cleanup. The paid path and head-caller Init are unchanged.
 Caller preparation, including the ten-probe registration, precedes each fresh
 31-minute gate window. Campaign admission uses one elapsed-clock snapshot.
 Part A media lasts 1,500 seconds, with a 1,800-second campaign minimum: one
@@ -1682,15 +1689,34 @@ the replacement budget exhausted. `TestReleaseReplacementWaitsForRollback` and
 
 Three maximum A gate windows total 93 minutes, below the unchanged 103-minute
 mutation window and 105-minute session maximum. Preparation and other work also
-consume the session; these maxima do not guarantee a run with arbitrary setup
-delays will fit. The rehearsal's four media phases total 85 minutes, plus caller
-preparation, controls, collection and cleanup. Its job limit is 180 minutes.
-`TestCampaignsFitAfterCalibrationAndCallerPreparation` checks admission after
-4 minutes 59 seconds of controls and two minutes of preparation per gate,
-with an advancing fake clock. At exactly five minutes of controls, the final
-relay preparation reaches its strict cutoff; the test also pins that refusal. Part B has two gates: their 62-minute combined maximum
-also fits. Explicit load admission media retains its seven-minute reserve and
-1,200-second per-phase ceilings.
+consume the session. Paid Part A keeps its existing arming: reach the first
+gate's preparation within about 17 minutes of arming to leave room for the
+remaining gates. The reported A3 run reached its first media start about two
+minutes after the session's first host read; that read is not the arm timestamp.
+
+The rehearsal excludes controls, clock selection and calibration from the pinned
+sequence's budget. Runs 43751193751, 43743583263 and 43702549913 supplied during
+review measured 7m37s–8m19s from the earlier setup arming to rollout preparation,
+and about 111 seconds between each media phase and the next. The campaign test
+uses 8m20s of setup, the new 1,500-second A media phases (the former 1,020 seconds
+plus 480 seconds), 600 seconds for relay deploy, and 111 seconds per gate for
+caller preparation and trailing work. All four gates finish in about 92m24s
+from the fresh arming. That leaves 10m36s before mutation cutoff, and the same
+margin after allowing the full two-minute pool reserve before session end.
+`TestCampaignsFitAfterCalibrationAndCallerPreparation`, `TestPinnedInitExcludesSetup`
+and `TestRehearsalUsesSessionResourceRequests` pin this separation and margin.
+
+The job limit stays 180 minutes. An 8m20s setup allowance, full 103-minute mutation
+window, two-minute pool reserve and three-minute teardown total 116m20s. Adding
+33 minutes for the diagnostic head-caller phase and its idle check gives about
+149m20s, leaving about 30m40s for earlier release preparation, builds, boot and
+artifact handling. These are budget estimates, not a new hosted-run result.
+
+Part B has two gates: their 62-minute combined maximum also fits. Load admission
+validity keeps its separate 20-minute cap, including the seven-minute reserve;
+survivor and boundary media together remain limited to 13 minutes. Each phase
+also retains its 1,200-second ceiling. The doubled collection and stop reserves
+use four minutes of the existing seven-minute load reserve.
 
 Caller plans accept up to 1,680 seconds (28 minutes). The 33-minute caller
 maximum leaves five minutes for startup, collection and stop at that ceiling.

@@ -279,9 +279,7 @@ func TestSessionBinaryOwnsAdmission(t *testing.T) {
 			}
 			fixture.Config.Admission = &operatorgates.AdmissionPlan{SurvivorSeconds: 1, BoundarySeconds: 1}
 			if mode == "invalid-plan" {
-				// The combined media plus seven-minute reserve exceeds 31 minutes.
-				fixture.Config.Admission.SurvivorSeconds = 900
-				fixture.Config.Admission.BoundarySeconds = 900
+				fixture.Config.Admission.BoundarySeconds = 1200
 			}
 			fixture.bind(t)
 			config := filepath.Join(t.TempDir(), "config.json")

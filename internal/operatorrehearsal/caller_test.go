@@ -91,7 +91,7 @@ func TestCalibrationAndGatesUseRouteBoundSharedLauncher(t *testing.T) {
 	if err = r.startCaller(context.Background(), operator.ControlRestart, 1500, "2", time.Minute, 33*time.Minute); err == nil || err.Error() != "caller-not-ready" {
 		t.Fatal("gate bypassed real launch readiness", err)
 	}
-	if time.Duration(r.active.Manifest.Deadline-r.active.Manifest.CreatedAt)*time.Millisecond < 22*time.Minute-time.Second {
+	if time.Duration(r.active.Manifest.Deadline-r.active.Manifest.CreatedAt)*time.Millisecond < 33*time.Minute-time.Second {
 		t.Fatal("rehearsal caller cutoff was shortened")
 	}
 	for _, id := range []string{"1", "2"} {

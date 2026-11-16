@@ -29,7 +29,7 @@ type ClockAdmission struct {
 	Policy                    clocks.SelectionPolicy
 	// Addresses holds each slot's private IPv4 address for the probe helpers.
 	Addresses map[string]string
-	// HelpersUntil is the session deadline; helpers outlive admission until then.
+	// HelpersUntil is the finite helper deadline; helpers outlive admission until then.
 	HelpersUntil time.Time
 	Output       string
 	Host         ClockHostCommand
