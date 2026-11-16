@@ -7398,5 +7398,24 @@
     "Test": "TestRehearsalHelpersCoverFreshGateWindow",
     "Marker": "MUTATION: rehearsal-helper-window",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "head-init-reuses-setup-window",
+    "File": "internal/operatorrehearsal/head_caller.go",
+    "Function": "headInit",
+    "Old": "init := r.pinnedInit()",
+    "New": "init := r.boundInit",
+    "Test": "TestHeadCampaignFitsAfterPinnedSequence",
+    "Marker": "MUTATION: head-fresh-arm",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "helper-rehearsal-lifetime-cap",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Old": "args.seconds <= 10800",
+    "New": "args.seconds <= 6300",
+    "Test": "TestRehearsalHelpersCoverFreshGateWindow",
+    "Marker": "MUTATION: rehearsal-helper-cap",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

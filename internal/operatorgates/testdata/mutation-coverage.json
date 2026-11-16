@@ -165,6 +165,8 @@
   ],
   "pending": [],
   "additionalProtocolCases": [
+    "helper-rehearsal-lifetime-cap",
+    "head-init-reuses-setup-window",
     "pinned-init-reuses-setup-window",
     "pinned-sequence-reuses-setup-window",
     "load-admission-inherits-part-a-limit",
@@ -699,6 +701,18 @@
     "restoration-lease-window-shortened"
   ],
   "killed": [
+    {
+      "id": "helper-rehearsal-lifetime-cap",
+      "test": "TestRehearsalHelpersCoverFreshGateWindow",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "head-init-reuses-setup-window",
+      "test": "TestHeadCampaignFitsAfterPinnedSequence",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
     {
       "id": "pinned-init-reuses-setup-window",
       "test": "TestCampaignsFitAfterCalibrationAndCallerPreparation",

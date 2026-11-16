@@ -1049,7 +1049,16 @@ session. The new Init retains the selected clock receipt and scenario identity;
 it starts the unchanged 103-minute mutation and 105-minute session windows once.
 A setup latch or uncertainty refuses the sequence. Clock helpers have a finite
 180-minute lifetime to cover both setup and the fresh window; container teardown
-owns their cleanup. The paid path and head-caller Init are unchanged.
+owns their cleanup. The host helper accepts 1–10,800 seconds, matching
+`rehearsalHelperMaximum`. `TestRehearsalHelpersCoverFreshGateWindow` executes the
+embedded Python with each captured background command, with serving and time
+mocked, so a Go/Python lifetime mismatch fails locally. The paid path still
+supplies its existing session deadline. At three 84-byte records per second,
+180 minutes produces about 2.72 MB, below the unchanged 4 MiB probe-file cap.
+The head-caller Init also starts a fresh session after the
+pinned sequence and head idle check. It keeps the same clock receipt, replaces
+only its scenario identity for the head caller, and rejects a prior latch or
+uncertainty. The paid path is unchanged.
 Caller preparation, including the ten-probe registration, precedes each fresh
 31-minute gate window. Campaign admission uses one elapsed-clock snapshot.
 Part A media lasts 1,500 seconds, with a 1,800-second campaign minimum: one
@@ -1706,11 +1715,30 @@ margin after allowing the full two-minute pool reserve before session end.
 `TestCampaignsFitAfterCalibrationAndCallerPreparation`, `TestPinnedInitExcludesSetup`
 and `TestRehearsalUsesSessionResourceRequests` pin this separation and margin.
 
-The job limit stays 180 minutes. An 8m20s setup allowance, full 103-minute mutation
-window, two-minute pool reserve and three-minute teardown total 116m20s. Adding
-33 minutes for the diagnostic head-caller phase and its idle check gives about
-149m20s, leaving about 30m40s for earlier release preparation, builds, boot and
-artifact handling. These are budget estimates, not a new hosted-run result.
+The job limit stays 180 minutes. The timing model places the head phase after
+8m20s setup, 92m24s pinned execution, two minutes of pinned pooling and a
+two-minute head idle check: 104m44s from the earlier setup arming. Its fresh Init
+admits one rollout with 25 minutes of media and 111 seconds of overhead. Two
+minutes of head pooling and three minutes of teardown give about 136m35s total,
+leaving about 43m25s for earlier release preparation, builds, boot and artifact
+handling. Allowing the full 33-minute head caller window and a separate
+one-minute release reserve instead gives about 143m44s. These are budget
+estimates, not a new hosted-run result.
+
+`TestHeadCampaignFitsAfterPinnedSequence` starts after the modelled pinned run,
+including pooling and head idle time. It requires head preparation and rollout
+to run, and checks that the head phase, pooling and teardown fit inside the
+helpers' finite 180-minute lifetime even if helpers started at the earlier
+setup arm. The actual clock-selection start is later. This test fails with
+`gate-deadline` when head Init reuses the pre-setup timestamps.
+
+Clock-coverage requests use each fresh Init's arming as `RunStartUnixMS`.
+Earlier calibration or pinned-period tracking is marked as before that run;
+historical rows can still be read for receipt binding and remain in retained
+tracking timelines. The later sequence qualifies its own fault windows, not
+calibration as another trial. The selected clock receipt and the forward-sticky
+clock-falsification state still cross the sequence boundary; fresh arming does
+not restore lost clock trust.
 
 Part B has two gates: their 62-minute combined maximum also fits. Load admission
 validity keeps its separate 20-minute cap, including the seven-minute reserve;

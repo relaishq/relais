@@ -121,3 +121,67 @@ func TestPinnedSequencePreservesSetupTrustLoss(t *testing.T) {
 		}
 	}
 }
+
+// The head phase starts after setup, all pinned media/overhead, final pooling
+// and its own idle check. None of that may consume the head rollout's budget.
+func TestHeadCampaignFitsAfterPinnedSequence(t *testing.T) {
+	base := time.UnixMilli(1_000_000)
+	clock := &campaignClock{FakeClock: operatorgates.FakeClock{Now: base}}
+	r := &rehearsal{clock: clock, boundInit: operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: CoveredGates}, ArmedAtUnixMS: strconv.FormatInt(base.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(base.Add(operatorgates.SessionMaximum).UnixMilli(), 10)}}
+	clock.Advance(8*time.Minute + 20*time.Second + 92*time.Minute + 24*time.Second + operatorgates.PoolReserve)
+	// verifyIdleAt reserves up to two minutes before headInit is called.
+	clock.Advance(2 * time.Minute)
+	scenario := r.boundInit.Scenario
+	scenario.Gates = []operator.Gate{operator.Rollout}
+	init, err := r.headInit(scenario)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := operatorgates.NewSession("head-campaign", init, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, commands := 0, 0
+	var finishedWithPool time.Duration
+	sequence := session.RunSequence(context.Background(), operatorgates.SequencePorts{
+		Minimum: campaignMinimum,
+		Prepare: func(_ context.Context, gate operator.Gate, end, gateEnd time.Duration) error {
+			prepared++
+			callerEnd, fits := callerWindow(gate, clock.Elapsed(), gateEnd)
+			if !fits {
+				t.Fatal("MUTATION: head-fresh-arm: caller refused")
+			}
+			clock.Advance(100 * time.Second)
+			if clock.Elapsed() >= end || clock.Elapsed()+1500*time.Second+4*time.Minute > callerEnd {
+				t.Fatal("MUTATION: head-fresh-arm: caller budget")
+			}
+			return nil
+		},
+		Command: func(_ context.Context, gate operator.Gate, end time.Duration) operatorgates.ProcedureResult {
+			commands++
+			if gate != operator.Rollout || end > session.Budget.MutationEnd() || end-clock.Elapsed() > operatorgates.GateMaximum {
+				t.Fatal("head gate safety cutoff changed")
+			}
+			clock.Advance(1500 * time.Second)
+			return operatorgates.ProcedureResult{Status: operator.Passed, Media: &operatorgates.MediaSummary{Status: operator.Passed}}
+		},
+		ReleaseCallers: func(context.Context, string, time.Duration) bool { clock.Advance(11 * time.Second); return true },
+		Finalize: func(_ context.Context, end time.Duration) (*operatorgates.MediaSummary, error) {
+			if end-clock.Elapsed() > operatorgates.PoolReserve {
+				t.Fatal("head pool reserve changed")
+			}
+			finishedWithPool = clock.Elapsed() + operatorgates.PoolReserve
+			clock.Advance(operatorgates.PoolReserve - time.Second)
+			return &operatorgates.MediaSummary{Status: operator.Passed}, nil
+		},
+	})
+	if prepared != 1 || commands != 1 || sequence.Status != operator.Passed {
+		t.Fatalf("MUTATION: head-fresh-arm: prepared=%d commands=%d gates=%+v", prepared, commands, sequence.Gates)
+	}
+	// Treat helpers as if they started at the earlier setup arm; their actual
+	// clock-selection start is later. Include the three-minute teardown too.
+	total := finishedWithPool + 3*time.Minute
+	if total > 136*time.Minute+36*time.Second || rehearsalHelperMaximum-total < 43*time.Minute+24*time.Second {
+		t.Fatal("head phase exceeds helper/job margin", total, rehearsalHelperMaximum-total)
+	}
+}

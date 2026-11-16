@@ -631,28 +631,70 @@ func TestClockAdmissionTiming(t *testing.T) {
 func TestRehearsalHelpersCoverFreshGateWindow(t *testing.T) {
 	base := time.Unix(1793930000, 0)
 	clock := &operatorgates.FakeClock{Now: base}
-	helpers := 0
+	type command struct {
+		slot   string
+		source []byte
+		args   []string
+	}
+	sources := map[string][]byte{}
+	commands := []command{}
 	a := ClockAdmission{FrontendSlot: "relay", ControlSlot: "shared", Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, Now: clock.Wall, HelpersUntil: base.Add(rehearsalHelperMaximum)}
+	a.Host = func(_ context.Context, slot string, background bool, source []byte, args ...string) (string, error) {
+		if background {
+			commands = append(commands, command{slot, sources[slot], append([]string{}, args...)})
+		} else {
+			sources[slot] = append([]byte{}, source...)
+		}
+		return "", nil
+	}
+	require.NoError(t, a.startHelpers(context.Background()))
+	require.Len(t, commands, 4)
 	clock.Advance(8*time.Minute + 20*time.Second)
 	r := &rehearsal{clock: clock}
 	init := r.pinnedInit()
 	gateEnd, err := strconv.ParseInt(init.EndUnixMS, 10, 64)
 	require.NoError(t, err)
-	a.Host = func(_ context.Context, _ string, background bool, _ []byte, args ...string) (string, error) {
-		if !background {
-			return "", nil
-		}
-		helpers++
+	for _, c := range commands {
+		args := append([]string{}, c.args[2:]...)
 		for i, arg := range args {
-			if arg == "--until-unix-ns" {
+			switch arg {
+			case "--until-unix-ns":
 				until, e := strconv.ParseInt(args[i+1], 10, 64)
 				if e != nil || time.Unix(0, until).Before(time.UnixMilli(gateEnd)) || until != base.Add(180*time.Minute).UnixNano() {
 					t.Fatal("MUTATION: rehearsal-helper-window", until, e)
 				}
+			case "--listen":
+				args[i+1] = "127.0.0.1:0"
+			case "--output":
+				args[i+1] = filepath.Join(t.TempDir(), c.slot+"-probes.bin")
+			case "--peer":
+				name, _, _ := strings.Cut(args[i+1], "=")
+				args[i+1] = name + "=http://127.0.0.1:24891"
 			}
 		}
-		return "", nil
+		// Execute the delivered embedded source and real background argv. Mock
+		// serving and time so validation runs without sockets or a three-hour wait.
+		wrapper := `import sys
+from unittest.mock import Mock, patch
+helper = {"__name__": "clock_probe"}
+exec(compile(sys.stdin.read(), "clock_probe.py", "exec"), helper)
+class Timer:
+    def __init__(self, seconds, done): self.done = done
+    def start(self): self.done()
+    def cancel(self): pass
+server = Mock()
+with patch.object(helper["http"].server, "HTTPServer", return_value=server), patch.object(helper["threading"], "Timer", Timer):
+    helper["main"]()
+server.shutdown.assert_called_once()
+server.server_close.assert_called_once()
+`
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, "python3", append([]string{"-I", "-B", "-c", wrapper}, args...)...)
+		cmd.Stdin = bytes.NewReader(c.source)
+		output, runErr := cmd.CombinedOutput()
+		cancel()
+		if runErr != nil {
+			t.Fatalf("MUTATION: rehearsal-helper-cap: slot=%s: %v\n%s", c.slot, runErr, output)
+		}
 	}
-	require.NoError(t, a.startHelpers(context.Background()))
-	require.Equal(t, 4, helpers)
 }

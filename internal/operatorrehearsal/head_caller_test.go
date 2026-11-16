@@ -96,10 +96,13 @@ func TestHeadCallerSequenceKeepsPinnedReportSeparate(t *testing.T) {
 func TestHeadCallerSkipsWithoutEffects(t *testing.T) {
 	latched := newTestSession(t)
 	latched.Halt("command-result-unknown")
+	uncertain := newTestSession(t)
+	uncertain.RecordUncertainty(operator.Uncertainty{Kind: "host.execute", Rule: "lost-reply"})
 	for name, session := range map[string]*operatorgates.Session{
-		"no pinned session":      nil,
-		"pinned session latched": latched,
-		"head caller missing":    newTestSession(t),
+		"no pinned session":        nil,
+		"pinned session latched":   latched,
+		"pinned session uncertain": uncertain,
+		"head caller missing":      newTestSession(t),
 	} {
 		t.Run(name, func(t *testing.T) {
 			work := t.TempDir()
@@ -454,7 +457,10 @@ func TestClockFalsificationSeedsLaterSequenceWindows(t *testing.T) {
 }
 
 func TestHeadBindingRetention(t *testing.T) {
-	f, err := bindingtest.New("head-bound", time.Now())
+	base := time.Unix(1793930000, 0)
+	clock := &operatorgates.FakeClock{Now: base}
+	clock.Advance(8*time.Minute + 20*time.Second + 92*time.Minute + 24*time.Second + operatorgates.PoolReserve)
+	f, err := bindingtest.New("head-bound", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,11 +468,11 @@ func TestHeadBindingRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &rehearsal{boundInit: operator.Init{Scenario: original, ClockBinding: &f.Artifacts, ArmedAtUnixMS: "1793930000000", EndUnixMS: "1793936300000"}}
+	r := &rehearsal{clock: clock, boundInit: operator.Init{Scenario: original, ClockBinding: &f.Artifacts, ArmedAtUnixMS: "1793930000000", EndUnixMS: "1793936300000"}}
 	next := original
 	next.Caller.SHA256 = strings.Repeat("d", 64)
 	got, err := r.headInit(next)
-	if err != nil || got.ClockBinding != r.boundInit.ClockBinding || got.Scenario.ClockReceiptSHA256 != original.ClockReceiptSHA256 || got.ArmedAtUnixMS != r.boundInit.ArmedAtUnixMS || got.EndUnixMS != r.boundInit.EndUnixMS || got.Scenario.Digest == original.Digest {
+	if err != nil || got.ClockBinding != r.boundInit.ClockBinding || got.Scenario.ClockReceiptSHA256 != original.ClockReceiptSHA256 || got.ArmedAtUnixMS != strconv.FormatInt(clock.Wall().UnixMilli(), 10) || got.EndUnixMS != strconv.FormatInt(clock.Wall().Add(operatorgates.SessionMaximum).UnixMilli(), 10) || got.Scenario.Digest == original.Digest {
 		t.Fatal("MUTATION: head-binding-lost", got, err)
 	}
 }

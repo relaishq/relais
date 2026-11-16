@@ -48,7 +48,7 @@ func (r *rehearsal) runHeadCaller(ctx context.Context, scenario operator.Scenari
 		_, _ = fmt.Fprintln(r.diagnostics, "head-caller-phase failed: "+code)
 		return head
 	}
-	if r.session == nil || r.session.Latched() {
+	if r.session == nil || r.session.Latched() || len(r.session.Uncertainties()) != 0 {
 		return fail("prior-gate-stopped")
 	}
 	// make operator-rehearsal-build places it beside this executable.
@@ -154,7 +154,7 @@ func (h HeadCallerReport) sanitized() HeadCallerReport {
 }
 
 func (r *rehearsal) headInit(scenario operator.Scenario) (operator.Init, error) {
-	init := r.boundInit
+	init := r.pinnedInit()
 	var err error
 	init.Scenario, err = operator.BuildScenarioIdentity(scenario, r.boundInit.Scenario.ClockReceiptSHA256)
 	return init, err

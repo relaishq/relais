@@ -75,3 +75,22 @@ class HelperTests(unittest.TestCase):
         with patch('sys.argv',['clock_probe.py','--listen','127.0.0.1:24891','--seconds','6300','--until-unix-ns','3000000000']), patch.object(helper.time,'time_ns',return_value=2000000000), patch.object(helper.http.server,'HTTPServer',return_value=server), patch.object(helper.threading,'Timer',Timer):
             helper.main()
         self.assertEqual(seen,[1.0], 'MUTATION: helper-run-deadline')
+
+    def test_rehearsal_lifetime_cap(self):
+        from unittest.mock import Mock
+        class Timer:
+            def __init__(self, seconds, done): self.done = done
+            def start(self): self.done()
+            def cancel(self): pass
+        for seconds in (6300, 10800, 10801):
+            with self.subTest(seconds=seconds):
+                server = Mock()
+                argv = ['clock_probe.py', '--listen', '127.0.0.1:0', '--seconds', str(seconds)]
+                with patch('sys.argv', argv), patch.object(helper.http.server, 'HTTPServer', return_value=server), patch.object(helper.threading, 'Timer', Timer):
+                    if seconds == 10801:
+                        with self.assertRaises(ValueError, msg='MUTATION: helper-lifetime-cap'):
+                            helper.main()
+                        self.assertFalse(server.shutdown.called)
+                    else:
+                        helper.main()
+                        server.shutdown.assert_called_once()
