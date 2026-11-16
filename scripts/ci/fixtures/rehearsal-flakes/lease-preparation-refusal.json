@@ -1,0 +1,230 @@
+{
+  "cleanup": true,
+  "clockCoverage": {
+    "drainComplete": true,
+    "falsified": false
+  },
+  "clockSelection": {
+    "cause": ""
+  },
+  "cpu": {
+    "calibration": {
+      "causes": [],
+      "checks": [],
+      "decoderDropped": 0,
+      "decoderErrors": 0,
+      "duplicatePackets": 0,
+      "passed": true
+    },
+    "phases": [
+      {
+        "causes": [],
+        "checks": [],
+        "decoderDropped": 0,
+        "decoderErrors": 0,
+        "duplicatePackets": 0,
+        "passed": true
+      },
+      {
+        "causes": [],
+        "checks": [],
+        "decoderDropped": 0,
+        "decoderErrors": 0,
+        "duplicatePackets": 0,
+        "passed": true
+      },
+      {
+        "causes": [],
+        "checks": [],
+        "decoderDropped": 0,
+        "decoderErrors": 0,
+        "duplicatePackets": 0,
+        "passed": true
+      }
+    ]
+  },
+  "errors": [],
+  "failures": [
+    "control-restart:procedure-incomplete",
+    "control-restart:media-missing-or-failed",
+    "control-restart:procedure-error",
+    "control-restart:not-passed",
+    "pooled-media-not-passed"
+  ],
+  "gates": [
+    {
+      "callerStopped": true,
+      "gate": "rollout",
+      "media": {
+        "completedCalls": 0,
+        "decryptionFailures": 0,
+        "droppedPhases": 0,
+        "excludedEvents": 0,
+        "expectedCalls": 0,
+        "failedMetrics": 0,
+        "iceRestarts": 0,
+        "includedPhases": 0,
+        "phaseDiagnostics": [
+          {
+            "cause": "",
+            "gate": "rollout",
+            "included": true,
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          }
+        ],
+        "saturationOverlaps": 0,
+        "status": "inconclusive"
+      },
+      "procedureCompleted": true,
+      "status": "inconclusive"
+    },
+    {
+      "callerStopped": true,
+      "gate": "control-restart",
+      "media": null,
+      "procedureCompleted": false,
+      "reason": "clock-lease-expired",
+      "status": "inconclusive"
+    },
+    {
+      "callerStopped": true,
+      "gate": "upgrade-rollback",
+      "media": {
+        "completedCalls": 0,
+        "decryptionFailures": 0,
+        "droppedPhases": 0,
+        "excludedEvents": 0,
+        "expectedCalls": 0,
+        "failedMetrics": 0,
+        "iceRestarts": 0,
+        "includedPhases": 0,
+        "phaseDiagnostics": [
+          {
+            "cause": "",
+            "gate": "rollout",
+            "included": true,
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "cause": "",
+            "gate": "upgrade-rollback",
+            "included": true,
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          }
+        ],
+        "saturationOverlaps": 0,
+        "status": "inconclusive"
+      },
+      "procedureCompleted": true,
+      "status": "inconclusive"
+    },
+    {
+      "callerStopped": true,
+      "gate": "relay-deploy",
+      "media": {
+        "completedCalls": 0,
+        "decryptionFailures": 0,
+        "droppedPhases": 0,
+        "excludedEvents": 0,
+        "expectedCalls": 0,
+        "failedMetrics": 0,
+        "iceRestarts": 0,
+        "includedPhases": 0,
+        "phaseDiagnostics": [
+          {
+            "cause": "",
+            "gate": "rollout",
+            "included": true,
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "cause": "",
+            "gate": "upgrade-rollback",
+            "included": true,
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "cause": "",
+            "gate": "relay-deploy",
+            "included": true,
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          }
+        ],
+        "saturationOverlaps": 0,
+        "status": "inconclusive"
+      },
+      "procedureCompleted": true,
+      "status": "inconclusive"
+    }
+  ],
+  "latched": false,
+  "pooledMedia": {
+    "completeMedia": true,
+    "completedCalls": 3,
+    "decryptionFailures": 0,
+    "droppedPhases": 0,
+    "duplicatePackets": 0,
+    "excludedEvents": 0,
+    "expectedCalls": 3,
+    "failedMetrics": 0,
+    "iceRestarts": 0,
+    "includedPhases": 3,
+    "lostCalls": 0,
+    "phaseDiagnostics": [
+      {
+        "cause": "",
+        "gate": "rollout",
+        "included": true,
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "cause": "",
+        "gate": "upgrade-rollback",
+        "included": true,
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "cause": "",
+        "gate": "relay-deploy",
+        "included": true,
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      }
+    ],
+    "qualifiedMoves": 13,
+    "qualifiedTakeovers": 10,
+    "relayCalls": 1,
+    "saturationOverlaps": 0,
+    "status": "inconclusive"
+  },
+  "schemaVersion": 1,
+  "timingUndecided": [],
+  "uncertainties": [],
+  "verdict": "failed"
+}
