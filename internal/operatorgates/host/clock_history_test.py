@@ -62,6 +62,16 @@ class HistoryTests(unittest.TestCase):
                 self.path.write_text(self.path.read_text().replace('1.234e-05', '1.235e-05'))
             self.assertEqual(self.page(cursor).get('cause'), 'clock-history-changed')
 
+    def test_frozen_tail_requires_a_later_update(self):
+        # Binding can start before the next eight-second update. The frozen
+        # closing row is present, but completeness needs a later timestamp.
+        self.path.write_text(''.join(self.row(s) for s in range(100, 301, 8)))
+        self.assertEqual(self.page()['cause'], 'clock-history-incomplete')
+        with self.path.open('a') as log:
+            log.write(self.row(308))
+        pages = self.collect()
+        self.assertEqual(sum(len(p['rows']) for p in pages), 26)
+
     def collect(self):
         pages, cursor = [], None
         while True:

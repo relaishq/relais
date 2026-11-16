@@ -1544,6 +1544,13 @@ separately with an 8 MiB decoded limit each and a half-frame combined wire limit
 Head Init retains the receipt and original armed/end times. Gate-owned historical
 paging uses a separate current read boundary and preserves exact column-14 tokens;
 it checks the frozen interval without moving the trailing admission window.
+The precision reader needs a later timestamp after the frozen closing row to
+prove that second complete. If that update has not arrived, binding retries
+the definite `clock-history-incomplete` refusal at 100 ms intervals within its
+original deadline. Other failures and unknown transport results are not retried.
+Rehearsal preserves `clock-binding-failed` and `clock-history-incomplete` in
+diagnostics and saved reports. `TestBindingClosingUpdate` covers an 8 s wait;
+`TestBindingHistoryRetryLimits` covers deadline, cancellation and latch boundaries.
 Live cursors start at the independently read tail; there is no freeze-gap rule.
 Coverage, padding, Check and both pinned judge summaries use the same bound proof.
 The pre-judge drain retains its 110-second judge reserve and only marks coverage
