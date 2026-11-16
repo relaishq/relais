@@ -68,3 +68,44 @@ On every outcome, `scripts/ci/rehearsal_summary.py` writes the verdict, gate and
 media statuses, timing-undecided rows, untrusted caller event counts and the clock
 selection cause to the run page. It reads only `report.json` and
 `clock-selection-status.json` and never changes the job result.
+
+## One automatic rehearsal rerun
+
+`operator-rehearsal-flake-rerun.yml` handles failed `Operator rehearsal` runs
+only on attempt 1 and only for `pull_request` or `push`. Scheduled and manual
+runs stay red. It reruns failed jobs once, then adds one short line to issue
+[#481](https://github.com/relaishq/relais/issues/481) with the signature, run URL
+and attempt numbers. The second attempt cannot trigger another automatic retry.
+
+The classifier requires a failed schema-1 report, clean calibration, no latch,
+no errors or uncertainties, completed cleanup, four identified gates and no
+unexplained failure code or media failure. `generator-saturation-flake` requires
+only `pooled-media-not-passed`, completed procedures and media, generator event
+exclusion with an interval-max violation, at least 10 qualified takeovers and
+fewer than 20 qualified moves. Pooled `excludedEvents` and `saturationOverlaps`
+are not used: both counters are zero in the four historical generator positives,
+whose pooled failure comes from a `clock-coverage-missing` timing row; the rule
+accepts that row only together with generator evidence.
+Each media phase inventory must match the exact expected population.
+A trial-count shortage alone is insufficient.
+`lease-expired-flake` requires exactly one gate with `reason: clock-lease-expired`
+and an empty category, refused before its procedure starts. Its media is absent;
+the other three procedures complete, with exactly three CPU phases and matching
+media phase inventories. Later gates must complete, rather than report
+`prior-gate-stopped`. The exact failure set contains that gate's
+`procedure-incomplete`, `media-missing-or-failed`, `procedure-error`, `not-passed`
+and `pooled-media-not-passed`. The missing-media failure is emitted by Go for a
+preparation refusal. A missing lease or incomplete armed inventory alone does
+not prove lease expiry. Missing, malformed or unexplained evidence
+produces `not-known` and no retry. Classification and a fixed reason appear in
+the job summary. Extracted report fixtures live in
+`scripts/ci/fixtures/rehearsal-flakes/`; they include a log-only lease refusal
+that deliberately stays `not-known` because its JSON lacks that cause.
+
+This privileged workflow checks out only default-branch code. It reads the
+triggering run's artifact as untrusted JSON with Python `-I`, outside the trusted
+checkout. Artifact text never becomes shell code or comment text. Its token has
+only `actions: write`, `issues: write` and `contents: read`. A final live-run
+check prevents a queued handler from retrying an attempt that has already changed.
+The job also requires the triggering workflow path to be exactly
+`.github/workflows/operator-rehearsal.yml`.
