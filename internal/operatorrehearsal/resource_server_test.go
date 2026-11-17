@@ -68,7 +68,7 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	defer cancel()
 	// Setup has consumed the measured worst-case time before gates are armed.
 	r.clock = operatorgates.NewRealClock()
-	setupArmed := now.Add(-20*time.Minute - 20*time.Second)
+	setupArmed := now.Add(-21*time.Minute - 10*time.Second)
 	init.ArmedAtUnixMS = strconv.FormatInt(setupArmed.UnixMilli(), 10)
 	init.EndUnixMS = strconv.FormatInt(setupArmed.Add(operatorgates.SessionMaximum).UnixMilli(), 10)
 	r.boundInit = init

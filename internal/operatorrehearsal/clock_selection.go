@@ -35,9 +35,15 @@ const clockSelectionExtraWindows = 2
 // Rehearsal allows twice the paid selection time for skipped chrony polls.
 const rehearsalClockAdmissionWindowSeconds = 240
 
+// Convergence can consume the targets' old tracking rows before ProbeHistory
+// sees them. At a skipped-poll cadence the opening probes can remain uncovered
+// for 17 s. Leave at least twice that recovery time after setup and row/read
+// rounding, so the unchanged selector can slide past the uncovered prefix.
+const rehearsalClockProbeRecovery = 50 * time.Second
+
 func rehearsalClockAdmissionTiming(latency, poll time.Duration) (seed, setup, window time.Duration) {
 	seed, setup, window = clockAdmissionTiming(latency, poll)
-	window += time.Duration(rehearsalClockAdmissionWindowSeconds-clockAdmissionWindowSeconds) * time.Second
+	window += time.Duration(rehearsalClockAdmissionWindowSeconds-clockAdmissionWindowSeconds)*time.Second + rehearsalClockProbeRecovery
 	return seed, setup, window
 }
 
@@ -98,8 +104,9 @@ type clockAdmissionPorts struct {
 	timeout      func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	// latency and poll size helper setup and the admission window.
 	latency, poll time.Duration
-	// Rehearsal waits for restored chrony, then retries only insufficient
-	// updates in at most two fresh windows within the combined time budget.
+	// Rehearsal waits for restored chrony and rereads transient probe refusals.
+	// Only insufficient updates start fresh windows, at most two extra within
+	// the combined time budget.
 	converge bool
 }
 
@@ -184,6 +191,12 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		}
 	}()
 	result := &ClockSelectionReport{Cause: "clock-selection-unavailable"}
+	var pendingProbeWindow *ClockSelectionFailure
+	defer func() {
+		if pendingProbeWindow != nil && result.Bounds == nil {
+			result.FailedWindows = append(result.FailedWindows, *pendingProbeWindow)
+		}
+	}()
 	logs := map[string]clocks.TrackingLog{}
 	cursors := map[string]json.RawMessage{}
 	var probes clocks.ProbeHistory
@@ -323,8 +336,8 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			// The first probe can arrive only after helper setup. Rehearsal
 			// must not select a window whose opening probes are still missing.
 			if p.converge {
-				if earliest := p.now().Add(-clockProbeAllowance); earliest.After(started) {
-					started = earliest
+				if now := p.now(); now.After(started) {
+					started = now
 				}
 			}
 		}
@@ -357,18 +370,19 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 					}
 					break
 				}
-				if p.converge {
+				if p.converge && cause == "clock-select-probes" {
+					// Probe coverage can recover on a later read in this window.
+					// Keep the accumulated records so falsifications stay sticky.
+					failure := failedClockWindow(e, result.Cause)
+					pendingProbeWindow = &failure
+				} else if p.converge {
+					pendingProbeWindow = nil
 					result.FailedWindows = append(result.FailedWindows, failedClockWindow(e, result.Cause))
 					if cause != "clock-select-updates" || len(result.FailedWindows) > clockSelectionExtraWindows || p.now().Add(window).After(admissionLimit) || ctx.Err() != nil {
 						return result
 					}
-					// Keep cursors and only rows after the failed window. No failed
-					// window update may count toward the next selection. Keep probe
-					// history so a falsification remains sticky across retries.
-					for slot, log := range logs {
-						log.Rows = slices.DeleteFunc(log.Rows, func(row clocks.TrackingRow) bool { return row.UnixSeconds <= e.EndUnixSeconds })
-						logs[slot] = log
-					}
+					// Keep history for predecessor checks. The started admission
+					// check excludes failed-window updates from the next selection.
 					started = p.now()
 					end = started.Add(window)
 					admission, admissionDone := p.timeout(admissionParent, window)

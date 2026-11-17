@@ -7677,5 +7677,43 @@
     "Test": "TestPreFaultRefusalDiagnostics/headroom",
     "Marker": "MUTATION: prefault-refusal-diagnostics",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rehearsal-retry-window-end",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "started = p.now()\n\t\t\t\t\tend = started.Add(window)",
+    "New": "started = p.now()\n\t\t\t\t\tend = started.Add(window - time.Second)",
+    "Test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+    "Marker": "MUTATION: rehearsal-retry-end",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-extra-window-bound",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Old": "clockSelectionExtraWindows = 2",
+    "New": "clockSelectionExtraWindows = 1",
+    "Test": "TestRehearsalClockSelectionThreeUpdateFailures",
+    "Marker": "MUTATION: rehearsal-extra-windows",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-combined-admission-limit",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "p.now().Add(window).After(admissionLimit)",
+    "New": "p.now().Add(window).After(admissionLimit) && false",
+    "Test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+    "Marker": "MUTATION: rehearsal-admission-limit",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-opening-probe-recovery-budget",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Old": "rehearsalClockProbeRecovery = 50 * time.Second",
+    "New": "rehearsalClockProbeRecovery = 0 * time.Second",
+    "Test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
+    "Marker": "MUTATION: opening-recovery-budget",
+    "Package": "./internal/operatorrehearsal"
   }
 ]
