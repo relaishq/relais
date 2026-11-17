@@ -12,7 +12,7 @@ widens the baseline-floor interval and leaves unsupported metrics inconclusive;
 this fix does not narrow that uncertainty or choose a new baseline.
 
 A live A5-class takeover with about 14.4 ms start uncertainty exceeded the
-former 4096-cell budget. The 8192-cell candidate adds cell margin; the
+former 4096-cell budget. The 8192-cell cap adds cell margin; the
 synthetic 15 ms fixture is not a bound on live cell density. Pass/fail
 thresholds, the pooled minimum of 20 moves / 10 takeovers, and the exclusion
 policy are unchanged. The judge still requires consistent first-event
@@ -47,7 +47,8 @@ takeover start interval and span force the second event to exhaust the
 production 8192-cell limit; that event retains those references in its own
 report. The third retains the first references, completes below the cap, and
 preserves that known failure. Its freshness verdicts exactly match an uncapped
-evaluation given the same conservative floor from event two. The floor is deliberately retained: comparing against a run
+evaluation given the same conservative floor from event two. The floor is
+deliberately retained: comparing against a run
 that did not exhaust event two would remove real uncertainty from the inputs.
 `TestDistributedExhaustedFirstBaselineStaysUnknown` prevents later events from
 inventing a replacement first baseline when the self evaluation exhausted.

@@ -82,7 +82,8 @@ limits with margin, and repeat full-cap CPU measurements and the 1-P/2-P
 caller gates when resizing. Select the largest power-of-two cap at or above
 8192 whose measured worst capped CPU is at most 0.125 s/event, giving 2x
 margin under the unchanged 0.25 s calibration gate. Keep at least 2x the
-measured realistic cell maximum. The new cap does not change product thresholds or turn exhausted evidence into a pass.
+measured realistic cell maximum. The new cap does not change product
+thresholds or turn exhausted evidence into a pass.
 Existing bounded history, event/reference counts and the cell cap bound work;
 #118's yields remain in boundary building and every 32 evaluated cells.
 
@@ -98,32 +99,32 @@ per caller also passes: one P has p99 7.050 ms / max 9.098 ms; two Ps have p99
 
 Go 1.26.9, darwin/arm64, GOMAXPROCS=2. Each batch ran
 `TestTakeoverCapCPUMeasurement -count=3`: five trials per reference count in
-each invocation, for 15 trials with one reference and 15 with four references
-per batch. The final 8192 batch also checks the exhaustion reason explicitly.
-All trials reached the cap. The measurement
-includes boundary construction and cell evaluation; it excludes fixture and
-index construction. These process CPU measurements ran under shared load;
-readings during initial calibration were about 19–22; the final batch began
-at 17.99 and ended at 18.23, above the timing-gate load limit.
+each invocation, 15 trials with one reference and 15 with four references.
+All trials reached the cap. The measurement includes boundary construction
+and cell evaluation; it excludes fixture and index construction.
 
-| Cap / batch | Worst CPU, 1 reference | Worst CPU, 4 references | At most 0.125 s/event |
-| --- | ---: | ---: | --- |
-| 16384 / initial | 0.150671 s | 0.202602 s | No |
-| 8192 / initial | 0.078970 s | 0.141760 s | No |
-| 8192 / final | 0.061514 s | 0.121954 s | Yes, in this batch |
+| Cap / batch | One-minute load | Worst CPU, 1 reference | Worst CPU, 4 references | At most 0.125 s/event |
+| --- | ---: | ---: | ---: | --- |
+| 16384 / shared load | about 19–22 | 0.150671 s | 0.202602 s | No |
+| 8192 / shared load | about 18–22 | 0.078970 s | 0.141760 s | No |
+| 8192 / qualifying | 7.67 at start | 0.061254 s | 0.068222 s | Yes |
 
-The 16384 cap fails the 2x CPU-margin target. The final 8192 batch meets it,
-but the initial four-reference outlier is retained: the worst across both
-8192 batches (30 trials per reference count) remains 0.141760 s/event.
-The configured 8192 candidate has not qualified under a worst-observed rule
-across all batches. Staying below the existing 0.25 s gate does not establish
-2x margin. No exception to the 0.125 s sizing target is assumed.
+Shared-load readings inflate process CPU; the 16384 cap fails the 2x target
+even there by a wide margin and is not used. 8192 qualifies when measured at
+load at most 8: its worst capped CPU is 0.068 s/event, 3.7x under the 0.25 s
+gate.
 
-NOT-RUN: strict 1-P/2-P caller cost gates, both normal and delayed-maintenance
-variants, are held while the one-minute load exceeds 8 (latest reading 17.41).
-The historical caller timing results above do not validate the new cap.
-The full 30-event legacy oracle is also NOT-RUN; its mapped, capped prefix
-check passed with the race detector.
+The strict caller cost gates also pass at the 8192 cap (same session):
+
+| Scheduler Ps | Maintenance | Report + JSON | Pacer p99 / max | Skipped frames |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | normal (2 retained) | 1.796 s | 10.483 / 10.483 ms | 0 |
+| 1 | delayed (30 retained) | 1.766 s | 8.676 / 9.670 ms | 0 |
+| 2 | normal (2 retained) | 1.724 s | 2.043 / 2.043 ms | 0 |
+| 2 | delayed (30 retained) | 2.035 s | 6.473 / 8.024 ms | 0 |
+
+The opt-in full-report oracle reports identical full evidence for 30 events,
+including 29 capped events.
 
 ## Why the reductions preserve evidence
 

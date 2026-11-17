@@ -468,6 +468,7 @@ func TestDistributedExhaustedFirstBaselineStaysUnknown(t *testing.T) {
 	recordDenseEvent(t, r, c, "later", "move", 40*time.Second, 40030*time.Millisecond)
 	reports := r.measureMoves(r.hungUpAt, 2)
 	require.Equal(t, maxClassificationEvaluations, reports[0].Distributed.Evaluations)
+	require.Contains(t, reports[0].Measurement.ResumeVerdict.Summary(), fmt.Sprintf("exceeds %d evaluations", maxClassificationEvaluations))
 	require.Nil(t, reports[0].Distributed.FirstBaselines)
 	require.Nil(t, reports[1].Distributed.FirstBaselines)
 	require.Less(t, reports[1].Distributed.Evaluations, maxClassificationEvaluations)

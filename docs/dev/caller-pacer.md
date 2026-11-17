@@ -112,9 +112,10 @@ the offline fixture supplies realistic retained-history costs. The offline
 pacer fixture isolates scheduler and recorder-lock contention and does not
 write actual RTP packets.
 
-The before strict gate failed. Three after runs passed. The original 4096-cell full-budget
-comparison preserved every field of all 30 move reports, including 25 capped
+The before strict gate failed. Three after runs passed. The original
+4096-cell full-budget comparison preserved every field of all 30 move reports, including 25 capped
 events. The current oracle uses ±1 s worker offsets and explicitly checks the
-exhaustion reason on every event that reaches the production cap. Additional comparisons cover missing content, identity corruption,
+exhaustion reason on every event that reaches the production cap.
+Additional comparisons cover missing content, identity corruption,
 unknown content and reversed receipts. Redis was not needed for these checks.
 A live multi-host SIGINT run and its network teardown/output time were not run.
