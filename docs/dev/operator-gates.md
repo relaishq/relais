@@ -250,8 +250,9 @@ at the earliest. It ends one second before a tracking row, which can come up
 to P later. Attempts start at 123 s and repeat after each read and a 2 s
 pause, so an attempt that just misses that row is followed by the pause and
 one more read of L. One second is left for selection. Without flags the
-values stay 10 s, 10 s and 150 s and the rehearsal is unchanged; the first
-selection stays at 123 s.
+values stay 10 s, 10 s and 150 s; the first selection stays at 123 s.
+Hosted rehearsal explicitly supplies P = 8 s and L = 400 ms. Its seed,
+setup and admission window also remain 10 s, 10 s and 150 s.
 
 Two timings are refused before any host command:
 
@@ -1325,17 +1326,52 @@ timeout) into the existing 4 MiB capped format. Lifetime is bounded to 1–10,80
 passes `--until-unix-ns` to preserve the original run deadline. Shutdown is
 cooperative; stalled peers can delay exit beyond that deadline.
 
+Hosted rehearsal configures every host with `minpoll 3 maxpoll 3`: P = 8 s,
+the same poll as paid runs, with about 15 updates per 120 s selection window.
+The local TimeIP reference allows the disposable subnet and has no reply rate
+limit, so it can serve the 8 s polls and initial `iburst`. Both admission and
+the pinned and head-caller sessions explicitly use P = 8 s and the existing
+local-read reference L = 400 ms. The zero-value session reference remains
+P = 1 s, L = 400 ms; it is not the hosted rehearsal configuration.
+
 After negative controls restore, rehearsal establishes/drains cursors before
-starting helpers or the admission timer, without reading the probe file. This
-preflight has a ten-second budget including a two-second guard to keep overflow
-breaks outside the selector's margin. Startup history remains recorded. Then
-parallel reads/selection start at 123 s within a fixed 150 s admission deadline;
-setup has ten seconds inside that deadline. Helpers then remain available through
-the original session deadline for run-long falsification observations.
+starting helpers or the admission timer, without reading the probe file. The
+derived seed budget remains ten seconds; the two-second guard keeps overflow
+breaks outside the selector's margin. It then waits up to **ten minutes** for
+every host's latest tracking interval (including the opening boundary row) to
+fit the existing `B(host)` formula and the combined 250/350 µs ceilings. This
+uses exact column-14 rounding, current five-poll leases and the unchanged 5 ppm
+growth limit. Reads run in parallel and retry after two seconds. `waitsync`
+alone does not establish this readiness after the wrong-time-source restore.
+Startup history remains recorded. Helpers and the admission timer start only
+after convergence, so selection must collect a **fresh full 120 s trailing
+window**. A timeout keeps the last fixed selection cause, such as
+`clock-select-ceiling`, rather than reporting a generic timeout or read failure.
+The standalone `clock-admit` launcher keeps its existing admission flow.
+Parallel reads/selection start at 123 s within the derived 150 s admission deadline;
+setup has ten seconds inside that deadline. Helpers remain available through
+the hosted job's original 180-minute deadline for run-long falsification observations.
 Non-cancelled exits wait through deadline +2 s before calibration (152 s plus
-preflight, at most 162 s). Parent cancellation skips that wait and returns promptly;
+preflight, at most 162 s, plus the separate convergence wait). Parent cancellation skips that wait and returns promptly;
 deployment cleanup removes the helpers with their containers. Generated chrony
 configuration declares hosts and caller unsmeared.
+
+At these hosted inputs, seed plus admission is 160 s, below the 300 s admission
+maximum. Ten required updates need 80 s, below the 120 s selection window.
+The convergence cap is separate from that 300 s admission maximum. Ten minutes
+allows 75 tracking updates at the eight-second poll. Adding that cap to the
+existing conservative 136 min 36 s campaign timing model
+gives 146 min 36 s, leaving 33 min 24 s within the 180-minute job limit.
+`TestHeadCampaignFitsAfterPinnedSequence` pins this margin. Convergence precedes
+the fresh pinned session and does not consume either campaign's session budget.
+The 17.6 s drain leaves 102.4 s of the 120 s pool reserve for judging, above
+its 60 s minimum. Four restoration reads plus submission and rounding need
+32.6 s of the existing 60 s restore reserve. The 120 s binding deadline,
+31-minute gate limit, 105-minute session limit, 180-minute helper lifetime
+and workflow timeout stay unchanged. No product threshold increases.
+`TestRehearsalClockTiming`, `TestRehearsalPollAdmission`,
+`TestHostedPollTimingBudget` and `TestWorkflowUsesPublicRunnerAndNarrowArtifacts`
+pin the wiring, all eight tracking-row phases, derived budgets and helper/job limit.
 
 The 5 ppm growth policy uses runs 42302414107/42330487259: their maximum
 successful-read residual-plus-skew was 0.251/0.147 ppm. Adding the configured
@@ -1352,6 +1388,9 @@ expired slot, its aged lease age (reference age plus host elapsed time) and the
 before calibration without an admitted receipt. Selected bounds reach both pinned
 caller manifests and external coverage qualification. Pinned product bytes and
 judge policies remain unchanged; stored classifications cannot be re-bounded.
+Reports preserve `clock-select-ceiling` and `clock-binding-missing` as public
+codes. A missing binding after refused selection retains the original cause in
+`clockSelection.cause`.
 `TestClockSelectionAdmissionArtifacts` exercises the real reader with oversized
 logs, a transient read failure and the real CLI. PR admission is a separate gate.
 
@@ -1450,17 +1489,25 @@ batch. Without `clockTiming` the session uses the reference timing, P = 1 s and
 L = 400 ms, and every value below equals the earlier fixed constant
 (`TestTimingBudgetDerivation`).
 
-| Time | Derivation | Reference | P = 8 s, L = 4 s |
-|---|---|---|---|
-| Single lease read, after queueing | L + 150 ms process start | 550 ms | 4.15 s |
-| Lease batch, after queueing | 4L | 1.6 s | 16 s |
-| Whole lease observation (attempt) | 4L + P/5 | 1.8 s | 17.6 s |
-| Trailing coverage drain limit | max(10 s, 2P + 4L) | 10 s | 32 s |
-| Judge reserve | 120 s pool reserve − drain limit | 110 s | 88 s |
+| Time | Derivation | Reference | Hosted P = 8 s, L = 400 ms | P = 8 s, L = 4 s |
+|---|---|---|---|---|
+| Single lease read, after queueing | L + 150 ms process start | 550 ms | 550 ms | 4.15 s |
+| Lease batch, after queueing | 4L | 1.6 s | 1.6 s | 16 s |
+| Whole lease observation (attempt) | 4L + P/5 | 1.8 s | 3.2 s | 17.6 s |
+| Trailing coverage drain limit | max(10 s, 2P + 4L) | 10 s | 17.6 s | 32 s |
+| Judge reserve | 120 s pool reserve − drain limit | 110 s | 102.4 s | 88 s |
 
 Lease validity (5P) and the refresh window (10P) still come from each host's
-own reported poll period. The 100 ms retry poll and the one-second drain wait
-do not change.
+own reported poll period: 40 s and 80 s at the hosted 8 s poll. The optional
+restoration proof retries for at most 5P (40 s) with P/10 (800 ms) spacing,
+inside its original reserve cutoff. The ordinary 100 ms lease refresh retry
+poll and the one-second drain wait do not change.
+
+An 8 s poll can make selection wait longer for the next tracking row and can
+delay a stale-clock refusal within the existing outer deadlines. The drain
+can take 7.6 s longer per session, leaving 7.6 s less judge reserve. Older
+reference updates can remain leased, but error growth, selected bounds,
+coverage rules and judge policy still apply unchanged.
 
 A configuration that cannot fit the existing deadlines is refused with a named
 cause. `relais-gates session` checks it after it reads the configuration and
@@ -1516,6 +1563,13 @@ separately with an 8 MiB decoded limit each and a half-frame combined wire limit
 Head Init retains the receipt and original armed/end times. Gate-owned historical
 paging uses a separate current read boundary and preserves exact column-14 tokens;
 it checks the frozen interval without moving the trailing admission window.
+The precision reader needs a later timestamp after the frozen closing row to
+prove that second complete. If that update has not arrived, binding retries
+the definite `clock-history-incomplete` refusal at 100 ms intervals within its
+original deadline. Other failures and unknown transport results are not retried.
+Rehearsal preserves `clock-binding-failed` and `clock-history-incomplete` in
+diagnostics and saved reports. `TestBindingClosingUpdate` covers an 8 s wait;
+`TestBindingHistoryRetryLimits` covers deadline, cancellation and latch boundaries.
 Live cursors start at the independently read tail; there is no freeze-gap rule.
 Coverage, padding, Check and both pinned judge summaries use the same bound proof.
 The pre-judge drain retains its 110-second judge reserve and only marks coverage

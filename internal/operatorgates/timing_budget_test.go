@@ -18,6 +18,18 @@ import (
 
 var slowTiming = ClockTiming{PollSeconds: 8, HostReadLatencyMS: 4000}
 
+// The hosted poll uses local-read latency. Pin the actual session derivation
+// separately from both the zero-value reference and slow remote transports.
+func TestHostedPollTimingBudget(t *testing.T) {
+	b, err := (ClockTiming{PollSeconds: 8, HostReadLatencyMS: 400}).budget(4)
+	require.NoError(t, err)
+	require.Equal(t, 3200*time.Millisecond, b.leaseAttempt())
+	require.Equal(t, 550*time.Millisecond, b.leaseReadMinimum())
+	require.Equal(t, 1600*time.Millisecond, b.leaseBatchMinimum())
+	require.Equal(t, 17600*time.Millisecond, b.drainLimit())
+	require.Equal(t, 102400*time.Millisecond, b.judgeReserve())
+}
+
 func TestTimingBudgetDerivation(t *testing.T) {
 	reference, err := ClockTiming{}.budget(4)
 	require.NoError(t, err)

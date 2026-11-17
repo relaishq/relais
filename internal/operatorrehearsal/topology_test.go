@@ -88,7 +88,7 @@ func TestBootPlanUsesTLSActualTemplateAndServiceAffinity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, directive := range []string{"log tracking\n", "logdir /var/log/chrony\n", "maxclockerror 1\n"} {
+		for _, directive := range []string{"server " + TimeIP + " prefer iburst minpoll 3 maxpoll 3\n", "log tracking\n", "logdir /var/log/chrony\n", "maxclockerror 1\n"} {
 			if !strings.Contains(string(config), directive) {
 				t.Fatal("tracking log configuration missing", slot, directive)
 			}
@@ -270,7 +270,7 @@ func TestTemplateChronyScriptMatchesInstallBlock(t *testing.T) {
 		pass          bool
 	}{
 		{"template", string(written), true},
-		{"rehearsal-reference", "server 10.42.0.5 prefer iburst minpoll 0 maxpoll 0\n", false},
+		{"rehearsal-reference", "server " + TimeIP + " prefer iburst minpoll 3 maxpoll 3\n", false},
 		{"slower-poll", strings.Replace(string(written), "minpoll 3 maxpoll 3", "minpoll 4 maxpoll 4", 1), false},
 	} {
 		if err = os.WriteFile(conf, []byte(row.content), 0644); err != nil {

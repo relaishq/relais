@@ -149,6 +149,8 @@ func publicCode(s string) string {
 		return s
 	}
 	switch s {
+	case "clock-binding-failed", "clock-history-incomplete", "clock-binding-missing", "clock-select-ceiling":
+		return s
 	case "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ":
 		return s
 	case "compatibility-refused", "invalid-gate", "invalid-process-endpoints", "invalid-process-measurement", "invalid-process-scope", "invalid-receipt-count", "invalid-release-pins", "known-call-loss", "known-relay-failure", "missing-clock-assumptions", "missing-completion-proof", "missing-drain-evidence", "missing-drain-receipt", "missing-fault-proof", "missing-independent-admission-inventory", "missing-live-call", "missing-live-inventory", "missing-live-workers", "missing-move-evidence", "missing-move-receipt", "missing-original-call", "missing-readiness-evidence", "missing-relay-continuity", "missing-relay-evidence", "missing-synchronous-primary", "missing-takeover-receipt", "missing-target-inventory", "missing-trial-call", "missing-trial-identity", "missing-trial-inventory", "relay-continuity-failed", "relay-self-fence", "restore-failed", "restore-unconfirmed", "restore-unsettled", "unknown-drain", "unsupported-capability", "unsupported-relay-criterion":
