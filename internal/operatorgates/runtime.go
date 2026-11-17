@@ -223,6 +223,9 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	var hooks []ExchangeHooks
 	if !host.IsRead(op) && !restore {
 		if err = lease.Guard.Check(); err != nil {
+			if plannedFault {
+				lease.Guard.recordFaultLease(&quiet)
+			}
 			return StepResult{}, err
 		}
 		hooks = []ExchangeHooks{{BeforeSend: lease.Guard.Check}}

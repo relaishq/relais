@@ -6342,14 +6342,14 @@
       {
         "File": "internal/operatorgates/lease_quiet.go",
         "Function": "prepareFault",
-        "Old": "err := g.checkAt(ready)",
+        "Old": "err := g.checkAt(ready + faultLeaseSchedulingMargin)",
         "New": "err := g.Check()"
       },
       {
         "File": "internal/operatorgates/lease_quiet.go",
         "Function": "prepareFault",
-        "Old": "if err = g.checkFaultQuiet(gap, timing); err == nil {",
-        "New": "if err = nil; err == nil {"
+        "Old": "if err = g.checkAt(g.clock.Elapsed() + faultLeaseSchedulingMargin); err == nil {\n\t\t\t\terr = g.checkFaultQuiet(gap, timing)\n\t\t\t}",
+        "New": "err = nil"
       }
     ]
   },
@@ -7519,11 +7519,11 @@
     "Marker": "MUTATION: admission-partial-accounting"
   },
   {
-    "ID": "admission-discards-survivor-reason",
-    "File": "internal/operatorgates/sequence.go",
-    "Function": "RunAdmission",
-    "Old": "r.CompletedSteps = r.Survivor.CompletedSteps\n\tr.Reason = r.Survivor.Reason",
-    "New": "r.CompletedSteps = r.Survivor.CompletedSteps\n\tr.Reason = \"\"",
+    "ID": "admission-discards-survivor-diagnostic",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "out.ProcedureReason = admitted.Survivor.Measurement.ErrorReason",
+    "New": "out.ProcedureReason = \"\"",
     "Package": "./internal/operatorgates",
     "Test": "TestAdmissionRetainsSurvivorError",
     "Marker": "MUTATION: admission-survivor-error"
@@ -7627,5 +7627,55 @@
     "Package": "./internal/operatorgates",
     "Test": "TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome",
     "Marker": "MUTATION: admission-first-diagnostic"
+  },
+  {
+    "ID": "prefault-expired-entry-refused",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "prepareFault",
+    "Old": "err != nil && code(err) != \"clock-lease-expired\"",
+    "New": "err != nil",
+    "Test": "TestPreFaultExpiredEntry/fresh",
+    "Marker": "MUTATION: prefault-expired-entry",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "prefault-scheduling-margin-omitted",
+    "Test": "TestPreFaultSchedulingMargin/projected",
+    "Marker": "MUTATION: prefault-scheduling-margin",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "err := g.checkAt(ready + faultLeaseSchedulingMargin)",
+        "New": "err := g.checkAt(ready)"
+      },
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "g.checkAt(g.clock.Elapsed() + faultLeaseSchedulingMargin)",
+        "New": "g.Check()"
+      }
+    ]
+  },
+  {
+    "ID": "prefault-post-wait-headroom-skipped",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "prepareFault",
+    "Old": "if err = g.checkAt(g.clock.Elapsed() + faultLeaseSchedulingMargin); err == nil {",
+    "New": "if err = nil; err == nil {",
+    "Test": "TestPreFaultSchedulingMargin/oversleep",
+    "Marker": "MUTATION: prefault-scheduling-margin",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "prefault-refusal-slot-discarded",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "recordFaultLease",
+    "Old": "if timing.LimitingSlot == \"\" || v.RemainingNS < timing.RemainingNS {",
+    "New": "if false {",
+    "Test": "TestPreFaultRefusalDiagnostics/headroom",
+    "Marker": "MUTATION: prefault-refusal-diagnostics",
+    "Package": "./internal/operatorgates"
   }
 ]
