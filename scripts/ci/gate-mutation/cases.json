@@ -7715,5 +7715,55 @@
     "Test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
     "Marker": "MUTATION: opening-recovery-budget",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-transient-probes-terminal",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if p.converge && cause == \"clock-select-probes\" {",
+    "New": "if false {",
+    "Test": "TestRehearsalClockSelectionTransientProbesRecover",
+    "Marker": "MUTATION: rehearsal-transient-probes",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-setup-opening-unadjusted",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if now := p.now(); now.After(started) {",
+    "New": "if now := p.now(); false {",
+    "Test": "TestRehearsalClockSelectionSetupOpening",
+    "Marker": "MUTATION: rehearsal-setup-opening",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-hosted-opening-probes-skipped",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "probeFront = front",
+    "New": "probeFront = \"\"",
+    "Test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+    "Marker": "MUTATION: hosted-opening-recovery",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-convergence-history-discarded",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "probes.Collect(batch, \"\", nil)",
+    "New": "",
+    "Test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+    "Marker": "MUTATION: hosted-opening-recovery",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-final-falsification-retried",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if p.converge && slices.ContainsFunc(records, func(record clocks.ProbeRecord) bool { return record.Status == \"falsified\" }) {",
+    "New": "if false {",
+    "Test": "TestRehearsalClockSelectionFalsificationPrecedesLaterCause/clock-select-growth",
+    "Marker": "MUTATION: rehearsal-final-falsification",
+    "Package": "./internal/operatorrehearsal"
   }
 ]
