@@ -35,10 +35,8 @@ const clockSelectionExtraWindows = 2
 // Rehearsal allows twice the paid selection time for skipped chrony polls.
 const rehearsalClockAdmissionWindowSeconds = 240
 
-// Convergence can consume the targets' old tracking rows before ProbeHistory
-// sees them. At a skipped-poll cadence the opening probes can remain uncovered
-// for 17 s. Leave at least twice that recovery time after setup and row/read
-// rounding, so the unchanged selector can slide past the uncovered prefix.
+// Keep recovery margin after setup and row/read rounding, even when retained
+// convergence history covers the opening probes at a skipped-poll cadence.
 const rehearsalClockProbeRecovery = 50 * time.Second
 
 func rehearsalClockAdmissionTiming(latency, poll time.Duration) (seed, setup, window time.Duration) {
@@ -316,6 +314,8 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 				if err := clocks.CheckConvergence(e, p.policy); err != nil {
 					result.Cause = clockSelectionCause(err.Error())
 					result.LeaseRefusal = leaseRefusal(result.Cause, e.Hosts)
+					// Preserve predecessors without claiming a probe read before startup.
+					probes.Collect(batch, "", nil)
 					if p.pause(ctx, clockRetryPause) != nil {
 						return result
 					}
@@ -352,6 +352,14 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		records = mergeClockProbeRecords(records, e.Falsification.Records)
 		e.Falsification.Records = records
 		e.StartUnixSeconds = e.EndUnixSeconds - selectionSeconds
+		if p.converge && slices.ContainsFunc(records, func(record clocks.ProbeRecord) bool { return record.Status == "falsified" }) {
+			// Falsification is final; a later read must not replace its cause.
+			result.Cause = "clock-select-probes"
+			result.LeaseRefusal = nil
+			pendingProbeWindow = nil
+			result.FailedWindows = append(result.FailedWindows, failedClockWindow(e, result.Cause))
+			return result
+		}
 		if admitting && complete {
 			if time.Unix(e.StartUnixSeconds, 0).Before(started) {
 				result.Cause = "clock-select-admission"

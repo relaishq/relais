@@ -727,7 +727,12 @@
     "rehearsal-retry-window-end",
     "rehearsal-extra-window-bound",
     "rehearsal-combined-admission-limit",
-    "rehearsal-opening-probe-recovery-budget"
+    "rehearsal-opening-probe-recovery-budget",
+    "rehearsal-transient-probes-terminal",
+    "rehearsal-setup-opening-unadjusted",
+    "rehearsal-hosted-opening-probes-skipped",
+    "rehearsal-convergence-history-discarded",
+    "rehearsal-final-falsification-retried"
   ],
   "killed": [
     {
@@ -5950,6 +5955,36 @@
     {
       "id": "rehearsal-opening-probe-recovery-budget",
       "test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-transient-probes-terminal",
+      "test": "TestRehearsalClockSelectionTransientProbesRecover",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-setup-opening-unadjusted",
+      "test": "TestRehearsalClockSelectionSetupOpening",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-hosted-opening-probes-skipped",
+      "test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-convergence-history-discarded",
+      "test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-final-falsification-retried",
+      "test": "TestRehearsalClockSelectionFalsificationPrecedesLaterCause/clock-select-growth",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed"
     }
