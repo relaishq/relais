@@ -79,9 +79,10 @@ no evidence is dropped based on elapsed time.
 The earlier rule kept 4096 while realistic 15 ms phase maxima stayed below
 half the cap. The live event invalidates that condition. Size operational
 limits with margin, and repeat full-cap CPU measurements and the 1-P/2-P
-caller gates when resizing. Select the largest power-of-two cap at or above
-8192 whose measured worst capped CPU is at most 0.125 s/event, giving 2x
-margin under the unchanged 0.25 s calibration gate. Keep at least 2x the
+caller gates when resizing. Grow the cap one power of two at a time and stop
+at the first step that both doubles the former cap and keeps measured worst
+capped CPU at most 0.125 s/event, 2x under the unchanged 0.25 s calibration
+gate. A larger cap needs evidence that live events need it. Keep at least 2x the
 measured realistic cell maximum. The new cap does not change product
 thresholds or turn exhausted evidence into a pass.
 Existing bounded history, event/reference counts and the cell cap bound work;
@@ -107,12 +108,13 @@ and cell evaluation; it excludes fixture and index construction.
 | --- | ---: | ---: | ---: | --- |
 | 16384 / shared load | about 19–22 | 0.150671 s | 0.202602 s | No |
 | 8192 / shared load | about 18–22 | 0.078970 s | 0.141760 s | No |
-| 8192 / qualifying | 7.67 at start | 0.061254 s | 0.068222 s | Yes |
+| 8192 / qualifying | 7.67 at start, 10.06 at end | 0.061254 s | 0.068222 s | Yes |
 
-Shared-load readings inflate process CPU; the 16384 cap fails the 2x target
-even there by a wide margin and is not used. 8192 qualifies when measured at
-load at most 8: its worst capped CPU is 0.068 s/event, 3.7x under the 0.25 s
-gate.
+Shared-load readings inflate process CPU. 8192, twice the former cap,
+qualifies when measured at low load: its worst capped CPU is 0.068 s/event,
+3.7x under the 0.25 s gate, so it is the configured cap. 16384 was measured
+only under shared load and was not measured at low load; no live event has
+shown a need for it.
 
 The strict caller cost gates also pass at the 8192 cap (same session):
 
