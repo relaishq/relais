@@ -33,6 +33,7 @@ func convergenceFixture(t *testing.T, readyAfter time.Duration) clockAdmissionPo
 	clock := &virtualClock{now: p.now()}
 	p.now, p.pause, p.timeout = clock.Now, clock.Pause, clock.Timeout
 	p.poll = 8 * time.Second
+	p.policy = rehearsalClockPolicy()
 	ready := p.now().Add(readyAfter).Unix()
 	dir := t.TempDir()
 	p.read = func(ctx context.Context, slot, script string) (string, error) {
@@ -73,6 +74,7 @@ func convergenceFixture(t *testing.T, readyAfter time.Duration) clockAdmissionPo
 // restored clock is still settling. Early high-error rows poison the window.
 func TestClockAdmissionBeforeConvergenceCharacterization(t *testing.T) {
 	p := convergenceFixture(t, 40*time.Second)
+	p.policy.WindowSeconds = 120
 	base := p.now()
 	var began time.Time
 	p.start = func(context.Context, time.Time) error { began = p.now(); return nil }
@@ -91,7 +93,7 @@ func TestClockAdmissionWaitsForConvergence(t *testing.T) {
 	selectBounds := p.selectBounds
 	p.selectBounds = func(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
 		require.GreaterOrEqual(t, e.StartUnixSeconds, began.Unix())
-		require.Equal(t, int64(120), e.EndUnixSeconds-e.StartUnixSeconds)
+		require.Equal(t, int64(240), e.EndUnixSeconds-e.StartUnixSeconds)
 		return selectBounds(ctx, e, policy)
 	}
 	r := collectClockSelection(context.Background(), "convergence-test", "shared", "shared", p)

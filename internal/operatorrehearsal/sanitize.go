@@ -2,6 +2,7 @@ package operatorrehearsal
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/relaishq/relais/internal/operatorevidence"
@@ -69,6 +70,10 @@ func (r *Report) sanitize() {
 	if r.ClockSelection != nil {
 		diagnostic := *r.ClockSelection
 		diagnostic.Cause = clockSelectionCause(diagnostic.Cause)
+		diagnostic.FailedWindows = slices.Clone(diagnostic.FailedWindows)
+		for i := range diagnostic.FailedWindows {
+			diagnostic.FailedWindows[i].Cause = clockSelectionCause(diagnostic.FailedWindows[i].Cause)
+		}
 		r.ClockSelection = &diagnostic
 	}
 	r.Uncertainties = append([]operator.Uncertainty{}, r.Uncertainties...)

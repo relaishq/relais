@@ -26,18 +26,43 @@ const rehearsalHelperMaximum = 180 * time.Minute
 const clockProbePath = "/run/relais-clock-probes.bin"
 
 // Chrony may need several 8 s updates after the final negative-control restart.
-// This separate warm-up cap leaves the existing <=300 s admission budget and
-// the 180-minute job limit intact (see TestHeadCampaignFitsAfterPinnedSequence).
+// Unused warm-up time can fund fresh rehearsal selection windows. The combined
+// bound is this allowance plus one derived admission attempt.
 const clockConvergenceMaximum = 10 * time.Minute
 
+const clockSelectionExtraWindows = 2
+
+// Rehearsal allows twice the paid selection time for skipped chrony polls.
+const rehearsalClockAdmissionWindowSeconds = 240
+
+// Convergence can consume the targets' old tracking rows before ProbeHistory
+// sees them. At a skipped-poll cadence the opening probes can remain uncovered
+// for 17 s. Leave at least twice that recovery time after setup and row/read
+// rounding, so the unchanged selector can slide past the uncovered prefix.
+const rehearsalClockProbeRecovery = 50 * time.Second
+
+func rehearsalClockAdmissionTiming(latency, poll time.Duration) (seed, setup, window time.Duration) {
+	seed, setup, window = clockAdmissionTiming(latency, poll)
+	window += time.Duration(rehearsalClockAdmissionWindowSeconds-clockAdmissionWindowSeconds)*time.Second + rehearsalClockProbeRecovery
+	return seed, setup, window
+}
+
 type ClockSelectionReport struct {
-	Cause          string         `json:"cause"`
-	Bounds         *clocks.Bounds `json:"selectedBounds,omitempty"`
-	Updates        map[string]int `json:"updates,omitempty"`
-	ReceiptSHA256  string         `json:"receiptSha256,omitempty"`
-	EvidenceSHA256 string         `json:"evidenceSha256,omitempty"`
+	Cause          string                  `json:"cause"`
+	Bounds         *clocks.Bounds          `json:"selectedBounds,omitempty"`
+	Updates        map[string]int          `json:"updates,omitempty"`
+	ReceiptSHA256  string                  `json:"receiptSha256,omitempty"`
+	EvidenceSHA256 string                  `json:"evidenceSha256,omitempty"`
+	FailedWindows  []ClockSelectionFailure `json:"failedWindows,omitempty"`
 	// Set only on a clock-lease-expired refusal; values come from the sanitized evidence.
 	LeaseRefusal *ClockLeaseRefusal `json:"leaseRefusal,omitempty"`
+}
+
+type ClockSelectionFailure struct {
+	StartUnixSeconds int64          `json:"startUnixSeconds"`
+	EndUnixSeconds   int64          `json:"endUnixSeconds"`
+	Cause            string         `json:"cause"`
+	Updates          map[string]int `json:"updates"`
 }
 
 type ClockLeaseRefusal struct {
@@ -79,12 +104,14 @@ type clockAdmissionPorts struct {
 	timeout      func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	// latency and poll size helper setup and the admission window.
 	latency, poll time.Duration
-	// Rehearsal waits for restored chrony before starting a fresh window.
+	// Rehearsal waits for restored chrony and rereads transient probe refusals.
+	// Only insufficient updates start fresh windows, at most two extra within
+	// the combined time budget.
 	converge bool
 }
 
 func rehearsalClockPolicy() clocks.SelectionPolicy {
-	return clocks.SelectionPolicy{WindowSeconds: 120, FloorNS: 50000, ScaleNumerator: 2, ScaleDenominator: 1, AllowanceNS: 10000, SignalReserveNS: 50000, ControlCeilingNS: 250000, WorkerCeilingNS: 350000, MaxDispersionGrowthPPM: "5"}
+	return clocks.SelectionPolicy{WindowSeconds: rehearsalClockAdmissionWindowSeconds, FloorNS: 50000, ScaleNumerator: 2, ScaleDenominator: 1, AllowanceNS: 10000, SignalReserveNS: 50000, ControlCeilingNS: 250000, WorkerCeilingNS: 350000, MaxDispersionGrowthPPM: "5"}
 }
 
 // This step deliberately bypasses Session/Peer: diagnostic failures cannot
@@ -143,9 +170,17 @@ func (r *rehearsal) clockHostCommand(ctx context.Context, slot string, detach bo
 func collectClockSelection(parent context.Context, run, front, control string, p clockAdmissionPorts) *ClockSelectionReport {
 	// Seed/drain old history before helper startup or the admission deadline.
 	seedBudget, setupBudget, window := clockAdmissionTiming(p.latency, p.poll)
+	selectionSeconds := int64(clockAdmissionWindowSeconds)
+	if p.converge {
+		selectionSeconds = rehearsalClockAdmissionWindowSeconds
+		seedBudget, setupBudget, window = rehearsalClockAdmissionTiming(p.latency, p.poll)
+	}
+	firstRead := time.Duration(selectionSeconds+3) * time.Second
 	ctx, seedDone := p.timeout(parent, seedBudget)
 	defer seedDone()
 	var started, end time.Time
+	admissionParent := parent
+	var admissionLimit time.Time
 	seeded := false
 	defer func() {
 		if end.IsZero() {
@@ -156,6 +191,12 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		}
 	}()
 	result := &ClockSelectionReport{Cause: "clock-selection-unavailable"}
+	var pendingProbeWindow *ClockSelectionFailure
+	defer func() {
+		if pendingProbeWindow != nil && result.Bounds == nil {
+			result.FailedWindows = append(result.FailedWindows, *pendingProbeWindow)
+		}
+	}()
 	logs := map[string]clocks.TrackingLog{}
 	cursors := map[string]json.RawMessage{}
 	var probes clocks.ProbeHistory
@@ -164,7 +205,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 	for (end.IsZero() || p.now().Before(end)) && ctx.Err() == nil {
 		batch := map[string]clocks.Sample{}
 		e := clocks.SelectionEvidence{RunID: run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: p.leapMode, EndUnixSeconds: 1 << 62}
-		admitting := !end.IsZero() && !p.now().Before(started.Add(123*time.Second))
+		admitting := !end.IsZero() && !p.now().Before(started.Add(firstRead))
 		samples, failed := make([]clocks.Sample, len(Slots)), make([]error, len(Slots))
 		var readers sync.WaitGroup
 		for i, slot := range Slots {
@@ -262,7 +303,11 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 				seedDone()
 				seeded = true
 				if p.converge {
-					convergence, convergenceDone := p.timeout(parent, clockConvergenceMaximum)
+					admissionLimit = p.now().Add(clockConvergenceMaximum + window)
+					combined, combinedDone := p.timeout(parent, clockConvergenceMaximum+window)
+					defer combinedDone()
+					admissionParent = combined
+					convergence, convergenceDone := p.timeout(combined, clockConvergenceMaximum)
 					defer convergenceDone()
 					ctx = convergence
 				}
@@ -279,7 +324,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			}
 			started = p.now()
 			end = started.Add(window)
-			admission, admissionDone := p.timeout(parent, window)
+			admission, admissionDone := p.timeout(admissionParent, window)
 			defer admissionDone()
 			ctx = admission
 			setup, setupDone := p.timeout(ctx, setupBudget)
@@ -287,6 +332,13 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			setupDone()
 			if err != nil {
 				return &ClockSelectionReport{Cause: "clock-selection-helper"}
+			}
+			// The first probe can arrive only after helper setup. Rehearsal
+			// must not select a window whose opening probes are still missing.
+			if p.converge {
+				if now := p.now(); now.After(started) {
+					started = now
+				}
 			}
 		}
 		probeFront := ""
@@ -299,7 +351,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		e.Falsification = *probes.Snapshot(front, map[string]string{"control": control, "w1": "w1", "w2": "w2"})
 		records = mergeClockProbeRecords(records, e.Falsification.Records)
 		e.Falsification.Records = records
-		e.StartUnixSeconds = e.EndUnixSeconds - clockAdmissionWindowSeconds
+		e.StartUnixSeconds = e.EndUnixSeconds - selectionSeconds
 		if admitting && complete {
 			if time.Unix(e.StartUnixSeconds, 0).Before(started) {
 				result.Cause = "clock-select-admission"
@@ -318,6 +370,25 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 					}
 					break
 				}
+				if p.converge && cause == "clock-select-probes" {
+					// Probe coverage can recover on a later read in this window.
+					// Keep the accumulated records so falsifications stay sticky.
+					failure := failedClockWindow(e, result.Cause)
+					pendingProbeWindow = &failure
+				} else if p.converge {
+					pendingProbeWindow = nil
+					result.FailedWindows = append(result.FailedWindows, failedClockWindow(e, result.Cause))
+					if cause != "clock-select-updates" || len(result.FailedWindows) > clockSelectionExtraWindows || p.now().Add(window).After(admissionLimit) || ctx.Err() != nil {
+						return result
+					}
+					// Keep history for predecessor checks. The started admission
+					// check excludes failed-window updates from the next selection.
+					started = p.now()
+					end = started.Add(window)
+					admission, admissionDone := p.timeout(admissionParent, window)
+					defer admissionDone()
+					ctx = admission
+				}
 			}
 		}
 		delay := clockRetryPause
@@ -325,13 +396,28 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			delay = min(delay, end.Sub(p.now()))
 		}
 		if complete && !end.IsZero() && !admitting {
-			delay = min(end.Sub(p.now()), started.Add(123*time.Second).Sub(p.now()))
+			delay = min(end.Sub(p.now()), started.Add(firstRead).Sub(p.now()))
 		}
 		if p.pause(ctx, delay) != nil {
 			break
 		}
 	}
 	return result
+}
+
+func failedClockWindow(e clocks.SelectionEvidence, cause string) ClockSelectionFailure {
+	failure := ClockSelectionFailure{StartUnixSeconds: e.StartUnixSeconds, EndUnixSeconds: e.EndUnixSeconds, Cause: cause, Updates: map[string]int{}}
+	for _, h := range e.Hosts {
+		updates := map[clocks.TrackingRow]bool{}
+		for _, row := range h.Tracking.Rows {
+			if row.UnixSeconds >= e.StartUnixSeconds && row.UnixSeconds <= e.EndUnixSeconds {
+				row.BeforeRun = false
+				updates[row] = true
+			}
+		}
+		failure.Updates[h.Slot] = len(updates)
+	}
+	return failure
 }
 
 func saveClockJSON(path string, value any) error {

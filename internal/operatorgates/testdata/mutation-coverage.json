@@ -723,7 +723,11 @@
     "prefault-expired-entry-refused",
     "prefault-scheduling-margin-omitted",
     "prefault-post-wait-headroom-skipped",
-    "prefault-refusal-slot-discarded"
+    "prefault-refusal-slot-discarded",
+    "rehearsal-retry-window-end",
+    "rehearsal-extra-window-bound",
+    "rehearsal-combined-admission-limit",
+    "rehearsal-opening-probe-recovery-budget"
   ],
   "killed": [
     {
@@ -5923,6 +5927,30 @@
       "id": "prefault-refusal-slot-discarded",
       "test": "TestPreFaultRefusalDiagnostics/headroom",
       "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-retry-window-end",
+      "test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-extra-window-bound",
+      "test": "TestRehearsalClockSelectionThreeUpdateFailures",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-combined-admission-limit",
+      "test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-opening-probe-recovery-budget",
+      "test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
+      "package": "./internal/operatorrehearsal",
       "evidence": "killed"
     }
   ],

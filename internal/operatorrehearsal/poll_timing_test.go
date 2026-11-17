@@ -1,6 +1,7 @@
 package operatorrehearsal
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -20,6 +21,8 @@ func TestRehearsalClockTiming(t *testing.T) {
 	a := r.clockAdmission("relay", "shared", nil)
 	require.Equal(t, 8*time.Second, a.PollPeriod)
 	require.Equal(t, 400*time.Millisecond, a.HostReadLatency)
+	require.Equal(t, int64(240), a.Policy.WindowSeconds)
+	require.EqualError(t, CheckClockAdmissionPolicy(a.Policy), "clock-select-policy", "paid admission still requires 120 s")
 	require.Equal(t, r.clock.Wall().Add(180*time.Minute), a.HelpersUntil)
 	p := a.ports()
 	require.Equal(t, a.PollPeriod, p.poll)
@@ -34,12 +37,41 @@ func TestRehearsalPollAdmission(t *testing.T) {
 	for phase := range int64(8) {
 		t.Run(strconv.FormatInt(phase, 10), func(t *testing.T) {
 			t.Parallel()
-			run := runClockAdmission(t, a.HostReadLatency, a.PollPeriod, a.HostReadLatency, phase)
+			run := runClockAdmission(t, a.HostReadLatency, a.PollPeriod, a.HostReadLatency, phase, func(p *clockAdmissionPorts) {
+				p.converge, p.policy = true, a.Policy
+			})
 			require.Empty(t, run.result.Cause)
 			require.NotNil(t, run.result.Bounds)
-			require.Equal(t, 150*time.Second, run.end.Sub(run.began))
+			require.Equal(t, 320*time.Second, run.end.Sub(run.began))
 			require.LessOrEqual(t, run.setupDone.Sub(run.began), 10*time.Second)
 			require.False(t, run.admitted.After(run.end))
+		})
+	}
+}
+
+// A configured eight-second poll can yield tracking updates only every sixteen
+// seconds. The rehearsal window must still retain at least ten updates.
+func TestRehearsalAdmissionWithSkippedPolls(t *testing.T) {
+	for phase := range int64(16) {
+		t.Run(strconv.FormatInt(phase, 10), func(t *testing.T) {
+			t.Parallel()
+			run := runClockAdmission(t, 400*time.Millisecond, 16*time.Second, 400*time.Millisecond, phase, func(p *clockAdmissionPorts) {
+				p.converge = true
+				p.poll = 8 * time.Second
+				p.policy.WindowSeconds = 240
+				selectBounds := p.selectBounds
+				p.selectBounds = func(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+					require.Equal(t, int64(240), e.EndUnixSeconds-e.StartUnixSeconds)
+					return selectBounds(ctx, e, policy)
+				}
+			})
+			require.Empty(t, run.result.Cause)
+			require.NotNil(t, run.result.Bounds)
+			require.Empty(t, run.result.FailedWindows)
+			require.Equal(t, 320*time.Second, run.end.Sub(run.began))
+			for _, updates := range run.result.Updates {
+				require.GreaterOrEqual(t, updates, 10)
+			}
 		})
 	}
 }
@@ -54,6 +86,10 @@ func TestRehearsalPollTimingCharacterization(t *testing.T) {
 			require.Equal(t, 10*time.Second, seed)
 			require.Equal(t, 10*time.Second, setup)
 			require.Equal(t, 150*time.Second, window)
+			seed, setup, window = rehearsalClockAdmissionTiming(400*time.Millisecond, period)
+			require.Equal(t, 10*time.Second, seed)
+			require.Equal(t, 10*time.Second, setup)
+			require.Equal(t, 320*time.Second, window)
 			require.NoError(t, CheckClockAdmissionTiming(400*time.Millisecond, period))
 			o := clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1793930005800000000", ReferenceUnixNS: "1793930000000000000", ReferenceAgeNS: 5800000000, PollSeconds: strconv.FormatInt(poll, 10), ResidualPPM: "0", SkewPPM: "0", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 20000000, HostElapsedNS: 20000000}
 			lease, err := clocks.RecordLease(o, o.HostElapsedNS)
