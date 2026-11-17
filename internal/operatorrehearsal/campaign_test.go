@@ -22,13 +22,20 @@ func (c *campaignClock) Elapsed() time.Duration {
 	return c.Tick
 }
 
-// The timing model uses the measured worst setup (8m20s) and 111 seconds
-// between each media phase and the next, including caller preparation.
+// Add the full convergence allowance and the widened admission window to the
+// measured setup (8m20s). Each media phase still needs 111 s of caller overhead.
 func TestCampaignsFitAfterCalibrationAndCallerPreparation(t *testing.T) {
 	base := time.UnixMilli(1_000_000)
 	clock := &campaignClock{FakeClock: operatorgates.FakeClock{Now: base}}
 	r := &rehearsal{clock: clock, boundInit: operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: CoveredGates}, ArmedAtUnixMS: strconv.FormatInt(base.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(base.Add(operatorgates.SessionMaximum).UnixMilli(), 10)}}
-	clock.Advance(8*time.Minute + 20*time.Second)
+	timing := rehearsalClockTiming()
+	_, _, originalWindow := clockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
+	_, _, window := rehearsalClockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
+	setup := 8*time.Minute + 20*time.Second + clockConvergenceMaximum + window - originalWindow
+	if setup != 20*time.Minute+20*time.Second || operatorgates.SessionMaximum != 105*time.Minute {
+		t.Fatal("rehearsal setup or session maximum changed", setup, operatorgates.SessionMaximum)
+	}
+	clock.Advance(setup)
 	init := r.pinnedInit()
 	session, err := operatorgates.NewSession("campaign", init, clock)
 	if err != nil {
@@ -86,7 +93,7 @@ func TestPinnedInitExcludesSetup(t *testing.T) {
 	clock := &operatorgates.FakeClock{Now: base}
 	original := operator.Init{ClockBinding: &operator.ClockBindingArtifacts{}, Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: CoveredGates}, ArmedAtUnixMS: strconv.FormatInt(base.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(base.Add(operatorgates.SessionMaximum).UnixMilli(), 10)}
 	r := &rehearsal{clock: clock, boundInit: original}
-	clock.Advance(8*time.Minute + 20*time.Second)
+	clock.Advance(20*time.Minute + 20*time.Second)
 	init := r.pinnedInit()
 	if init.ArmedAtUnixMS != strconv.FormatInt(clock.Wall().UnixMilli(), 10) || init.EndUnixMS != strconv.FormatInt(clock.Wall().Add(operatorgates.SessionMaximum).UnixMilli(), 10) || init.ClockBinding != original.ClockBinding || !reflect.DeepEqual(init.Scenario, original.Scenario) || r.boundInit.ArmedAtUnixMS != original.ArmedAtUnixMS || r.boundInit.EndUnixMS != original.EndUnixMS {
 		t.Fatal("MUTATION: rehearsal-fresh-arm: setup consumed the gate window or binding changed", init)
@@ -184,10 +191,30 @@ func TestHeadCampaignFitsAfterPinnedSequence(t *testing.T) {
 	if total > 136*time.Minute+36*time.Second || rehearsalHelperMaximum-total < 43*time.Minute+24*time.Second {
 		t.Fatal("head phase exceeds helper/job margin", total, rehearsalHelperMaximum-total)
 	}
-	// Conservatively add the entire convergence cap to the existing model.
-	// It precedes the fresh pinned session, so neither session loses time.
-	total += clockConvergenceMaximum
-	if total > 146*time.Minute+36*time.Second || rehearsalHelperMaximum-total < 33*time.Minute+24*time.Second {
-		t.Fatal("convergence exceeds helper/job margin", total, rehearsalHelperMaximum-total)
+	// Two extra 270 s attempts use nine minutes of the ten-minute convergence
+	// allowance. One minute of convergence plus three attempts equals ten
+	// minutes plus one attempt. The old 150 s attempt is in the model above.
+	timing := rehearsalClockTiming()
+	_, _, originalWindow := clockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
+	_, _, window := rehearsalClockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
+	retries := time.Duration(clockSelectionExtraWindows) * window
+	convergence := clockConvergenceMaximum - retries
+	if retries != 9*time.Minute || convergence != time.Minute || window != 270*time.Second {
+		t.Fatal("fresh selection windows exceed convergence allowance", retries, convergence)
+	}
+	total += convergence + retries + window - originalWindow
+	if total > 148*time.Minute+36*time.Second || rehearsalHelperMaximum-total < 31*time.Minute+24*time.Second {
+		t.Fatal("convergence and fresh selection windows exceed helper/job margin", total, rehearsalHelperMaximum-total)
+	}
+	// Also allow the pinned session to consume its full maximum, followed by
+	// the entire head caller allowance, a release reserve, pooling and teardown.
+	setup := 8*time.Minute + 20*time.Second + convergence + retries + window - originalWindow
+	plannedHeadMaximum := setup + 92*time.Minute + 24*time.Second + operatorgates.PoolReserve + 2*time.Minute + operatorcaller.CallerMaximum + time.Minute + operatorgates.PoolReserve + 3*time.Minute
+	if plannedHeadMaximum != 155*time.Minute+44*time.Second || rehearsalHelperMaximum-plannedHeadMaximum < 24*time.Minute+16*time.Second {
+		t.Fatal("full head caller exceeds helper/job margin", plannedHeadMaximum, rehearsalHelperMaximum-plannedHeadMaximum)
+	}
+	maximumJob := setup + operatorgates.SessionMaximum + 2*time.Minute + operatorcaller.CallerMaximum + time.Minute + operatorgates.PoolReserve + 3*time.Minute
+	if maximumJob != 166*time.Minute+20*time.Second || rehearsalHelperMaximum-maximumJob < 13*time.Minute+40*time.Second {
+		t.Fatal("session-maximum job exceeds helper/job margin", maximumJob, rehearsalHelperMaximum-maximumJob)
 	}
 }

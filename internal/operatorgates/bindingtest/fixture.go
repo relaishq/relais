@@ -23,17 +23,22 @@ type Fixture struct {
 }
 
 func New(run string, now time.Time) (Fixture, error) {
-	start := now.Unix() - 125
-	f := Fixture{Policy: clocks.SelectionPolicy{WindowSeconds: 120, FloorNS: 50000, ScaleNumerator: 2, ScaleDenominator: 1, AllowanceNS: 10000, SignalReserveNS: 50000, ControlCeilingNS: 250000, WorkerCeilingNS: 350000, MaxDispersionGrowthPPM: "5"}, Input: clocks.SelectionEvidence{RunID: run, FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", StartUnixSeconds: start, EndUnixSeconds: start + 120}}
+	return NewWithWindow(run, now, 120)
+}
+
+// NewWithWindow builds evidence for a launcher's selection-window policy.
+func NewWithWindow(run string, now time.Time, seconds int64) (Fixture, error) {
+	start := now.Unix() - seconds - 5
+	f := Fixture{Policy: clocks.SelectionPolicy{WindowSeconds: seconds, FloorNS: 50000, ScaleNumerator: 2, ScaleDenominator: 1, AllowanceNS: 10000, SignalReserveNS: 50000, ControlCeilingNS: 250000, WorkerCeilingNS: 350000, MaxDispersionGrowthPPM: "5"}, Input: clocks.SelectionEvidence{RunID: run, FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", StartUnixSeconds: start, EndUnixSeconds: start + seconds}}
 	for _, slot := range []string{"relay", "w1", "w2", "shared"} {
-		h := clocks.SelectionHost{Slot: slot, LeapMode: "unsmeared", Lease: Observation(time.Unix(start+122, 0)), Tracking: clocks.TrackingLog{ReadComplete: true}}
-		for at := start - 2; at <= start+121; at++ {
+		h := clocks.SelectionHost{Slot: slot, LeapMode: "unsmeared", Lease: Observation(time.Unix(start+seconds+2, 0)), Tracking: clocks.TrackingLog{ReadComplete: true}}
+		for at := start - 2; at <= start+seconds+1; at++ {
 			h.Tracking.Rows = append(h.Tracking.Rows, clocks.TrackingRow{BeforeRun: true, UnixSeconds: at, Reference: "test-source", MaxErrorSeconds: 1e-6, MaxErrorDecimal: "1.000e-06", LeapStatus: "N"})
 		}
 		f.Input.Hosts = append(f.Input.Hosts, h)
 	}
 	f.Input.Falsification = clocks.Falsification{FrontendSlot: "shared", CountsByStatus: map[string]int{}, CountsByReason: map[string]int{}}
-	for at := start; at < start+120; at++ {
+	for at := start; at < start+seconds; at++ {
 		for _, target := range []string{"control", "w1", "w2"} {
 			n := at * 1e9
 			f.Input.Falsification.Records = append(f.Input.Falsification.Records, clocks.ProbeRecord{Target: target, FrontendSend: fmt.Sprint(n), HostReceive: fmt.Sprint(n + 1000), HostSend: fmt.Sprint(n + 1000), FrontendReceive: fmt.Sprint(n + 2000), Status: "not-falsified"})

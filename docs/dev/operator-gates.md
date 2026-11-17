@@ -199,7 +199,7 @@ Outputs, all in `-output`:
 | --- | --- |
 | `clock-selection.json` | The receipt and its `sha256`, as `clock-select` prints it. |
 | `clock-binding.json` | `planIdentity`, the bound `scenario`, and `clockBinding` (the `operator.ClockBindingArtifacts` for Init). Written only on exit 0. |
-| `clock-selection-status.json` | The rehearsal status record: `cause`, bounds, update counts, digests, and `leaseRefusal` on `clock-lease-expired`. |
+| `clock-selection-status.json` | The rehearsal status record: `cause`, bounds, update counts, digests, `failedWindows` for refused rehearsal windows, and `leaseRefusal` on `clock-lease-expired`. |
 | `clock-admission-evidence.json`, `clock-selection-policy.json` | The sanitized selector inputs. |
 
 | Exit | Meaning |
@@ -1327,7 +1327,10 @@ passes `--until-unix-ns` to preserve the original run deadline. Shutdown is
 cooperative; stalled peers can delay exit beyond that deadline.
 
 Hosted rehearsal configures every host with `minpoll 3 maxpoll 3`: P = 8 s,
-the same poll as paid runs, with about 15 updates per 120 s selection window.
+the same poll as paid runs. Rehearsal selects a **240 s window**, twice the
+paid 120 s window, to allow for skipped polls without lowering the minimum ten
+tracking updates. This gives about 30 updates at 8 s spacing or 15 at 16 s
+spacing. These counts are sizing estimates, not a pass-rate measurement.
 The local TimeIP reference allows the disposable subnet and has no reply rate
 limit, so it can serve the 8 s polls and initial `iburst`. Both admission and
 the pinned and head-caller sessions explicitly use P = 8 s and the existing
@@ -1344,26 +1347,68 @@ uses exact column-14 rounding, current five-poll leases and the unchanged 5 ppm
 growth limit. Reads run in parallel and retry after two seconds. `waitsync`
 alone does not establish this readiness after the wrong-time-source restore.
 Startup history remains recorded. Helpers and the admission timer start only
-after convergence, so selection must collect a **fresh full 120 s trailing
+after convergence, so selection must collect a **fresh full 240 s trailing
 window**. A timeout keeps the last fixed selection cause, such as
 `clock-select-ceiling`, rather than reporting a generic timeout or read failure.
 The standalone `clock-admit` launcher keeps its existing admission flow.
-Parallel reads/selection start at 123 s within the derived 150 s admission deadline;
-setup has ten seconds inside that deadline. Helpers remain available through
+The first admitting read waits 243 s from the fresh-window opening, within the
+derived 270 s admission deadline. The opening also waits for helper setup, less
+the selector's unchanged two-second first-probe allowance; setup has ten seconds
+inside that deadline. Helpers remain available through
 the hosted job's original 180-minute deadline for run-long falsification observations.
-Non-cancelled exits wait through deadline +2 s before calibration (152 s plus
-preflight, at most 162 s, plus the separate convergence wait). Parent cancellation skips that wait and returns promptly;
+If and only if selection returns `clock-select-updates`, rehearsal can collect
+at most **two extra fresh windows** and select again. Each new window starts
+collection after the failed selection and keeps the full 240 s duration. Rows
+at or before the failed window's end are discarded; cursors continue forward.
+Helpers start once, and probe falsifications remain sticky across retries.
+All other selector causes, including ceiling, growth, break, leap, coverage
+and stale failures, stop selection at once. Rehearsal never retries a ceiling
+failure to seek a favourable window. The standalone paid `clock-admit` path
+does not gain these retries.
+
+Each attempt has a derived 270 s admission deadline at hosted inputs: the paid
+150 s allowance plus the extra 120 s of selection time. Seed and helper setup
+stay at ten seconds each. Retries use **unused convergence time**, within a
+combined bound of ten minutes plus one 270 s admission attempt after seeding.
+A retry starts only if its full derived admission allowance remains. A late
+convergence can therefore leave no room for retries. Three update failures retain `clock-select-updates` and
+refuse binding. The minimum ten updates, selector, ceilings, eight-second poll
+and five-poll lease remain unchanged.
+Non-cancelled exits wait through the final attempted deadline +2 s before calibration
+(at most 882 s including seed, convergence and any retries). Parent cancellation skips that wait and returns promptly;
 deployment cleanup removes the helpers with their containers. Generated chrony
 configuration declares hosts and caller unsmeared.
 
-At these hosted inputs, seed plus admission is 160 s, below the 300 s admission
-maximum. Ten required updates need 80 s, below the 120 s selection window.
-The convergence cap is separate from that 300 s admission maximum. Ten minutes
-allows 75 tracking updates at the eight-second poll. Adding that cap to the
-existing conservative 136 min 36 s campaign timing model
-gives 146 min 36 s, leaving 33 min 24 s within the 180-minute job limit.
-`TestHeadCampaignFitsAfterPinnedSequence` pins this margin. Convergence precedes
-the fresh pinned session and does not consume either campaign's session budget.
+At these hosted inputs, seed plus one admission attempt is 280 s, below the
+unchanged 300 s single-attempt reference limit. Two extra attempts take nine
+minutes from the ten-minute convergence allowance: one minute of convergence
+followed by three 270 s attempts fits the same 870 s post-seed bound as ten
+minutes of convergence followed by one attempt. A later convergence allows fewer
+retries. Including the ten-second seed and two-second exit guard gives a maximum
+of **14 min 42 s** for this admission phase. The paid launcher still requires a
+120 s policy window and keeps its existing timing and refusal checks.
+
+The widened attempt adds two minutes to the earlier job model. The modeled
+setup allowance is now 20 min 20 s: the measured 8 min 20 s setup reference,
+plus the full ten-minute convergence allowance and the extra two minutes of
+selection time. The 180-minute job limit has these margins:
+
+| Timing model | Total | Job margin |
+| --- | --- | --- |
+| Planned pinned and head execution, including pooling and teardown | 148 min 36 s | 31 min 24 s |
+| Planned pinned execution; full 33-minute head caller plus one-minute release reserve | 155 min 44 s | 24 min 16 s |
+| Full 105-minute pinned session; full head caller, release reserve, pooling and teardown | 166 min 20 s | 13 min 40 s |
+
+`TestHeadCampaignFitsAfterPinnedSequence` pins the planned and session-maximum
+bounds, including both retries. `TestRehearsalClockSelectionRetriesFitCombinedBudget`
+pins refusal when the remaining allowance cannot fund a fresh window.
+Convergence, selection and calibration precede fresh pinned arming. The unchanged
+105-minute session still has a 103-minute mutation window: modeled pinned work
+uses 92 min 24 s, leaving 10 min 36 s before mutation cutoff and the same margin
+after the two-minute pool reserve. The head session also arms afresh and uses at
+most the existing 33-minute caller allowance. These are budget estimates, not
+new hosted-run results.
+
 The 17.6 s drain leaves 102.4 s of the 120 s pool reserve for judging, above
 its 60 s minimum. Four restoration reads plus submission and rounding need
 32.6 s of the existing 60 s restore reserve. The 120 s binding deadline,
@@ -1371,7 +1416,9 @@ its 60 s minimum. Four restoration reads plus submission and rounding need
 and workflow timeout stay unchanged. No product threshold increases.
 `TestRehearsalClockTiming`, `TestRehearsalPollAdmission`,
 `TestHostedPollTimingBudget` and `TestWorkflowUsesPublicRunnerAndNarrowArtifacts`
-pin the wiring, all eight tracking-row phases, derived budgets and helper/job limit.
+pin the wiring, all eight normal tracking phases, derived budgets and helper/job limit.
+`TestRehearsalAdmissionWithSkippedPolls` checks a real 240 s selection at every
+phase of 16 s updates, while the configured poll remains 8 s.
 
 The 5 ppm growth policy uses runs 42302414107/42330487259: their maximum
 successful-read residual-plus-skew was 0.251/0.147 ppm. Adding the configured
@@ -1382,7 +1429,14 @@ not characterize independent hosts; changed reference updates can refuse leases.
 The real CLI archives `clock-selection.json`, `clock-admission-evidence.json`,
 `clock-selection-policy.json` and `clock-selection-status.json`. Report
 `clockSelection` and logs print digests, bounds and counts or the fixed refusal
-cause. A `clock-lease-expired` refusal also records `leaseRefusal`: the first
+cause. Rehearsal also records each failed selection in `failedWindows`, in both
+the status artifact and report: start/end Unix seconds, fixed `cause` and distinct
+in-window update counts for all four hosts. These records survive a later success;
+the selector input artifact holds the final attempted window.
+`TestRehearsalClockSelectionRetriesFreshWindow` checks the fresh rows, second-window
+success and retained failure report; `TestRehearsalClockSelectionThreeUpdateFailures`
+and `TestRehearsalClockSelectionCeilingFailsFirstWindow` pin exhaustion and refusal.
+A `clock-lease-expired` refusal also records `leaseRefusal`: the first
 expired slot, its aged lease age (reference age plus host elapsed time) and the
 5-poll budget, all taken from the sanitized evidence. Archives omit addresses, source labels and opaque cursors. Rehearsal refuses
 before calibration without an admitted receipt. Selected bounds reach both pinned
@@ -1774,7 +1828,7 @@ The rehearsal excludes controls, clock selection and calibration from the pinned
 sequence's budget. Runs 43751193751, 43743583263 and 43702549913 supplied during
 review measured 7m37s–8m19s from the earlier setup arming to rollout preparation,
 and about 111 seconds between each media phase and the next. The campaign test
-uses 8m20s of setup, the new 1,500-second A media phases (the former 1,020 seconds
+uses the 20m20s setup allowance derived above, the 1,500-second A media phases (the former 1,020 seconds
 plus 480 seconds), 600 seconds for relay deploy, and 111 seconds per gate for
 caller preparation and trailing work. All four gates finish in about 92m24s
 from the fresh arming. That leaves 10m36s before mutation cutoff, and the same
@@ -1782,15 +1836,17 @@ margin after allowing the full two-minute pool reserve before session end.
 `TestCampaignsFitAfterCalibrationAndCallerPreparation`, `TestPinnedInitExcludesSetup`
 and `TestRehearsalUsesSessionResourceRequests` pin this separation and margin.
 
-The job limit stays 180 minutes. The timing model places the head phase after
-8m20s setup, 92m24s pinned execution, two minutes of pinned pooling and a
-two-minute head idle check: 104m44s from the earlier setup arming. Its fresh Init
-admits one rollout with 25 minutes of media and 111 seconds of overhead. Two
-minutes of head pooling and three minutes of teardown give about 136m35s total,
-leaving about 43m25s for earlier release preparation, builds, boot and artifact
-handling. Allowing the full 33-minute head caller window and a separate
-one-minute release reserve instead gives about 143m44s. These are budget
-estimates, not a new hosted-run result.
+The job limit stays 180 minutes. With the full convergence allowance and wider
+selection, the timing model places the head phase after 20m20s setup, 92m24s
+pinned execution, two minutes of pinned pooling and a two-minute head idle check:
+116m44s from the earlier setup arming. Its fresh Init admits one rollout with
+25 minutes of media and 111 seconds of overhead. Two minutes of head pooling
+and three minutes of teardown give a conservative 148m36s bound. Allowing the
+full 33-minute head caller plus one-minute release reserve gives 155m44s. Allowing
+the pinned session to consume its entire 105 minutes instead gives 166m20s,
+leaving 13m40s for earlier preparation and artifact handling. The admission receipt
+section above lists all three margins. These are budget estimates, not a new
+hosted-run result.
 
 `TestHeadCampaignFitsAfterPinnedSequence` starts after the modelled pinned run,
 including pooling and head idle time. It requires head preparation and rollout

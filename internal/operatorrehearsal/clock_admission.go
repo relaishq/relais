@@ -50,7 +50,7 @@ type ClockAdmissionBinding struct {
 	ClockBinding operator.ClockBindingArtifacts `json:"clockBinding"`
 }
 
-// Collection always freezes this trailing window, so no other policy window can be admitted.
+// Paid admission freezes this trailing window; rehearsal opts into its own window.
 const clockAdmissionWindowSeconds = 120
 
 // Seed, helper setup and the admission window never drop below the fixed

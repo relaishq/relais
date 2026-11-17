@@ -40,7 +40,9 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	return clockAdmissionPorts{policy: rehearsalClockPolicy(), leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, timeout: context.WithTimeout, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
+	policy := rehearsalClockPolicy()
+	policy.WindowSeconds = 120 // Preserve the paid admission fixtures.
+	return clockAdmissionPorts{policy: policy, leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, timeout: context.WithTimeout, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -218,6 +220,7 @@ func TestClockSelectionRejectsPreRestoreWindow(t *testing.T) {
 func TestClockSelectionVerifiesCLI(t *testing.T) {
 	var evidence clocks.SelectionEvidence
 	policy := rehearsalClockPolicy()
+	policy.WindowSeconds = 120
 	p := admissionFixture(t, false, func(_ context.Context, e clocks.SelectionEvidence, p clocks.SelectionPolicy) (clocks.ClockSelection, string) {
 		evidence = e
 		selection, err := clocks.Select(e, p)
@@ -486,7 +489,7 @@ type clockAdmissionRun struct {
 	result                          *ClockSelectionReport
 }
 
-func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase int64) clockAdmissionRun {
+func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase int64, configure ...func(*clockAdmissionPorts)) clockAdmissionRun {
 	t.Helper()
 	clock := &virtualClock{now: time.Unix(1792886400, 0)}
 	dir := t.TempDir()
@@ -498,7 +501,9 @@ func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase in
 		n      int
 	}
 	interval := max(int64(poll/time.Second), 1)
-	a := ClockAdmission{RunID: "timing-test", FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, HelpersUntil: clock.Now().Add(time.Hour), Output: t.TempDir(), HostReadLatency: latency, PollPeriod: poll, Now: clock.Now, Pause: clock.Pause, Timeout: clock.Timeout}
+	policy := rehearsalClockPolicy()
+	policy.WindowSeconds = 120
+	a := ClockAdmission{RunID: "timing-test", FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", Policy: policy, Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, HelpersUntil: clock.Now().Add(time.Hour), Output: t.TempDir(), HostReadLatency: latency, PollPeriod: poll, Now: clock.Now, Pause: clock.Pause, Timeout: clock.Timeout}
 	a.Host = func(ctx context.Context, slot string, detach bool, input []byte, args ...string) (string, error) {
 		if args[0] != "sh" {
 			if err := clock.spend(ctx, clock.Now(), cost); err != nil {
@@ -541,6 +546,9 @@ func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase in
 	}
 	var r clockAdmissionRun
 	p := a.ports()
+	for _, configure := range configure {
+		configure(&p)
+	}
 	start, selectBounds := p.start, p.selectBounds
 	p.start = func(ctx context.Context, end time.Time) error {
 		r.began, r.end = clock.Now(), end

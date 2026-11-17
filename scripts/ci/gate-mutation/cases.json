@@ -4115,8 +4115,8 @@
     "ID": "clock-admission-window-fixed",
     "File": "internal/operatorrehearsal/clock_selection.go",
     "Function": "collectClockSelection",
-    "Old": "end = started.Add(window)",
-    "New": "end = started.Add(150 * time.Second)",
+    "Old": "end = started.Add(window)\n\t\t\tadmission, admissionDone := p.timeout(admissionParent, window)",
+    "New": "end = started.Add(150 * time.Second)\n\t\t\tadmission, admissionDone := p.timeout(admissionParent, window)",
     "Test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
     "Marker": "MUTATION: admission-derived-window",
     "Package": "./internal/operatorrehearsal"
