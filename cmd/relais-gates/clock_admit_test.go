@@ -369,3 +369,27 @@ func TestClockAdmitHelperLifetimeBound(t *testing.T) {
 		})
 	}
 }
+
+// The CLI passes the zero clock (main.go). Admission must use the real clock
+// for its helper-lifetime check instead of calling a nil function.
+func TestClockAdmitZeroClockUsesRealClock(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		until time.Duration
+		cause string
+	}{{"overlong", operatorgates.SessionMaximum + time.Hour, "clock-admit-input"}, {"within", time.Hour, "clock-select-policy"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClockAdmitFixture(t)
+			f.clock = clockAdmitClock{}
+			f.plan.HelpersUntilUnixMS = fmt.Sprint(time.Now().Add(tc.until).UnixMilli())
+			if tc.name == "within" {
+				// Pass the real-clock lifetime check, then refuse on policy before any host command.
+				f.policy.WindowSeconds = 240
+			}
+			code, cause := f.run(t)
+			if code != 2 || !strings.HasPrefix(cause, tc.cause) {
+				t.Fatal("MUTATION: clock-admit-zero-clock", code, cause)
+			}
+		})
+	}
+}
