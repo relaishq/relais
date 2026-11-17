@@ -112,3 +112,38 @@ func TestRuntimeBindingRefusesUnapprovedPlan(t *testing.T) {
 		}
 	}
 }
+
+func TestScenarioBindsIndependentCallerAndServerSources(t *testing.T) {
+	plan := Scenario{SchemaVersion: 1, Gates: []Gate{Rollout},
+		ReleaseA: Identity{SourceCommit: strings.Repeat("a", 40), SHA256: strings.Repeat("a", 64)},
+		ReleaseB: Identity{SourceCommit: strings.Repeat("b", 40), SHA256: strings.Repeat("b", 64)},
+		Caller:   Identity{SourceCommit: strings.Repeat("c", 40), SHA256: strings.Repeat("c", 64)},
+		Judge:    Identity{SourceCommit: strings.Repeat("c", 40), SHA256: strings.Repeat("d", 64)}}
+	var err error
+	plan.Digest, err = PlanIdentity(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := BindRuntime(plan, strings.Repeat("e", 64))
+	if err != nil || bound.Scenario.ReleaseA != plan.ReleaseA || bound.Scenario.ReleaseB != plan.ReleaseB || bound.Scenario.Caller != plan.Caller || bound.Scenario.Judge != plan.Judge {
+		t.Fatal("independent identities refused", bound, err)
+	}
+	for _, field := range []string{"release-a", "release-b", "caller", "judge"} {
+		t.Run(field, func(t *testing.T) {
+			changed := plan
+			switch field {
+			case "release-a":
+				changed.ReleaseA.SourceCommit = strings.Repeat("f", 40)
+			case "release-b":
+				changed.ReleaseB.SourceCommit = strings.Repeat("f", 40)
+			case "caller":
+				changed.Caller.SourceCommit = strings.Repeat("f", 40)
+			case "judge":
+				changed.Judge.SourceCommit = strings.Repeat("f", 40)
+			}
+			if _, err := BindRuntime(changed, strings.Repeat("e", 64)); !errors.Is(err, ErrPlanIdentity) {
+				t.Fatal("MUTATION: scenario-source-tamper", err)
+			}
+		})
+	}
+}

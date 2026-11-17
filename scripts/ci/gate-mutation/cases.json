@@ -7715,5 +7715,155 @@
     "Test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
     "Marker": "MUTATION: opening-recovery-budget",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "resource-caller-forced-to-release-a",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "validate",
+    "Old": "s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit",
+    "New": "s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit || s.scenario.Judge.SourceCommit != c.Pins[0].Commit",
+    "Test": "TestResourceConfigSourceBinding/operator-caller",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-judge-hash-unchecked",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "validate",
+    "Old": "hex.EncodeToString(sum[:]) != s.scenario.Judge.SHA256",
+    "New": "hex.EncodeToString(sum[:]) == \"\"",
+    "Test": "TestResourceConfigSourceBinding/judge-hash",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-caller-judge-source-unchecked",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "validate",
+    "Old": "s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit",
+    "New": "false",
+    "Test": "TestResourceConfigSourceBinding/caller-judge-source",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-release-a-unbound",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "ValidatePins",
+    "Old": "identity.SourceCommit != p.Commit",
+    "New": "false",
+    "Test": "TestResourceConfigSourceBinding/release-a",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-release-b-unbound",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "ValidatePins",
+    "Old": "identity.SourceCommit != p.Commit",
+    "New": "false",
+    "Test": "TestResourceConfigSourceBinding/release-b",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pool-caller-forced-to-deployment",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "p.FirstFaultAt.IsZero()",
+    "New": "p.FirstFaultAt.IsZero() || p.DeployedSHA != p.Plan.PublicSHA",
+    "Test": "TestPoolRegistrationAndBoundary",
+    "Marker": "MUTATION: pool-independent-source",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "pool-registration-source-unchecked",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "r.PublicSHA != p.Plan.PublicSHA",
+    "New": "false",
+    "Test": "TestPoolRequiresClocksInventoryAndOnePin",
+    "Marker": "MUTATION: pool-registration-source",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "pool-mixed-caller-source-unchecked",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "sha != \"\" && sha != p.Plan.PublicSHA",
+    "New": "false",
+    "Test": "TestPoolRequiresClocksInventoryAndOnePin",
+    "Marker": "MUTATION: pool-mixed-pin",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "resource-inventory-commit-unchecked",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "Parse",
+    "Old": "pin.Commit == p.Commit",
+    "New": "true",
+    "Test": "TestResourceInventoryTampering/commit",
+    "Marker": "MUTATION: resource-inventory-tamper",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-inventory-archive-unchecked",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "Parse",
+    "Old": "pin.ArchiveSHA256 == p.ArchiveSHA256",
+    "New": "true",
+    "Test": "TestResourceInventoryTampering/archive",
+    "Marker": "MUTATION: resource-inventory-tamper",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-inventory-manifest-commit-unchecked",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "Parse",
+    "Old": "p.Manifest.Commit != pins[pin].Commit",
+    "New": "false",
+    "Test": "TestResourceInventoryTampering/manifest-commit",
+    "Marker": "MUTATION: resource-inventory-tamper",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "scenario-release-a-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/release-a",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-release-b-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/release-b",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-caller-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/caller",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-judge-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/judge",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
   }
 ]

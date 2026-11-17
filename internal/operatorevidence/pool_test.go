@@ -3,12 +3,14 @@ package operatorevidence
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/releasecompat"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -56,6 +58,40 @@ func TestPoolRegistrationAndBoundary(t *testing.T) {
 	if err != nil || sha != p.PublicSHA || pool.Missing || len(pool.Phases) != 1 || pool.Phases[0].Gate != operator.RelayDeploy {
 		t.Fatal(pool, err)
 	}
+	// The caller and judge may share a newer source than the verified deployment.
+	separate := phase
+	separate.Plan.PublicSHA = strings.Repeat("c", 40)
+	separate.Registration.PublicSHA = separate.Plan.PublicSHA
+	// Use the real release-inventory decoder; server participants remain A.
+	rawInventory, err := os.ReadFile("../operatorgates/testdata/resource-session.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Config      struct{ Pins []inventory.Pin }
+		Inventories map[string]json.RawMessage
+	}
+	if err = json.Unmarshal(rawInventory, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	separate.DeployedSHA = fixture.Config.Pins[0].Commit
+	separate.Inventory = releasecompat.Pool{Complete: true}
+	for _, slot := range inventory.Slots {
+		rows, parseErr := inventory.Parse(slot, fixture.Inventories[slot], fixture.Config.Pins)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		for _, row := range rows {
+			if row.Commit != separate.DeployedSHA {
+				t.Fatal("server inventory changed to caller source")
+			}
+		}
+		separate.Inventory.Participants = append(separate.Inventory.Participants, rows...)
+	}
+	separatePool, separateSHA, separateErr := ReadPool("run-fixture", []Phase{separate}, false)
+	if separateErr != nil || separatePool.Missing || len(separatePool.Phases) != 1 || separatePool.SourceCommit != separate.Plan.PublicSHA || separateSHA != separate.Plan.PublicSHA || separate.DeployedSHA == separateSHA {
+		t.Fatal("MUTATION: pool-independent-source", separatePool, separateErr)
+	}
 	phase.FirstFaultAt = at
 	pool, _, err = ReadPool("run-fixture", []Phase{phase}, false)
 	if err != nil || !pool.Missing || len(pool.Phases) != 0 {
@@ -97,6 +133,14 @@ func TestPoolRequiresClocksInventoryAndOnePin(t *testing.T) {
 		pool, _, err := ReadPool("run-fixture", []Phase{p}, false)
 		if err != nil || !pool.Missing || len(pool.Phases) != 1 {
 			t.Fatal("MUTATION: pool-proof-missing", pool, err)
+		}
+	}
+	for _, source := range []string{"", strings.Repeat("b", 40)} {
+		p := phase
+		p.Registration.PublicSHA = source
+		pool, _, err := ReadPool("run-fixture", []Phase{p}, false)
+		if err != nil || !pool.Missing || len(pool.Phases) != 0 {
+			t.Fatal("MUTATION: pool-registration-source", pool, err)
 		}
 	}
 	other := phase

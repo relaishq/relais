@@ -22,7 +22,7 @@ type MediaJudge interface {
 	Judge(context.Context, operatorevidence.Pool) (operatorevidence.Summary, error)
 }
 
-// EvidenceRuntime retains survivor phases for one release pin. Collection can
+// EvidenceRuntime retains survivor phases for one caller source pin. Collection can
 // append while a measurement retains telemetry; finalization only reads evidence.
 type EvidenceRuntime struct {
 	RunID              string

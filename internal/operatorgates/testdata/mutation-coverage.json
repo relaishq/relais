@@ -727,7 +727,22 @@
     "rehearsal-retry-window-end",
     "rehearsal-extra-window-bound",
     "rehearsal-combined-admission-limit",
-    "rehearsal-opening-probe-recovery-budget"
+    "rehearsal-opening-probe-recovery-budget",
+    "resource-caller-forced-to-release-a",
+    "resource-judge-hash-unchecked",
+    "resource-caller-judge-source-unchecked",
+    "resource-release-a-unbound",
+    "resource-release-b-unbound",
+    "pool-caller-forced-to-deployment",
+    "pool-registration-source-unchecked",
+    "pool-mixed-caller-source-unchecked",
+    "resource-inventory-commit-unchecked",
+    "resource-inventory-archive-unchecked",
+    "resource-inventory-manifest-commit-unchecked",
+    "scenario-release-a-source-tamper",
+    "scenario-release-b-source-tamper",
+    "scenario-caller-source-tamper",
+    "scenario-judge-source-tamper"
   ],
   "killed": [
     {
@@ -5952,6 +5967,96 @@
       "test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed"
+    },
+    {
+      "id": "resource-caller-forced-to-release-a",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/operator-caller",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-judge-hash-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/judge-hash",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-caller-judge-source-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/caller-judge-source",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-release-a-unbound",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/release-a",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-release-b-unbound",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/release-b",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "pool-caller-forced-to-deployment",
+      "evidence": "killed",
+      "test": "TestPoolRegistrationAndBoundary",
+      "package": "./internal/operatorevidence"
+    },
+    {
+      "id": "pool-registration-source-unchecked",
+      "evidence": "killed",
+      "test": "TestPoolRequiresClocksInventoryAndOnePin",
+      "package": "./internal/operatorevidence"
+    },
+    {
+      "id": "pool-mixed-caller-source-unchecked",
+      "evidence": "killed",
+      "test": "TestPoolRequiresClocksInventoryAndOnePin",
+      "package": "./internal/operatorevidence"
+    },
+    {
+      "id": "resource-inventory-commit-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceInventoryTampering/commit",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-inventory-archive-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceInventoryTampering/archive",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-inventory-manifest-commit-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceInventoryTampering/manifest-commit",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "scenario-release-a-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/release-a",
+      "package": "./pkg/operator"
+    },
+    {
+      "id": "scenario-release-b-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/release-b",
+      "package": "./pkg/operator"
+    },
+    {
+      "id": "scenario-caller-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/caller",
+      "package": "./pkg/operator"
+    },
+    {
+      "id": "scenario-judge-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/judge",
+      "package": "./pkg/operator"
     }
   ],
   "retired": [
