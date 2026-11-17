@@ -54,7 +54,7 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	r.report.Bounds = clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}
 	now := time.Now()
 	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
-	binding, e := bindingtest.New(r.run, now)
+	binding, e := bindingtest.NewWithWindow(r.run, now, rehearsalClockAdmissionWindowSeconds)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -68,7 +68,7 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	defer cancel()
 	// Setup has consumed the measured worst-case time before gates are armed.
 	r.clock = operatorgates.NewRealClock()
-	setupArmed := now.Add(-8*time.Minute - 20*time.Second)
+	setupArmed := now.Add(-21*time.Minute - 10*time.Second)
 	init.ArmedAtUnixMS = strconv.FormatInt(setupArmed.UnixMilli(), 10)
 	init.EndUnixMS = strconv.FormatInt(setupArmed.Add(operatorgates.SessionMaximum).UnixMilli(), 10)
 	r.boundInit = init

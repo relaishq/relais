@@ -58,7 +58,7 @@ func TestHeadCallerSequenceKeepsPinnedReportSeparate(t *testing.T) {
 	r.deployment = &Deployment{Topology: topology, containerIDs: fixtureContainerIDs()}
 	now := time.Now()
 	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
-	binding, e := bindingtest.New(r.run, now)
+	binding, e := bindingtest.NewWithWindow(r.run, now, rehearsalClockAdmissionWindowSeconds)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -272,7 +272,7 @@ func TestHeadCallerPhaseNamesItsBuildInReportAndEvidence(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	binding, e := bindingtest.New(r.run, now)
+	binding, e := bindingtest.NewWithWindow(r.run, now, rehearsalClockAdmissionWindowSeconds)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -344,7 +344,7 @@ func TestClockFalsificationSeedsLaterSequenceWindows(t *testing.T) {
 	judge := &recordingJudge{pinned: operatorevidence.PinnedJudge{Binary: binary, SHA256: fixture.Scenario.Judge.SHA256}}
 	now := time.Now()
 	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
-	binding, err := bindingtest.New(r.run, now)
+	binding, err := bindingtest.NewWithWindow(r.run, now, rehearsalClockAdmissionWindowSeconds)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestHeadBindingRetention(t *testing.T) {
 	base := time.Unix(1793930000, 0)
 	clock := &operatorgates.FakeClock{Now: base}
 	clock.Advance(8*time.Minute + 20*time.Second + 92*time.Minute + 24*time.Second + operatorgates.PoolReserve)
-	f, err := bindingtest.New("head-bound", base)
+	f, err := bindingtest.NewWithWindow("head-bound", base, rehearsalClockAdmissionWindowSeconds)
 	if err != nil {
 		t.Fatal(err)
 	}

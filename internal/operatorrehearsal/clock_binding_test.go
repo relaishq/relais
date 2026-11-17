@@ -27,7 +27,7 @@ func TestBindAdmission(t *testing.T) {
 			fixtures, pins := idleInventory(t)
 			clock := operatorgates.NewRealClock()
 			now := clock.Wall()
-			f, err := bindingtest.New("admission", now)
+			f, err := bindingtest.NewWithWindow("admission", now, rehearsalClockAdmissionWindowSeconds)
 			require.NoError(t, err)
 			scenario := operator.Scenario{SchemaVersion: 1, Gates: []operator.Gate{operator.Rollout}, ReleaseA: operator.Identity{SourceCommit: pins[0].Commit, SHA256: pins[0].ArchiveSHA256}, ReleaseB: operator.Identity{SourceCommit: pins[1].Commit, SHA256: pins[1].ArchiveSHA256}}
 			scenario.Digest, err = operator.PlanIdentity(scenario)
