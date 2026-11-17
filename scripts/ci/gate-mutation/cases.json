@@ -7532,8 +7532,8 @@
     "ID": "paid-clock-admit-helper-lifetime-unbounded",
     "File": "cmd/relais-gates/clock_admit.go",
     "Function": "clockAdmit",
-    "Old": "until <= clock.now().Add(operatorgates.SessionMaximum).UnixMilli()",
-    "New": "until <= clock.now().Add(2*operatorgates.SessionMaximum).UnixMilli()",
+    "Old": "until <= now().Add(operatorgates.SessionMaximum).UnixMilli()",
+    "New": "until <= now().Add(2*operatorgates.SessionMaximum).UnixMilli()",
     "Package": "./cmd/relais-gates",
     "Test": "TestClockAdmitHelperLifetimeBound/1ms",
     "Marker": "MUTATION: clock-admit-helper-lifetime"

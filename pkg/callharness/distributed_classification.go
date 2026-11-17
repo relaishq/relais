@@ -264,10 +264,11 @@ func (r *recorder) classificationFloors(floor DurationInterval, startLower time.
 	return r.floorClassificationPoints(floor)
 }
 
-// Keep the existing 4096-cell limit. The replay fixture's 15 ms takeover uses
-// 1224 cells after removing dominated floors (< half the cap). Recheck the
-// opt-in CPU and pacer gates before resizing; see docs/dev/takeover-budget.md.
-const maxClassificationEvaluations = 4096
+// A live takeover at about 14.4 ms uncertainty exceeded 4096 cells despite the
+// smaller synthetic replay grid. 8192 keeps measured worst capped CPU at or
+// below 0.125s (half the 0.25s calibration gate); see docs/dev/takeover-budget.md.
+// Recheck CPU and pacer gates when resizing.
+const maxClassificationEvaluations = 8192
 
 type verdictAgreement struct {
 	seen, agrees bool
@@ -566,7 +567,11 @@ func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit 
 		}
 	}
 	if !complete || d.Evaluations == 0 {
-		d.FirstBaselines = nil
+		// Only an incomplete self evaluation invalidates first-event references.
+		// Later events inherit references established independently of this grid.
+		if self {
+			d.FirstBaselines = nil
+		}
 		d.BaselineFloor = DurationInterval{Lower: floor.Lower, Upper: max(floor.Upper, limit)}
 	}
 	// The union/intersection loss proof and identified-live proof are independent

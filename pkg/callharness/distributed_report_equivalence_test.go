@@ -14,7 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Pre-118 evaluation pipeline with #120's cell budget and baseline handoff.
+// Pre-118 evaluation pipeline with #120's cell budget and baseline handoff,
+// and #251's preservation of inherited references in exhausted event reports.
 // Keep it independent of the optimized freshness and boundary paths; compare
 // every field of MoveReport evidence. The frozen pre-120 budget oracle lives
 // in distributed_budget_test.go.
@@ -313,7 +314,9 @@ func (r *recorder) legacyClassifyDistributedEvent(report *MoveReport, limit time
 		}
 	}
 	if !complete || d.Evaluations == 0 {
-		d.FirstBaselines = nil
+		if self {
+			d.FirstBaselines = nil
+		}
 		d.BaselineFloor = DurationInterval{Lower: floor.Lower, Upper: max(floor.Upper, limit)}
 	}
 	// The union/intersection loss proof and identified-live proof are independent
@@ -635,16 +638,45 @@ func TestDistributedReportEvidenceEquivalent(t *testing.T) {
 	}
 }
 
+func budgetReportRecorder(t *testing.T) *recorder {
+	t.Helper()
+	r := costCalls(t, 30)[0].rec
+	// Dominated floors now make the original narrow fixture complete. Widen
+	// only this cap oracle's worker bounds so it still tests actual exhaustion.
+	r.distributed.WorkerOffset = OffsetInterval{Lower: -time.Second, Upper: time.Second}
+	for i := range r.moves {
+		if r.moves[i].kind == "takeover" {
+			// Keep the widened mapping inside the caller's arm/receipt bracket.
+			r.moves[i].armedAt = r.moves[i].start.Add(-2 * time.Second)
+			// The end must remain after every possible takeover start too.
+			r.moves[i].end = r.moves[i].start.Add(2 * time.Second)
+			r.moves[i].event.End = r.moves[i].end
+		}
+	}
+	return r
+}
+
+func TestDistributedReportFixtureExhaustsCellBudget(t *testing.T) {
+	r := budgetReportRecorder(t)
+	next, _, err := r.mappedMoveTimes(r.moves[2])
+	require.NoError(t, err)
+	// Exercise the first capped event with the full oracle's observation limit,
+	// without running its deliberately expensive legacy pipeline for 30 events.
+	reports := r.measureMoves(next.Lower, 2)
+	require.NotEmpty(t, reports[0].Distributed.FirstBaselines)
+	require.True(t, reports[1].Distributed.Mapped, reports[1].Distributed.Causes)
+	require.Equal(t, maxClassificationEvaluations, reports[1].Distributed.Evaluations)
+	require.Contains(t, reports[1].Measurement.ResumeVerdict.Summary(), fmt.Sprintf("exceeds %d evaluations", maxClassificationEvaluations))
+	require.Equal(t, reports[0].Distributed.FirstBaselines, reports[1].Distributed.FirstBaselines)
+}
+
 // The full retained-history oracle deliberately allocates like the old code.
 // Opt in alongside the cost reproduction rather than doing that in every CI run.
 func TestDistributedReportBudgetEvidenceEquivalent(t *testing.T) {
 	if os.Getenv("RELAIS_MEASURE_CALLER_COST") != "1" {
 		t.Skip("opt-in full work-budget legacy oracle")
 	}
-	r := costCalls(t, 30)[0].rec
-	// Dominated floors now make the original narrow fixture complete. Widen
-	// only this cap oracle's worker bounds so it still tests actual exhaustion.
-	r.distributed.WorkerOffset = OffsetInterval{Lower: -250 * time.Millisecond, Upper: 250 * time.Millisecond}
+	r := budgetReportRecorder(t)
 	oldView := r.measurementSnapshot(r.hungUpAt, len(r.moves))
 	newView := r.measurementSnapshot(r.hungUpAt, len(r.moves))
 	expected := oldView.legacyMeasureMoves(r.hungUpAt, len(r.moves))
@@ -657,9 +689,10 @@ func TestDistributedReportBudgetEvidenceEquivalent(t *testing.T) {
 	capped := 0
 	for _, m := range actual {
 		if m.Distributed.Evaluations == maxClassificationEvaluations {
+			require.Contains(t, m.Measurement.ResumeVerdict.Summary(), fmt.Sprintf("exceeds %d evaluations", maxClassificationEvaluations))
 			capped++
 		}
 	}
-	require.Positive(t, capped, "exercise the real 4096-cell limit")
+	require.Positive(t, capped, "exercise the production cell limit")
 	t.Logf("identical full evidence for 30 events, including %d capped events", capped)
 }
