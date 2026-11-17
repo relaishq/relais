@@ -1,10 +1,17 @@
 # Takeover evaluation cost (#123)
 
-The 4096-cell cap remains unchanged. Two end/floor points and removal of
-irrelevant previous-floor choices let the replay fixture complete at 15 ms
-with more than the required 2x margin. The cell budget still counts each
-start × end × floor once, evaluating every first-baseline reference in it.
-Exhaustion still reports unsupported evidence as inconclusive.
+The configured per-event cap is 8192 cells. A live A5-class takeover with about
+14.4 ms start uncertainty exceeded the former 4096-cell budget. The synthetic
+15 ms fixture did not bound live cell density, so its earlier sizing condition
+no longer holds. The larger cap adds operational margin. Two end/floor points
+and removal of irrelevant previous-floor choices remain in use. The cell
+budget still counts each start × end × floor once, evaluating every
+first-baseline reference in it.
+Exhaustion still reports unsupported evidence as inconclusive and widens
+floor uncertainty. Later exhausted events keep established first-event
+references in their reports. Exhausted first events still leave them unknown.
+Pass/fail thresholds, the 20-move / 10-takeover pooled minimum, and the
+exclusion policy are unchanged; no judge acceptance rule changes.
 
 ## Reproduction and fixture
 
@@ -41,7 +48,7 @@ mapped axes. These are synthetic retained-history measurements, not a trace
 replay or an assertion about the next remote run. A separate phase sweep shifts
 kill by ±2 ms and receipt completion by −4, −1, +1 and +4 ms.
 
-## Local measurements
+## Historical local measurements (4096-cell version)
 
 Go 1.26.9, darwin/arm64, GOMAXPROCS=2. CPU is process user + system CPU from
 `getrusage`, including boundary construction and evaluation, excluding fixture
@@ -58,20 +65,26 @@ start/end/floor grids; the after run is also uncapped.
 | Takeover | 12 ms | 11288 | 952 | 62.987 ms | 12.494 ms |
 | Takeover | 15 ms | 14552 | 1224 | 81.008 ms | 15.220 ms |
 
-The 15 ms phase sweep peaks at 1702 cells: 4096 / 1702 = 2.41x headroom.
+The 15 ms phase sweep peaks at 1702 cells: 8192 / 1702 = 4.81x fixture
+headroom. This does not establish live-run headroom.
 A full-cap stress uses wider 150 ms axes and a recent floor that remains
-active, with one and four distinct first-baseline references. All trials
-actually exhaust 4096 cells. Worst observed CPU is **0.0443 s per event**
+active, with one and four distinct first-baseline references. The earlier cap
+trials actually exhausted 4096 cells. Their worst observed CPU was
+**0.0443 s per event**
 (20 trials per reference count across four measurement invocations). The
 opt-in strict gate requires capped CPU below 0.25 s on the measurement host.
 This is a calibration gate, not a hardware-independent wall-clock timeout;
 no evidence is dropped based on elapsed time.
 
-Keep 4096 while measured realistic 15 ms phase maxima remain below half the
-cap and capped CPU stays below that gate. Before any increase, repeat these
-CPU measurements and the 1-P/2-P caller gates with representative history and
-reference counts. Require at least 2x the measured realistic cell maximum,
-and increase only enough to meet it. Current measurements justify no increase.
+The earlier rule kept 4096 while realistic 15 ms phase maxima stayed below
+half the cap. The live event invalidates that condition. Size operational
+limits with margin, and repeat full-cap CPU measurements and the 1-P/2-P
+caller gates when resizing. Grow the cap one power of two at a time and stop
+at the first step that both doubles the former cap and keeps measured worst
+capped CPU at most 0.125 s/event, 2x under the unchanged 0.25 s calibration
+gate. A larger cap needs evidence that live events need it. Keep at least 2x the
+measured realistic cell maximum. The new cap does not change product
+thresholds or turn exhausted evidence into a pass.
 Existing bounded history, event/reference counts and the cell cap bound work;
 #118's yields remain in boundary building and every 32 evaluated cells.
 
@@ -82,6 +95,38 @@ two scheduler Ps. At one P: report plus JSON 1.720 s, pacer lateness p99/max
 per caller also passes: one P has p99 7.050 ms / max 9.098 ms; two Ps have p99
 1.029 ms / max 3.935 ms. Both skip zero frames and build/encode reports in
 1.70 s. Evaluation remains outside the recorder lock.
+
+## Cap calibration (2026-11-16)
+
+Go 1.26.9, darwin/arm64, GOMAXPROCS=2. Each batch ran
+`TestTakeoverCapCPUMeasurement -count=3`: five trials per reference count in
+each invocation, 15 trials with one reference and 15 with four references.
+All trials reached the cap. The measurement includes boundary construction
+and cell evaluation; it excludes fixture and index construction.
+
+| Cap / batch | One-minute load | Worst CPU, 1 reference | Worst CPU, 4 references | At most 0.125 s/event |
+| --- | ---: | ---: | ---: | --- |
+| 16384 / shared load | about 19–22 | 0.150671 s | 0.202602 s | No |
+| 8192 / shared load | about 18–22 | 0.078970 s | 0.141760 s | No |
+| 8192 / qualifying | 7.67 at start, 10.06 at end | 0.061254 s | 0.068222 s | Yes |
+
+Shared-load readings inflate process CPU. 8192, twice the former cap,
+qualifies when measured at low load: its worst capped CPU is 0.068 s/event,
+3.7x under the 0.25 s gate, so it is the configured cap. 16384 was measured
+only under shared load and was not measured at low load; no live event has
+shown a need for it.
+
+The strict caller cost gates also pass at the 8192 cap (same session):
+
+| Scheduler Ps | Maintenance | Report + JSON | Pacer p99 / max | Skipped frames |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | normal (2 retained) | 1.796 s | 10.483 / 10.483 ms | 0 |
+| 1 | delayed (30 retained) | 1.766 s | 8.676 / 9.670 ms | 0 |
+| 2 | normal (2 retained) | 1.724 s | 2.043 / 2.043 ms | 0 |
+| 2 | delayed (30 retained) | 2.035 s | 6.473 / 8.024 ms | 0 |
+
+The opt-in full-report oracle reports identical full evidence for 30 events,
+including 29 capped events.
 
 ## Why the reductions preserve evidence
 
@@ -108,9 +153,15 @@ The frozen pre-123 classifier/grid compares unlimited verdicts (including
 reason order), durations, baseline-floor bounds and first baselines on dense,
 jittered, replay, and recent-active-floor variants, for moves and takeovers at
 all three widths. The crossover test proves a real replay event exhausts the
-old 4096 cap, completes with the unchanged cap after reduction, and exactly
+old 4096 cap, completes within the production cap after reduction, and exactly
 matches the unlimited old oracle. Existing measurement/budget oracles use the
 new grid while retaining their independent measurement/accounting logic.
-The 4096-cap full-report oracle deliberately widens worker bounds to ±250 ms:
-the former narrow fixture no longer exhausts after dominated-floor removal.
-It still compares all fields across 30 reports, including 19 capped events.
+The full-report oracle deliberately widens worker bounds to ±1 s and uses
+2 s takeover spans with an earlier arm time, keeping the entire mapping
+inside valid ordering bounds. The former narrow fixture no longer exhausts
+after dominated-floor removal.
+It compares all fields across 30 reports and requires actual capped events,
+including the preserved references in later exhausted reports.
+`TestDistributedReportFixtureExhaustsCellBudget` checks its first capped
+event without running the full legacy oracle, including the exhaustion reason
+and inherited references.
