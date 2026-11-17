@@ -430,15 +430,18 @@ func TestDistributedExhaustedEventKeepsFirstBaselines(t *testing.T) {
 			}
 		}
 	}
-	r.distributed.WorkerOffset = OffsetInterval{Lower: -3100 * time.Millisecond, Upper: 3100 * time.Millisecond}
+	// Keep the earliest takeover after the first move, but widen its latest
+	// start and span enough to exhaust the production cell budget.
+	r.distributed.WorkerOffset = OffsetInterval{Lower: -24 * time.Second, Upper: 3100 * time.Millisecond}
 	recordDenseEvent(t, r, c, "first", "move", 5*time.Second, 5030*time.Millisecond)
-	recordDenseEvent(t, r, c, "exhausted", "takeover", 10*time.Second, 14*time.Second)
+	recordDenseEvent(t, r, c, "exhausted", "takeover", 10*time.Second, 38*time.Second)
 	r.moves[1].armedAt = r.start.Add(6 * time.Second)
-	recordDenseEvent(t, r, c, "third", "move", 15*time.Second, 15030*time.Millisecond)
+	recordDenseEvent(t, r, c, "third", "move", 40*time.Second, 40030*time.Millisecond)
 	reports := r.measureMoves(r.hungUpAt, 3)
 	require.NotEmpty(t, reports[0].Distributed.FirstBaselines)
 	require.Equal(t, 1, reports[0].Distributed.Evaluations)
 	require.Equal(t, maxClassificationEvaluations, reports[1].Distributed.Evaluations)
+	require.Contains(t, reports[1].Measurement.ResumeVerdict.Summary(), fmt.Sprintf("exceeds %d evaluations", maxClassificationEvaluations))
 	require.Equal(t, reports[0].Distributed.FirstBaselines, reports[1].Distributed.FirstBaselines)
 	require.Equal(t, reports[0].Distributed.FirstBaselines, reports[2].Distributed.FirstBaselines)
 	require.Less(t, reports[2].Distributed.Evaluations, maxClassificationEvaluations)
@@ -457,10 +460,12 @@ func TestDistributedExhaustedEventKeepsFirstBaselines(t *testing.T) {
 
 func TestDistributedExhaustedFirstBaselineStaysUnknown(t *testing.T) {
 	r, c := denseDistributedCall(t, true, 0, 0)
-	r.distributed.WorkerOffset = OffsetInterval{Lower: -3100 * time.Millisecond, Upper: 3100 * time.Millisecond}
-	recordDenseEvent(t, r, c, "first", "takeover", 10*time.Second, 14*time.Second)
+	// Widen the latest takeover start and span to exhaust the cap while
+	// keeping the earliest start inside the arm/receipt bracket.
+	r.distributed.WorkerOffset = OffsetInterval{Lower: -24 * time.Second, Upper: 3100 * time.Millisecond}
+	recordDenseEvent(t, r, c, "first", "takeover", 10*time.Second, 38*time.Second)
 	r.moves[0].armedAt = r.start.Add(6 * time.Second)
-	recordDenseEvent(t, r, c, "later", "move", 15*time.Second, 15030*time.Millisecond)
+	recordDenseEvent(t, r, c, "later", "move", 40*time.Second, 40030*time.Millisecond)
 	reports := r.measureMoves(r.hungUpAt, 2)
 	require.Equal(t, maxClassificationEvaluations, reports[0].Distributed.Evaluations)
 	require.Nil(t, reports[0].Distributed.FirstBaselines)

@@ -1,6 +1,6 @@
 # Takeover evaluation cost (#123)
 
-The per-event cap is 16384 cells. A live A5-class takeover with about
+The configured per-event cap is 8192 cells. A live A5-class takeover with about
 14.4 ms start uncertainty exceeded the former 4096-cell budget. The synthetic
 15 ms fixture did not bound live cell density, so its earlier sizing condition
 no longer holds. The larger cap adds operational margin. Two end/floor points
@@ -65,7 +65,7 @@ start/end/floor grids; the after run is also uncapped.
 | Takeover | 12 ms | 11288 | 952 | 62.987 ms | 12.494 ms |
 | Takeover | 15 ms | 14552 | 1224 | 81.008 ms | 15.220 ms |
 
-The 15 ms phase sweep peaks at 1702 cells: 16384 / 1702 = 9.63x fixture
+The 15 ms phase sweep peaks at 1702 cells: 8192 / 1702 = 4.81x fixture
 headroom. This does not establish live-run headroom.
 A full-cap stress uses wider 150 ms axes and a recent floor that remains
 active, with one and four distinct first-baseline references. The earlier cap
@@ -79,9 +79,10 @@ no evidence is dropped based on elapsed time.
 The earlier rule kept 4096 while realistic 15 ms phase maxima stayed below
 half the cap. The live event invalidates that condition. Size operational
 limits with margin, and repeat full-cap CPU measurements and the 1-P/2-P
-caller gates when resizing. Require at least 2x the measured realistic cell
-maximum and capped CPU below 0.25 s on the measurement host. The new cap does
-not change product thresholds or turn exhausted evidence into a pass.
+caller gates when resizing. Select the largest power-of-two cap at or above
+8192 whose measured worst capped CPU is at most 0.125 s/event, giving 2x
+margin under the unchanged 0.25 s calibration gate. Keep at least 2x the
+measured realistic cell maximum. The new cap does not change product thresholds or turn exhausted evidence into a pass.
 Existing bounded history, event/reference counts and the cell cap bound work;
 #118's yields remain in boundary building and every 32 evaluated cells.
 
@@ -93,13 +94,36 @@ per caller also passes: one P has p99 7.050 ms / max 9.098 ms; two Ps have p99
 1.029 ms / max 3.935 ms. Both skip zero frames and build/encode reports in
 1.70 s. Evaluation remains outside the recorder lock.
 
-## 16384-cell calibration
+## Cap calibration (2026-11-16)
 
-NOT-RUN: the new-cap CPU and caller timing measurements are pending. The
-local run on 2026-11-16 held heavy checks because the one-minute load average
-exceeded the required limit of 8. The historical 4096-cell CPU and timing
-results above do not validate the larger cap. Reproduce with the commands
-above, including 1-P/2-P caller cost and delayed-maintenance runs.
+Go 1.26.9, darwin/arm64, GOMAXPROCS=2. Each batch ran
+`TestTakeoverCapCPUMeasurement -count=3`: five trials per reference count in
+each invocation, for 15 trials with one reference and 15 with four references
+per batch. The final 8192 batch also checks the exhaustion reason explicitly.
+All trials reached the cap. The measurement
+includes boundary construction and cell evaluation; it excludes fixture and
+index construction. These process CPU measurements ran under shared load;
+readings during initial calibration were about 19–22; the final batch began
+at 17.99 and ended at 18.23, above the timing-gate load limit.
+
+| Cap / batch | Worst CPU, 1 reference | Worst CPU, 4 references | At most 0.125 s/event |
+| --- | ---: | ---: | --- |
+| 16384 / initial | 0.150671 s | 0.202602 s | No |
+| 8192 / initial | 0.078970 s | 0.141760 s | No |
+| 8192 / final | 0.061514 s | 0.121954 s | Yes, in this batch |
+
+The 16384 cap fails the 2x CPU-margin target. The final 8192 batch meets it,
+but the initial four-reference outlier is retained: the worst across both
+8192 batches (30 trials per reference count) remains 0.141760 s/event.
+The configured 8192 candidate has not qualified under a worst-observed rule
+across all batches. Staying below the existing 0.25 s gate does not establish
+2x margin. No exception to the 0.125 s sizing target is assumed.
+
+NOT-RUN: strict 1-P/2-P caller cost gates, both normal and delayed-maintenance
+variants, are held while the one-minute load exceeds 8 (latest reading 17.41).
+The historical caller timing results above do not validate the new cap.
+The full 30-event legacy oracle is also NOT-RUN; its mapped, capped prefix
+check passed with the race detector.
 
 ## Why the reductions preserve evidence
 
@@ -129,7 +153,12 @@ all three widths. The crossover test proves a real replay event exhausts the
 old 4096 cap, completes within the production cap after reduction, and exactly
 matches the unlimited old oracle. Existing measurement/budget oracles use the
 new grid while retaining their independent measurement/accounting logic.
-The full-report oracle deliberately widens worker bounds to ±250 ms:
-the former narrow fixture no longer exhausts after dominated-floor removal.
+The full-report oracle deliberately widens worker bounds to ±1 s and uses
+2 s takeover spans with an earlier arm time, keeping the entire mapping
+inside valid ordering bounds. The former narrow fixture no longer exhausts
+after dominated-floor removal.
 It compares all fields across 30 reports and requires actual capped events,
 including the preserved references in later exhausted reports.
+`TestDistributedReportFixtureExhaustsCellBudget` checks its first capped
+event without running the full legacy oracle, including the exhaustion reason
+and inherited references.

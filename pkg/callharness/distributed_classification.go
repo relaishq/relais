@@ -265,9 +265,10 @@ func (r *recorder) classificationFloors(floor DurationInterval, startLower time.
 }
 
 // A live takeover at about 14.4 ms uncertainty exceeded 4096 cells despite the
-// smaller synthetic replay grid. Leave operational margin and recheck the
-// opt-in CPU and pacer gates when resizing; see docs/dev/takeover-budget.md.
-const maxClassificationEvaluations = 16384
+// smaller synthetic replay grid. Choose the largest power of two >= 8192 whose
+// measured capped CPU stays at or below 0.125s (half the 0.25s calibration gate).
+// Recheck CPU and pacer gates when resizing; see docs/dev/takeover-budget.md.
+const maxClassificationEvaluations = 8192
 
 type verdictAgreement struct {
 	seen, agrees bool

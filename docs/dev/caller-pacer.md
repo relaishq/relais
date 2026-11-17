@@ -9,8 +9,9 @@ P available.
 The offline reproduction uses three calls, 180 s configured retention and
 185 s of observations: audio at 50 Hz, video at 30 fps with three RTP packets
 per frame, and the production send/return indexes. The report fixture has
-30 mixed move/takeover receipts per call. Twenty-five of those events reach
-the existing 4096-evaluation limit. A second fixture drives the real
+30 mixed move/takeover receipts per call. The production limit is now
+8192 classification cells per event; the full-budget oracle requires actual
+exhaustion at that limit. A second fixture drives the real
 `ArmDistributedEvent` and `RecordDistributedEvent` entry points alongside
 maintenance while six ticker-driven `framePacer` instances acquire the real
 recorder locks, with `GOMAXPROCS=1`.
@@ -30,7 +31,7 @@ RELAIS_MEASURE_CALLER_COST=1 RELAIS_MEASURE_CALLER_COST_HEAVY=1 \
   RELAIS_TEST_STRICT_TIMING=1 go test ./pkg/callharness \
   -run '^TestCallerCost$' -count=1 -v
 
-# Full old/new evidence comparison, including the 4096-cell limit.
+# Full old/new evidence comparison, including the production 8192-cell limit.
 RELAIS_MEASURE_CALLER_COST=1 \
   go test ./pkg/callharness \
   -run '^TestDistributedReportBudgetEvidenceEquivalent$' -count=1 -v
@@ -47,7 +48,7 @@ The ordinary tests compare complete `MoveReport` evidence, judge outcomes,
 freshness fields, content-loss counts and classification points against frozen
 pre-change implementations. The expensive full-budget oracle is opt-in. Run
 `RELAIS_MEASURE_CALLER_COST=1 go test ./pkg/callharness -run '^TestDistributedReportBudgetEvidenceEquivalent$' -count=1 -v`
-to exercise the 4096-cap legacy comparison; ordinary `go test` skips it.
+to exercise the 8192-cap legacy comparison; ordinary `go test` skips it.
 The dense repeated-return variant and cost fixture include audio/video repeats
 and unmatched observations. Their published point fields, including unique
 `PostEventSamples`, are compared against the legacy implementation.
@@ -64,8 +65,8 @@ events to evaluate.
 
 The implementation reuses view-owned freshness buffers and identity visit
 arrays. It caches identical freshness inputs within an event. Each evaluation
-still runs, contributes to the same agreement, and counts toward the same
-4096-cell limit. It retains only boundaries that can appear in the original
+still runs, contributes to the same agreement, and counts toward the production
+8192-cell limit. It retains only boundaries that can appear in the original
 start/end point lists, including translated planned-move boundaries and packet
 predecessors. It filters content-loss windows before sorting and uses the
 existing sorted frame index for first-content durations. Empty event prefixes
@@ -84,7 +85,9 @@ wall-clock timeout discards evidence or changes a verdict.
 ## Local measurements
 
 Measured with Go 1.26.9 on darwin/arm64 and one scheduler P. These are offline
-measurements, not a multi-host capacity claim.
+measurements of the original 4096-cell version, not a multi-host capacity
+claim or a timing receipt for the current cap. Current cap CPU measurements
+and caller timing status are in [takeover-budget.md](takeover-budget.md#cap-calibration-2026-11-16).
 
 | Measurement | Before | After |
 | --- | ---: | ---: |
@@ -109,8 +112,9 @@ the offline fixture supplies realistic retained-history costs. The offline
 pacer fixture isolates scheduler and recorder-lock contention and does not
 write actual RTP packets.
 
-The before strict gate failed. Three after runs passed. The full-budget
+The before strict gate failed. Three after runs passed. The original 4096-cell full-budget
 comparison preserved every field of all 30 move reports, including 25 capped
-events. Additional comparisons cover missing content, identity corruption,
+events. The current oracle uses ±1 s worker offsets and explicitly checks the
+exhaustion reason on every event that reaches the production cap. Additional comparisons cover missing content, identity corruption,
 unknown content and reversed receipts. Redis was not needed for these checks.
 A live multi-host SIGINT run and its network teardown/output time were not run.
