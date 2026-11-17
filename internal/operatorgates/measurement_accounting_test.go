@@ -322,7 +322,7 @@ func TestAdmissionRetainsSurvivorError(t *testing.T) {
 	boundary := false
 	r := RunAdmission(context.Background(), AdmissionPorts{
 		Survivor: func(context.Context, time.Duration) MeasureResult {
-			return MeasureResult{CompletedSteps: 1, Status: operator.Inconclusive, Reason: reason, Measurement: Measurement{ErrorReason: reason}}
+			return MeasureResult{CompletedSteps: 1, Status: operator.Inconclusive, Measurement: Measurement{ErrorReason: reason}}
 		},
 		StopSurvivor: func(context.Context, time.Duration) bool { return true },
 		Idle:         func(context.Context, time.Duration) error { return nil },
@@ -336,7 +336,7 @@ func TestAdmissionRetainsSurvivorError(t *testing.T) {
 	s.gates = []operator.Gate{operator.Load}
 	seq := s.RunSequence(context.Background(), SequencePorts{Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult { return out }})
 	final := s.Final(seq.Gates)
-	if !boundary || r.Completed || r.Reason != reason || out.Reason != reason || out.ProcedureReason != reason || s.Latched() || out.Process.CompletedSteps != 5 || final.Diagnostics[0].Procedure.Reason != reason {
+	if !boundary || r.Completed || r.Reason != "" || out.Reason != "" || out.ProcedureReason != reason || s.Latched() || out.Process.CompletedSteps != 5 || final.Diagnostics[0].Procedure.Reason != reason {
 		t.Fatalf("MUTATION: admission-survivor-error: result=%+v procedure=%+v", r, out)
 	}
 }
@@ -344,7 +344,7 @@ func TestAdmissionRetainsSurvivorError(t *testing.T) {
 func TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome(t *testing.T) {
 	r := RunAdmission(context.Background(), AdmissionPorts{
 		Survivor: func(context.Context, time.Duration) MeasureResult {
-			return MeasureResult{Status: operator.Inconclusive, Reason: "precondition-failed", Measurement: Measurement{ErrorReason: "missing-live-inventory"}}
+			return MeasureResult{Status: operator.Inconclusive, Measurement: Measurement{ErrorReason: "missing-live-inventory"}}
 		},
 		StopSurvivor: func(context.Context, time.Duration) bool { return true },
 		Idle:         func(context.Context, time.Duration) error { return nil },

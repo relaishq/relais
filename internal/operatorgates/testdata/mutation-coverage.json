@@ -709,7 +709,7 @@
     "failover-refusal-wrong-condition",
     "failover-recovery-error-discarded",
     "admission-only-one-population-completes",
-    "admission-discards-survivor-reason",
+    "admission-discards-survivor-diagnostic",
     "paid-clock-admit-helper-lifetime-unbounded",
     "measurement-evidence-error-latches-session",
     "measurement-cutoff-uses-stop-code",
@@ -719,7 +719,11 @@
     "measurement-skipped-collection-completes",
     "measurement-codes-expand-public-reasons",
     "measurement-evidence-deadline-unmapped",
-    "admission-boundary-overwrites-first-diagnostic"
+    "admission-boundary-overwrites-first-diagnostic",
+    "prefault-expired-entry-refused",
+    "prefault-scheduling-margin-omitted",
+    "prefault-post-wait-headroom-skipped",
+    "prefault-refusal-slot-discarded"
   ],
   "killed": [
     {
@@ -5832,7 +5836,7 @@
       "evidence": "killed"
     },
     {
-      "id": "admission-discards-survivor-reason",
+      "id": "admission-discards-survivor-diagnostic",
       "test": "TestAdmissionRetainsSurvivorError",
       "package": "./internal/operatorgates",
       "evidence": "killed"
@@ -5894,6 +5898,30 @@
     {
       "id": "admission-boundary-overwrites-first-diagnostic",
       "test": "TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-expired-entry-refused",
+      "test": "TestPreFaultExpiredEntry/fresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-scheduling-margin-omitted",
+      "test": "TestPreFaultSchedulingMargin/projected",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-post-wait-headroom-skipped",
+      "test": "TestPreFaultSchedulingMargin/oversleep",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-refusal-slot-discarded",
+      "test": "TestPreFaultRefusalDiagnostics/headroom",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }

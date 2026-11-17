@@ -7,6 +7,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -44,6 +45,11 @@ func callerQuietGap(burst operatorcaller.Burst, horizon time.Duration, bounds cl
 	return baseline + width, nil
 }
 
+// faultLeaseSchedulingMargin reserves 10 ms beyond the projected quiet gap.
+// This is ten times the 1 ms preparation delay that reproduced expired entry,
+// not an extension of validity. Longer scheduling stalls still fail pure checks.
+const faultLeaseSchedulingMargin = 10 * time.Millisecond
+
 type FaultQuietTiming struct {
 	Action         string `json:"action"`
 	Slot           string `json:"slot"`
@@ -51,24 +57,26 @@ type FaultQuietTiming struct {
 	RequiredGapNS  int64  `json:"requiredGapNs"`
 	WaitedNS       int64  `json:"waitedNs"`
 	BeforeSendNS   int64  `json:"beforeSendNs"`
-	RemainingNS    int64  `json:"remainingNs"`
+	RemainingNS    int64  `json:"remainingNs"` // Minimum lifetime across all slots, including on refusal.
+	LimitingSlot   string `json:"limitingSlot,omitempty"`
 	Reacquires     int    `json:"reacquires"`
 }
 
 // prepareFault separates ordinary preflight reads from planned fault baselines;
-// it is never called for restoration. It changes neither expiry nor Refresh policy. A
-// projected expiry/bound failure needs an explicit read even if Check is valid
-// now. All such reads and restarted gaps share one original 10P/end budget.
+// it is never called for restoration. It changes neither expiry nor Refresh policy. An
+// expired entry or projected expiry/bound failure needs a read even if Check was valid
+// during Refresh. All such reads and restarted gaps share one original 10P/end budget.
 func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, timing *FaultQuietTiming) error {
 	g.refresh.Lock()
 	defer g.refresh.Unlock()
 	defer func() {
 		timing.LastReadDoneNS = int64(g.session.hostReadCompleted())
+		g.recordFaultLease(timing)
 	}()
 	if gap < time.Second {
 		return fault("clock-lease-missing")
 	}
-	if err := g.Check(); err != nil {
+	if err := g.Check(); err != nil && code(err) != "clock-lease-expired" {
 		return err
 	}
 	until := end
@@ -94,7 +102,7 @@ func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, t
 		if ready >= until {
 			return fault("clock-lease-expired")
 		}
-		err := g.checkAt(ready)
+		err := g.checkAt(ready + faultLeaseSchedulingMargin)
 		if err == nil {
 			if ready > now {
 				err = g.pause(ctx, ready-now)
@@ -103,7 +111,11 @@ func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, t
 					return err
 				}
 			}
-			if err = g.checkFaultQuiet(gap, timing); err == nil {
+			// Recheck headroom after waiting: the scheduler can overshoot ready.
+			if err = g.checkAt(g.clock.Elapsed() + faultLeaseSchedulingMargin); err == nil {
+				err = g.checkFaultQuiet(gap, timing)
+			}
+			if err == nil {
 				return nil
 			}
 			if code(err) != "clock-lease-expired" && code(err) != "clock-lease-bound" {
@@ -141,6 +153,7 @@ func (g *LeaseGuard) prepareFault(ctx context.Context, end, gap time.Duration, t
 
 // This remains pure while holding the send lock: no refresh, sleep or replay.
 func (g *LeaseGuard) checkFaultQuiet(gap time.Duration, timing *FaultQuietTiming) error {
+	defer g.recordFaultLease(timing)
 	if err := g.Check(); err != nil {
 		return err
 	}
@@ -161,4 +174,23 @@ func (g *LeaseGuard) checkFaultQuiet(gap time.Duration, timing *FaultQuietTiming
 		timing.RemainingNS = min(timing.RemainingNS, v.RemainingNS)
 	}
 	return nil
+}
+
+// Diagnostics use only the fixed inventory and nonnegative lease lifetimes.
+// Missing evidence supplies no slot or lifetime; it never changes admission.
+func (g *LeaseGuard) recordFaultLease(timing *FaultQuietTiming) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.clock.Elapsed()
+	timing.RemainingNS, timing.LimitingSlot = 0, ""
+	for _, slot := range inventory.Slots {
+		v, err := g.leases[slot].At(now)
+		if err != nil {
+			timing.RemainingNS, timing.LimitingSlot = 0, ""
+			return
+		}
+		if timing.LimitingSlot == "" || v.RemainingNS < timing.RemainingNS {
+			timing.RemainingNS, timing.LimitingSlot = v.RemainingNS, slot
+		}
+	}
 }
