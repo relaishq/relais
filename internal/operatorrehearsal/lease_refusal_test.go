@@ -6,8 +6,32 @@ import (
 	"testing"
 
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/pkg/operator"
 )
+
+func TestBindingRefusalPublicCause(t *testing.T) {
+	report := passingReport()
+	var diagnostics bytes.Buffer
+	r := &rehearsal{report: &report, diagnostics: &diagnostics}
+	r.recordError("clock-binding-failed", &clocks.BindingError{Cause: "clock-history-incomplete"})
+	var raw bytes.Buffer
+	if err := report.Write(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var saved Report
+	if err := json.Unmarshal(raw.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Errors) != 2 || saved.Errors[0] != "clock-binding-failed" || saved.Errors[1] != "clock-history-incomplete" || diagnostics.String() != "clock-binding-failed: clock-history-incomplete\n" {
+		t.Fatal("binding refusal lost", saved.Errors, diagnostics.String())
+	}
+	for _, code := range []string{"clock-binding-failed", "clock-history-incomplete"} {
+		if publicCode(code+":unsafe-detail") != "unclassified" {
+			t.Fatal("binding refusal disclosed arbitrary detail")
+		}
+	}
+}
 
 func TestLeaseRefusalPublicCause(t *testing.T) {
 	for _, cause := range []string{"clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ"} {

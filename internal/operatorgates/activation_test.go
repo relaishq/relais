@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -78,6 +79,85 @@ func TestAtomicBindingBeforeMedia(t *testing.T) {
 				require.Equal(t, r.Session.scenario.ClockReceiptSHA256, e.ClockReceiptSHA256)
 				require.NoError(t, e.ValidateBinding(e.ClockReceiptSHA256))
 			}
+		})
+	}
+}
+
+// A missing closing successor is a definite read refusal. Binding waits for
+// the next update without latching or changing the frozen interval.
+func TestBindingClosingUpdate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r, p, _ := runtimeFixture(t)
+		c, f := bindFixture(t, r, p, "closing-update")
+		r.Session.clockBinding = nil
+		c.ClockTiming = ClockTiming{PollSeconds: 8, HostReadLatencyMS: 400}
+		respond := p.respond
+		reads, began := 0, time.Now()
+		p.respond = func(q operator.Request) operator.Reply {
+			if strings.Contains(string(q.Script), "print(base64") && strings.Contains(string(q.Script), "historical_tracking(json.loads") {
+				reads++
+				if time.Since(began) < 8*time.Second {
+					return resourceTestReply(operator.HostOutput{Stdout: bindingtest.Pack(map[string]string{"cause": "clock-history-incomplete"})})
+				}
+			}
+			return respond(q)
+		}
+		err := r.Session.BindClock(context.Background(), p, c, time.Minute)
+		require.NoError(t, err)
+		require.Greater(t, reads, 4)
+		require.Equal(t, 8*time.Second, time.Since(began))
+		require.False(t, r.Session.Latched())
+		require.NotNil(t, r.Session.clockBinding)
+		require.Equal(t, f.Selection.SHA256, r.Session.clockBinding.Binding.ReceiptSHA256)
+		// Binding does not use the session timing budget to validate frozen rows.
+		require.Equal(t, referenceTiming, r.Session.timing)
+	})
+}
+
+func TestBindingHistoryRetryLimits(t *testing.T) {
+	for _, mode := range []string{"deadline", "cancelled", "gap", "unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r, p, _ := runtimeFixture(t)
+				c, _ := bindFixture(t, r, p, "history-limit")
+				r.Session.clockBinding = nil
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				began, reads := time.Now(), 0
+				respond := p.respond
+				p.respond = func(q operator.Request) operator.Reply {
+					if strings.Contains(string(q.Script), "historical_tracking(json.loads") {
+						reads++
+						if mode == "unknown" {
+							return operator.Reply{Transport: operator.Unknown}
+						}
+						cause := "clock-history-incomplete"
+						if mode == "gap" {
+							cause = "clock-history-gap"
+						}
+						if mode == "cancelled" {
+							cancel()
+						}
+						return resourceTestReply(operator.HostOutput{Stdout: bindingtest.Pack(map[string]string{"cause": cause})})
+					}
+					return respond(q)
+				}
+				err := r.Session.BindClock(ctx, p, c, r.Session.clock.Elapsed()+time.Minute)
+				require.Error(t, err)
+				require.Nil(t, r.Session.clockBinding)
+				require.Equal(t, mode == "unknown", r.Session.Latched())
+				if mode == "deadline" {
+					require.EqualError(t, err, "clock-history-incomplete")
+					require.Equal(t, time.Minute, time.Since(began))
+					require.Greater(t, reads, 1)
+				} else {
+					require.Equal(t, 1, reads)
+					require.Zero(t, time.Since(began))
+					if mode == "cancelled" {
+						require.ErrorIs(t, err, context.Canceled)
+					}
+				}
+			})
 		})
 	}
 }

@@ -45,6 +45,12 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 	in := clocks.ReceiptBindingInput{ReceiptJSON: raw, EvidenceJSON: evidence, ReceiptSHA256: s.scenario.ClockReceiptSHA256, EvidenceSHA256: receipt.EvidenceSHA256, RunID: c.Endpoints.RunID, FrontendSlot: front, ControlSlot: control, CallerLeapMode: c.ClockLeapMode, ConfigBounds: c.Bounds, CallerBounds: caller, ExpectedPolicy: c.ClockPolicy}
 	cursors := map[string]json.RawMessage{}
 	historical := clocks.Evidence{Clocks: map[string]clocks.Sample{}}
+	// A frozen closing row can still be the newest row at an 8 s poll. The
+	// precision reader needs a later timestamp to prove that second complete.
+	// Retry only that definite refusal, inside the original binding deadline.
+	historyCtx, historyDone := context.WithTimeout(ctx, max(0, end-s.clock.Elapsed()))
+	defer historyDone()
+	historyEnd, _ := historyCtx.Deadline()
 	for _, h := range input.Hosts {
 		// A cursorless tail may omit rows under wire pressure. Use it only to find
 		// EOF. The independent precision pager verifies the frozen interval below.
@@ -75,12 +81,26 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 		}
 		boundary := s.clock.Wall().UnixMilli()
 		first, last := clocks.FrozenTrackingRange(h.Tracking.Rows, input.StartUnixSeconds, input.EndUnixSeconds)
-		log, e := clocks.ReadHistoricalTracking(ctx, boundary, first, last, func(ctx context.Context, script string) (stdout string, e error) {
-			e = s.observeHost(ctx, p, h.Slot, "clock", script, end, func(out string) error { stdout = out; return nil })
-			return
-		})
-		if e != nil {
-			return e
+		var log clocks.TrackingLog
+		for {
+			var e error
+			log, e = clocks.ReadHistoricalTracking(historyCtx, boundary, first, last, func(ctx context.Context, script string) (stdout string, e error) {
+				e = s.observeHost(ctx, p, h.Slot, "clock", script, end, func(out string) error { stdout = out; return nil })
+				return
+			})
+			if e == nil {
+				break
+			}
+			refusal, definite := e.(*clocks.BindingError)
+			if !definite || refusal.Cause != "clock-history-incomplete" || s.Latched() {
+				return e
+			}
+			if resourcePause(historyCtx, 100*time.Millisecond) != nil || !time.Now().Before(historyEnd) {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return e
+			}
 		}
 		historical.Clocks[h.Slot] = clocks.Sample{TrackingLog: &log}
 		in.BeforeRun = append(in.BeforeRun, clocks.BindingHost{Slot: h.Slot, LeapMode: c.ClockLeapMode, Tracking: log})
