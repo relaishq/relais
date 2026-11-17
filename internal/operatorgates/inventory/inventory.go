@@ -45,7 +45,7 @@ func Unavailable(slot, stdout string) error {
 	return &Failure{Slot: slot, Code: code}
 }
 
-// ValidatePins binds runtime inventories to the independently selected judges.
+// ValidatePins binds runtime inventories to the scenario's server releases.
 func ValidatePins(pins []Pin, selected operator.Scenario) error {
 	if len(pins) != 2 || pins[0].Version == pins[1].Version {
 		return fmt.Errorf("runtime release pins differ from judges")

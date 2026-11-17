@@ -82,7 +82,7 @@ func (r ResourceRunner) validate(s *Session) error {
 	}
 	data, err := os.ReadFile(c.JudgeBinary)
 	sum := sha256.Sum256(data)
-	if err != nil || hex.EncodeToString(sum[:]) != s.scenario.Judge.SHA256 || s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit || s.scenario.Judge.SourceCommit != c.Pins[0].Commit {
+	if err != nil || hex.EncodeToString(sum[:]) != s.scenario.Judge.SHA256 || s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit {
 		return errors.New("invalid-resource-config")
 	}
 	return nil

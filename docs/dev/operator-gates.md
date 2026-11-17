@@ -14,6 +14,24 @@ inside a gate. `-spool` binds an agreed local blob directory without putting its
 path in artifacts. Configuration and the spool are local inputs, not public
 reports. `relais-gates version` emits the unchanged protocol-v1 hello.
 
+Paid runs build the caller (`relais-load`) and judge from the same public
+operator source commit G. G may differ from the deployed release A and its
+upgrade target B. The session verifies the judge binary hash and requires
+`scenario.caller.sourceCommit == scenario.judge.sourceCommit`. Caller manifests,
+registrations and pooled evidence must use that same source; mixed caller
+sources or a different registration source refuse qualification.
+
+Server identities remain A/B. `scenario.releaseA` and `scenario.releaseB` bind
+the runtime release pins. Fresh host inventories independently prove each
+server's release before effects and evidence collection. The deployed source
+is never rewritten to G. The scenario digest and measured clock receipt bind
+all these identities. A source change requires new caller/judge builds and
+new bound evidence; this rule alone does not establish paid readiness.
+The main rehearsal may retain the release caller and judge. Its head-caller
+diagnostic keeps the release plan/judge and separately records the head build;
+it does not prove the G/G-on-A/B tuple. `TestSessionOperatorCallerReachesJudge`
+exercises that tuple with synthetic resource replies and a local judge probe.
+
 Numeric timing diagnostics are written as JSON Lines to stderr by default.
 `-timing-evidence FILE` requires an absolute path and writes a new local file
 with mode 0600; an existing file is never overwritten. Place this file outside

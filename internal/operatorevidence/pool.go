@@ -178,7 +178,8 @@ type Phase struct {
 	Registration operatorcaller.Registration
 	Raw          []byte
 	FirstFaultAt time.Time
-	DeployedSHA  string
+	// DeployedSHA names the server release, independently verified by FreshInventory.
+	DeployedSHA string
 	// Clocks and Inventory are successful results from Session.FreshClocks and
 	// Session.FreshInventory. Their zero values mean evidence is unavailable.
 	Clocks    clocks.Evidence
@@ -207,7 +208,7 @@ type Pool struct {
 func ReadPool(run string, phases []Phase, missing bool) (Pool, string, error) {
 	pool := Pool{RunID: run, Phases: []MediaInput{}, Missing: missing}
 	sha := ""
-	// Mixed pins are not one pool. Each release gets its own unchanged judge.
+	// Mixed caller sources are not one pool. The judge uses that same source.
 	for _, p := range phases {
 		if sha != "" && sha != p.Plan.PublicSHA {
 			return pool, "", errors.New("mixed-pool-source")
@@ -218,7 +219,7 @@ func ReadPool(run string, phases []Phase, missing bool) (Pool, string, error) {
 	for _, p := range phases {
 		r := p.Registration
 		expected, err := operatorcaller.Register(p.Plan, r.RunID, r.Sessions, r.Burst, r.Host, time.UnixMilli(r.RegisteredAt), &p.FirstFaultAt)
-		if err != nil || p.FirstFaultAt.IsZero() || p.DeployedSHA != p.Plan.PublicSHA || r.RunID != run || r.Phase != p.Plan.Phase || r.PublicSHA != p.Plan.PublicSHA || r.Near != expected.Near || !r.Near || p.Plan.Phase != operatorcaller.Survivor {
+		if err != nil || p.FirstFaultAt.IsZero() || r.RunID != run || r.Phase != p.Plan.Phase || r.PublicSHA != p.Plan.PublicSHA || r.Near != expected.Near || !r.Near || p.Plan.Phase != operatorcaller.Survivor {
 			pool.Missing = true
 			continue
 		}
