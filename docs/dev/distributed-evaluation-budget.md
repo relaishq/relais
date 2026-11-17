@@ -1,6 +1,6 @@
 # Distributed evaluation budget (#120)
 
-The production limit remains 4096 start/end/floor cells per event. Each cell
+The production limit is 16384 start/end/floor cells per event. Each cell
 is checked against every first-event baseline reference. References affect
 the classification agreement, but do not consume additional cells. The
 `evaluations` field now reports that cell count.
@@ -10,6 +10,16 @@ references. Later exhausted or unmapped events cannot erase those references.
 An exhausted first event still leaves that baseline unknown. Exhaustion still
 widens the baseline-floor interval and leaves unsupported metrics inconclusive;
 this fix does not narrow that uncertainty or choose a new baseline.
+
+A live A5-class takeover with about 14.4 ms start uncertainty exceeded the
+former 4096-cell budget. The 16384-cell cap adds operational margin; the
+synthetic 15 ms fixture is not a bound on live cell density. Pass/fail
+thresholds, the pooled minimum of 20 moves / 10 takeovers, and the exclusion
+policy are unchanged. The judge still requires consistent first-event
+references; later exhaustion now preserves them in the event report as well
+as the handoff. Missing first-event references remain invalid evidence.
+New-cap CPU and caller timing calibration is pending; see the explicit
+[calibration status](takeover-budget.md#16384-cell-calibration).
 
 ## Proof
 
@@ -23,11 +33,16 @@ baseline-floor interval matches. An independent grid enumeration checks that
 The test also checks the exact-budget boundary, one cell less, and the fixed
 production cap.
 
+`TestDistributedLaterExhaustionBaselineReport` checks that inherited references
+survive exhaustion while unsupported metrics remain inconclusive and floor
+uncertainty widens. `TestDistributedExhaustionKeepsIndependentFailures` checks
+that server loss, identity corruption and independent gap failures still fail.
+
 `TestDistributedExhaustedEventKeepsFirstBaselines` drives the real three-event
 handoff. The first event establishes a known latency failure. The second event
-exhausts the production 4096-cell limit. The third retains the first references,
-completes below the cap, and preserves that known failure. Its freshness
-verdicts exactly match an uncapped evaluation given the same conservative floor
+exhausts the production 16384-cell limit and retains those references in its
+own report. The third retains the first references, completes below the cap,
+and preserves that known failure. Its freshness verdicts exactly match an uncapped evaluation given the same conservative floor
 from event two. The floor is deliberately retained: comparing against a run
 that did not exhaust event two would remove real uncertainty from the inputs.
 `TestDistributedExhaustedFirstBaselineStaysUnknown` prevents later events from
@@ -73,7 +88,7 @@ CPU, current reductions and cap rule.
 
 These counts depend on branch boundaries and the correlated planned-move
 span; they need not increase monotonically with width. Every count matches an
-independent cell enumeration and remains below 4096. They are fixture results,
+independent cell enumeration and remains below the former 4096-cell cap. They are fixture results,
 not measurements of a live remote run.
 
 The #118 cost check passed again after rebasing onto merged #119: three reports

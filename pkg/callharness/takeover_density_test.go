@@ -334,7 +334,7 @@ func TestTakeoverCapCPUMeasurement(t *testing.T) {
 			r.classifyDistributedEvent(&p, r.hungUpAt, floor, refs, false)
 			worst = max(worst, processCPUSeconds()-cpu)
 			require.Equal(t, maxClassificationEvaluations, p.Distributed.Evaluations)
-			require.Nil(t, p.Distributed.FirstBaselines)
+			require.Equal(t, refs, p.Distributed.FirstBaselines)
 		}
 		t.Logf("cap=%d refs=%d worst_cpu=%.6fs (5 trials)", maxClassificationEvaluations, nrefs, worst)
 		if !densityRaceDetector && os.Getenv("RELAIS_TEST_STRICT_TIMING") == "1" {

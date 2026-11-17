@@ -14,7 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Pre-118 evaluation pipeline with #120's cell budget and baseline handoff.
+// Pre-118 evaluation pipeline with #120's cell budget and baseline handoff,
+// and #251's preservation of inherited references in exhausted event reports.
 // Keep it independent of the optimized freshness and boundary paths; compare
 // every field of MoveReport evidence. The frozen pre-120 budget oracle lives
 // in distributed_budget_test.go.
@@ -313,7 +314,9 @@ func (r *recorder) legacyClassifyDistributedEvent(report *MoveReport, limit time
 		}
 	}
 	if !complete || d.Evaluations == 0 {
-		d.FirstBaselines = nil
+		if self {
+			d.FirstBaselines = nil
+		}
 		d.BaselineFloor = DurationInterval{Lower: floor.Lower, Upper: max(floor.Upper, limit)}
 	}
 	// The union/intersection loss proof and identified-live proof are independent
@@ -660,6 +663,6 @@ func TestDistributedReportBudgetEvidenceEquivalent(t *testing.T) {
 			capped++
 		}
 	}
-	require.Positive(t, capped, "exercise the real 4096-cell limit")
+	require.Positive(t, capped, "exercise the production cell limit")
 	t.Logf("identical full evidence for 30 events, including %d capped events", capped)
 }

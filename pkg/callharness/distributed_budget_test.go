@@ -333,9 +333,75 @@ func TestDistributedCellBudgetEquivalence(t *testing.T) {
 				exhausted := makePoint()
 				r.classifyDistributedEventWithBudget(&exhausted, limit, floor, refs, false, cells-1)
 				require.Equal(t, cells-1, exhausted.Distributed.Evaluations)
-				require.Nil(t, exhausted.Distributed.FirstBaselines)
+				require.Equal(t, refs, exhausted.Distributed.FirstBaselines)
 			})
 		}
+	}
+}
+
+func TestDistributedLaterExhaustionBaselineReport(t *testing.T) {
+	r, _ := classificationFixture(t, 6*time.Millisecond)
+	r.prepareMeasurementIndex()
+	floor := DurationInterval{Lower: 100 * time.Millisecond, Upper: 200 * time.Millisecond}
+	point := budgetPoint(r, 0, r.hungUpAt, floor.Lower)
+	refs := []FirstBaselines{firstBaselinesOf(point.Measurement)}
+	r.classifyDistributedEventWithBudget(&point, r.hungUpAt, floor, refs, false, 1)
+	require.Equal(t, 1, point.Distributed.Evaluations)
+	// Exhaustion cannot erase references established by the first event.
+	require.Equal(t, refs, point.Distributed.FirstBaselines)
+	require.Equal(t, DurationInterval{Lower: floor.Lower, Upper: r.hungUpAt}, point.Distributed.BaselineFloor)
+	require.False(t, point.Measurement.Audio.Verdict.Trusted)
+	require.False(t, point.Measurement.ResumeVerdict.Trusted)
+	require.Contains(t, point.Measurement.ResumeVerdict.Reasons[0], "exceeds 1 evaluations")
+	require.Equal(t, "inconclusive", point.Distributed.Outcome)
+}
+
+func TestDistributedExhaustionCannotEstablishFirstBaselines(t *testing.T) {
+	for _, self := range []bool{true, false} {
+		t.Run(fmt.Sprint("self=", self), func(t *testing.T) {
+			r, _ := classificationFixture(t, 6*time.Millisecond)
+			r.prepareMeasurementIndex()
+			point := budgetPoint(r, 0, r.hungUpAt, 0)
+			r.classifyDistributedEventWithBudget(&point, r.hungUpAt, DurationInterval{}, nil, self, 1)
+			require.Equal(t, 1, point.Distributed.Evaluations)
+			require.Nil(t, point.Distributed.FirstBaselines)
+			require.Equal(t, DurationInterval{Upper: r.hungUpAt}, point.Distributed.BaselineFloor)
+			require.False(t, point.Measurement.Audio.Verdict.Trusted)
+			require.Equal(t, "inconclusive", point.Distributed.Outcome)
+		})
+	}
+}
+
+func TestDistributedExhaustionKeepsIndependentFailures(t *testing.T) {
+	for _, failure := range []string{"server loss", "identity corruption", "gap failure"} {
+		t.Run(failure, func(t *testing.T) {
+			r, _ := classificationFixture(t, 6*time.Millisecond)
+			r.prepareMeasurementIndex()
+			point := budgetPoint(r, 0, r.hungUpAt, 0)
+			refs := []FirstBaselines{firstBaselinesOf(point.Measurement)}
+			switch failure {
+			case "server loss":
+				point.Lost, point.LossCause = true, "worker lost call"
+			case "identity corruption":
+				r.contentIdentityErrors = 1
+			case "gap failure":
+				point.Distributed.Gaps = []DistributedGap{{Outcome: "fail", Causes: []string{"independent gap failure"}}}
+			}
+			r.classifyDistributedEventWithBudget(&point, r.hungUpAt, DurationInterval{}, refs, false, 1)
+			require.Equal(t, 1, point.Distributed.Evaluations)
+			require.Equal(t, refs, point.Distributed.FirstBaselines)
+			require.Equal(t, DurationInterval{Upper: r.hungUpAt}, point.Distributed.BaselineFloor)
+			require.False(t, point.Measurement.ResumeVerdict.Trusted)
+			require.Equal(t, "fail", point.Distributed.Outcome)
+			switch failure {
+			case "server loss":
+				require.Contains(t, point.Distributed.Causes, "server reported call loss: worker lost call")
+			case "identity corruption":
+				require.True(t, point.Measurement.Video.Verdict.Trusted && point.Measurement.Video.Verdict.Failed)
+			case "gap failure":
+				require.Contains(t, point.Distributed.Causes, "independent gap failure")
+			}
+		})
 	}
 }
 
@@ -373,7 +439,7 @@ func TestDistributedExhaustedEventKeepsFirstBaselines(t *testing.T) {
 	require.NotEmpty(t, reports[0].Distributed.FirstBaselines)
 	require.Equal(t, 1, reports[0].Distributed.Evaluations)
 	require.Equal(t, maxClassificationEvaluations, reports[1].Distributed.Evaluations)
-	require.Nil(t, reports[1].Distributed.FirstBaselines)
+	require.Equal(t, reports[0].Distributed.FirstBaselines, reports[1].Distributed.FirstBaselines)
 	require.Equal(t, reports[0].Distributed.FirstBaselines, reports[2].Distributed.FirstBaselines)
 	require.Less(t, reports[2].Distributed.Evaluations, maxClassificationEvaluations)
 	// Compare an uncapped third-event evaluation using the same conservative
