@@ -276,6 +276,77 @@ func TestRehearsalClockSelectionTransientProbesRecover(t *testing.T) {
 }
 
 func TestRehearsalClockSelectionFalsificationStaysSticky(t *testing.T) {
+	p, injected := falsifiedSelectionFixture(t)
+	selectBounds := p.selectBounds
+	selections := 0
+	p.selectBounds = func(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+		selections++
+		found := false
+		for _, record := range e.Falsification.Records {
+			found = found || record.Status == "falsified"
+		}
+		require.True(t, found, "the falsification must survive later clean reads")
+		selected, cause := selectBounds(ctx, e, policy)
+		require.Equal(t, "clock-select-probes", cause)
+		return selected, cause
+	}
+	r := collectClockSelection(context.Background(), "falsified-test", "shared", "shared", p)
+	require.True(t, *injected)
+	require.Zero(t, selections, "MUTATION: rehearsal-final-falsification")
+	require.Equal(t, "clock-select-probes", r.Cause)
+	require.Nil(t, r.Bounds)
+	require.Len(t, r.FailedWindows, 1, "probe rereads are one failed window")
+	require.Equal(t, "clock-select-probes", r.FailedWindows[0].Cause)
+}
+
+// A final falsification must stop reads before a later cause can mask it.
+func TestRehearsalClockSelectionFalsificationPrecedesLaterCause(t *testing.T) {
+	for _, cause := range []string{"clock-select-growth", "clock-select-stale", "clock-lease-expired"} {
+		t.Run(cause, func(t *testing.T) {
+			p, injected := falsifiedSelectionFixture(t)
+			selectBounds := p.selectBounds
+			selections := 0
+			p.selectBounds = func(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+				selections++
+				if selections == 1 {
+					return selectBounds(ctx, e, policy)
+				}
+				return clocks.ClockSelection{}, cause
+			}
+			r := collectClockSelection(context.Background(), "falsified-cause-test", "shared", "shared", p)
+			require.True(t, *injected)
+			require.Equal(t, "clock-select-probes", r.Cause, "MUTATION: rehearsal-final-falsification")
+			require.Zero(t, selections, "MUTATION: rehearsal-final-falsification")
+			require.Nil(t, r.Bounds)
+			require.Len(t, r.FailedWindows, 1)
+			require.Equal(t, "clock-select-probes", r.FailedWindows[0].Cause, "MUTATION: rehearsal-final-falsification")
+			require.Nil(t, r.LeaseRefusal)
+		})
+	}
+}
+
+func TestClockSelectionPaidFalsificationCharacterization(t *testing.T) {
+	p, injected := falsifiedSelectionFixture(t)
+	p.converge = false
+	p.policy.WindowSeconds = 120
+	base := p.now()
+	selectBounds := p.selectBounds
+	selections := 0
+	p.selectBounds = func(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+		selections++
+		return selectBounds(ctx, e, policy)
+	}
+	r := collectClockSelection(context.Background(), "paid-falsified-test", "shared", "shared", p)
+	require.True(t, *injected)
+	require.Greater(t, selections, 1)
+	require.Equal(t, "clock-select-probes", r.Cause)
+	require.Nil(t, r.Bounds)
+	require.Empty(t, r.FailedWindows)
+	require.Equal(t, 154*time.Second, p.now().Sub(base))
+}
+
+func falsifiedSelectionFixture(t *testing.T) (clockAdmissionPorts, *bool) {
+	t.Helper()
 	p := convergenceFixture(t, 0)
 	p.converge = true
 	read := p.read
@@ -320,26 +391,7 @@ func TestRehearsalClockSelectionFalsificationStaysSticky(t *testing.T) {
 		injected = true
 		return base64.StdEncoding.EncodeToString(packed.Bytes()), nil
 	}
-	selectBounds := p.selectBounds
-	selections := 0
-	p.selectBounds = func(ctx context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
-		selections++
-		found := false
-		for _, record := range e.Falsification.Records {
-			found = found || record.Status == "falsified"
-		}
-		require.True(t, found, "the falsification must survive later clean reads")
-		selected, cause := selectBounds(ctx, e, policy)
-		require.Equal(t, "clock-select-probes", cause)
-		return selected, cause
-	}
-	r := collectClockSelection(context.Background(), "falsified-test", "shared", "shared", p)
-	require.True(t, injected)
-	require.Greater(t, selections, 1)
-	require.Equal(t, "clock-select-probes", r.Cause)
-	require.Nil(t, r.Bounds)
-	require.Len(t, r.FailedWindows, 1, "probe rereads are one failed window")
-	require.Equal(t, "clock-select-probes", r.FailedWindows[0].Cause)
+	return p, &injected
 }
 
 // Keep boundary rows, but leave only nine distinct in-window relay updates.

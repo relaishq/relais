@@ -742,7 +742,12 @@
     "scenario-release-a-source-tamper",
     "scenario-release-b-source-tamper",
     "scenario-caller-source-tamper",
-    "scenario-judge-source-tamper"
+    "scenario-judge-source-tamper",
+    "rehearsal-transient-probes-terminal",
+    "rehearsal-setup-opening-unadjusted",
+    "rehearsal-hosted-opening-probes-skipped",
+    "rehearsal-convergence-history-discarded",
+    "rehearsal-final-falsification-retried"
   ],
   "killed": [
     {
@@ -6057,6 +6062,36 @@
       "evidence": "killed",
       "test": "TestScenarioBindsIndependentCallerAndServerSources/judge",
       "package": "./pkg/operator"
+    },
+    {
+      "id": "rehearsal-transient-probes-terminal",
+      "test": "TestRehearsalClockSelectionTransientProbesRecover",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-setup-opening-unadjusted",
+      "test": "TestRehearsalClockSelectionSetupOpening",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-hosted-opening-probes-skipped",
+      "test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-convergence-history-discarded",
+      "test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-final-falsification-retried",
+      "test": "TestRehearsalClockSelectionFalsificationPrecedesLaterCause/clock-select-growth",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
     }
   ],
   "retired": [
