@@ -29,6 +29,18 @@ The `build` job aggregates these results. Making that gate required in GitHub
 settings is a separate admin decision. Superseded PR runs are cancelled;
 main pushes and nightly runs are not cancelled by this policy.
 
+A PR that only edits or adds regular Markdown files under `docs/` or at the
+repository root takes a docs-only path: the `changes` job classifies the
+local `git diff` against the PR base, and the heavy jobs skip. The classifier
+and its list come from the PR base commit, so a PR cannot change its own
+classification. `quality`, `compatibility` and `build` still run, and `build`
+fails if `changes` fails. Other files, Markdown in other directories, any rename, delete,
+mode change or classifier error, and any path in
+`scripts/ci/docs-only-fallback.txt` (docs that code reads, the root `README.md`
+and build inputs) take the full path. `make check-rules` fails when code, a
+build file or a test fixture reads an unlisted `docs/` path or root Markdown
+file. Pushes, nightly and manual runs always run in full.
+
 The Redis Cluster job also runs on PRs. It uses disposable local Redis processes
 on `ubuntu-24.04`, with TLS/ACL and process-topology coverage, and runs packages
 serially to protect the media timing gates. It remains outside the `build` aggregate.

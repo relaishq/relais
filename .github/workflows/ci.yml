@@ -40,6 +40,39 @@ concurrency:
 # Package jobs reserve 10m for the bounded Ubuntu cache/install composite.
 # Valkey reserves another 8m for its cache/build. Test step limits stay fixed.
 jobs:
+  # A PR that edits only safe documentation skips the heavy jobs. Any other
+  # event, change or classifier error gives docs_only=false: the full path.
+  # The classifier and fallback list come from the PR base commit, so a PR
+  # cannot edit its own classification; a base without them runs in full.
+  # Heavy jobs use !cancelled() so a failed classifier still runs them;
+  # build then fails because changes did not succeed.
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify changed paths with the local git diff
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          classifier="$RUNNER_TEMP/docs_only.py"
+          fallback="$RUNNER_TEMP/docs-only-fallback.txt"
+          if [ "$EVENT_NAME" = pull_request ] && [ -n "$BASE_SHA" ] &&
+            git show "$BASE_SHA:scripts/ci/docs_only.py" > "$classifier" &&
+            git show "$BASE_SHA:scripts/ci/docs-only-fallback.txt" > "$fallback"; then
+            python3 -I "$classifier" --event "$EVENT_NAME" --base "$BASE_SHA" --head HEAD --fallback "$fallback" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo 'full path: no PR base classifier and fallback list' >&2
+            echo docs_only=false | tee -a "$GITHUB_OUTPUT"
+          fi
+
   quality:
     runs-on: ubuntu-24.04
     steps:
@@ -112,13 +145,16 @@ jobs:
   # The build job is the aggregate gate while all work runs in parallel.
   # Making it required in GitHub settings is a separate admin decision.
   # always() turns a failed dependency into a failed check, rather than a skip.
+  # A docs-only PR may skip the heavy checks; quality and compatibility always count.
   build:
-    needs: [quality, unit-tests, gate-mutation, timing-smoke, call-harness, compatibility]
+    needs: [changes, quality, unit-tests, gate-mutation, timing-smoke, call-harness, compatibility]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Require all essential checks
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
@@ -127,8 +163,18 @@ jobs:
           HARNESS_RESULT: ${{ needs.call-harness.result }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
+          test "$CHANGES_RESULT" = success
           test "$COMPATIBILITY_RESULT" = success
           test "$QUALITY_RESULT" = success
+          if [ "$DOCS_ONLY" = true ]; then
+            for result in "$UNIT_RESULT" "$MUTATION_RESULT" "$SMOKE_RESULT" "$HARNESS_RESULT"; do
+              case "$result" in
+                success|skipped) ;;
+                *) echo "heavy check result: $result"; exit 1 ;;
+              esac
+            done
+            exit 0
+          fi
           test "$UNIT_RESULT" = success
           test "$MUTATION_RESULT" = success
           test "$HARNESS_RESULT" = success
@@ -137,7 +183,8 @@ jobs:
           fi
 
   benchmark:
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -151,6 +198,8 @@ jobs:
         run: make bench
 
   unit-tests:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     services:
       redis:
@@ -190,6 +239,8 @@ jobs:
 
   # Owned operator gate mutants run beside the race tests, not after them.
   gate-mutation:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -211,6 +262,8 @@ jobs:
   # PRs run the short memory matrix plus a Redis uncertainty regression.
   # Main, nightly and manual runs exercise both stores in full.
   call-harness:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     # Includes the 15-minute PR suite, longer main/nightly matrix and setup reserve.
     timeout-minutes: 100
     runs-on: ubuntu-24.04
@@ -258,7 +311,8 @@ jobs:
         run: make test-harness-timing
 
   timing-smoke:
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'pull_request') }}
     runs-on: ubuntu-24.04
     env:
       RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
@@ -278,7 +332,8 @@ jobs:
 
   crash-run:
     timeout-minutes: 45
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -320,7 +375,8 @@ jobs:
 
   dial-out-process:
     timeout-minutes: 75
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -366,7 +422,8 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 45
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -412,7 +469,8 @@ jobs:
   # separate from the phase-1 cache and relay-continuity comparisons.
   crash-run-buffer:
     timeout-minutes: 45
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -438,7 +496,8 @@ jobs:
     # Legacy 30 trials plus six custom process cuts and v2 semantic assertions.
     # The added ledger cut takes about 25s; it fits the existing 35m limit.
     timeout-minutes: 45
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -496,6 +555,8 @@ jobs:
             bin/bridge-output-store-stall.log
 
   valkey-cluster-tests:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 38
     env:
@@ -545,6 +606,8 @@ jobs:
           if-no-files-found: warn
 
   cluster-tests:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -582,7 +645,8 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -658,7 +722,8 @@ jobs:
     timeout-minutes: ${{ matrix.job_minutes }}
     permissions:
       contents: read
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
