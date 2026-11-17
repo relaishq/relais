@@ -1337,17 +1337,33 @@ P = 1 s, L = 400 ms; it is not the hosted rehearsal configuration.
 After negative controls restore, rehearsal establishes/drains cursors before
 starting helpers or the admission timer, without reading the probe file. The
 derived seed budget remains ten seconds; the two-second guard keeps overflow
-breaks outside the selector's margin. Startup history remains recorded. Then
-parallel reads/selection start at 123 s within the derived 150 s admission deadline;
+breaks outside the selector's margin. It then waits up to **ten minutes** for
+every host's latest tracking interval (including the opening boundary row) to
+fit the existing `B(host)` formula and the combined 250/350 µs ceilings. This
+uses exact column-14 rounding, current five-poll leases and the unchanged 5 ppm
+growth limit. Reads run in parallel and retry after two seconds. `waitsync`
+alone does not establish this readiness after the wrong-time-source restore.
+Startup history remains recorded. Helpers and the admission timer start only
+after convergence, so selection must collect a **fresh full 120 s trailing
+window**. A timeout keeps the last fixed selection cause, such as
+`clock-select-ceiling`, rather than reporting a generic timeout or read failure.
+The standalone `clock-admit` launcher keeps its existing admission flow.
+Parallel reads/selection start at 123 s within the derived 150 s admission deadline;
 setup has ten seconds inside that deadline. Helpers remain available through
 the hosted job's original 180-minute deadline for run-long falsification observations.
 Non-cancelled exits wait through deadline +2 s before calibration (152 s plus
-preflight, at most 162 s). Parent cancellation skips that wait and returns promptly;
+preflight, at most 162 s, plus the separate convergence wait). Parent cancellation skips that wait and returns promptly;
 deployment cleanup removes the helpers with their containers. Generated chrony
 configuration declares hosts and caller unsmeared.
 
 At these hosted inputs, seed plus admission is 160 s, below the 300 s admission
 maximum. Ten required updates need 80 s, below the 120 s selection window.
+The convergence cap is separate from that 300 s admission maximum. Ten minutes
+allows 75 tracking updates at the eight-second poll. Adding that cap to the
+existing conservative 136 min 36 s campaign timing model
+gives 146 min 36 s, leaving 33 min 24 s within the 180-minute job limit.
+`TestHeadCampaignFitsAfterPinnedSequence` pins this margin. Convergence precedes
+the fresh pinned session and does not consume either campaign's session budget.
 The 17.6 s drain leaves 102.4 s of the 120 s pool reserve for judging, above
 its 60 s minimum. Four restoration reads plus submission and rounding need
 32.6 s of the existing 60 s restore reserve. The 120 s binding deadline,
@@ -1372,6 +1388,9 @@ expired slot, its aged lease age (reference age plus host elapsed time) and the
 before calibration without an admitted receipt. Selected bounds reach both pinned
 caller manifests and external coverage qualification. Pinned product bytes and
 judge policies remain unchanged; stored classifications cannot be re-bounded.
+Reports preserve `clock-select-ceiling` and `clock-binding-missing` as public
+codes. A missing binding after refused selection retains the original cause in
+`clockSelection.cause`.
 `TestClockSelectionAdmissionArtifacts` exercises the real reader with oversized
 logs, a transient read failure and the real CLI. PR admission is a separate gate.
 

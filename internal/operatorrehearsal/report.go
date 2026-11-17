@@ -149,7 +149,7 @@ func publicCode(s string) string {
 		return s
 	}
 	switch s {
-	case "clock-binding-failed", "clock-history-incomplete":
+	case "clock-binding-failed", "clock-history-incomplete", "clock-binding-missing", "clock-select-ceiling":
 		return s
 	case "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ":
 		return s

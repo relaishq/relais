@@ -25,6 +25,11 @@ const rehearsalHelperMaximum = 180 * time.Minute
 
 const clockProbePath = "/run/relais-clock-probes.bin"
 
+// Chrony may need several 8 s updates after the final negative-control restart.
+// This separate warm-up cap leaves the existing <=300 s admission budget and
+// the 180-minute job limit intact (see TestHeadCampaignFitsAfterPinnedSequence).
+const clockConvergenceMaximum = 10 * time.Minute
+
 type ClockSelectionReport struct {
 	Cause          string         `json:"cause"`
 	Bounds         *clocks.Bounds `json:"selectedBounds,omitempty"`
@@ -74,6 +79,8 @@ type clockAdmissionPorts struct {
 	timeout      func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	// latency and poll size helper setup and the admission window.
 	latency, poll time.Duration
+	// Rehearsal waits for restored chrony before starting a fresh window.
+	converge bool
 }
 
 func rehearsalClockPolicy() clocks.SelectionPolicy {
@@ -97,6 +104,7 @@ func (r *rehearsal) recordClockSelection(ctx context.Context) {
 	control, _ := inventory.ComponentSlot(components, "control")
 	a := r.clockAdmission(front, control, addresses)
 	p := a.ports()
+	p.converge = true
 	// The rehearsal also proves the clock-select CLI against the in-process selector.
 	p.selectBounds = r.selectClockBounds
 	r.recordClockSelectionReport(collectClockSelection(ctx, a.RunID, front, control, p))
@@ -138,6 +146,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 	ctx, seedDone := p.timeout(parent, seedBudget)
 	defer seedDone()
 	var started, end time.Time
+	seeded := false
 	defer func() {
 		if end.IsZero() {
 			return
@@ -202,6 +211,11 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			})
 		}
 		readers.Wait()
+		// A read cancelled by the convergence deadline must not replace the
+		// last measured selection cause with a generic transport failure.
+		if seeded && end.IsZero() && ctx.Err() != nil {
+			return result
+		}
 		complete := true
 		for i, slot := range Slots {
 			sample := samples[i]
@@ -240,11 +254,29 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			result.LeaseRefusal = refusal
 		}
 		if end.IsZero() && complete {
-			// Keep seed overflow breaks outside the selector's two-second margin.
-			if p.pause(ctx, 2*time.Second) != nil {
-				return result
+			if !seeded {
+				// Keep seed overflow breaks outside the selector's two-second margin.
+				if p.pause(ctx, 2*time.Second) != nil {
+					return result
+				}
+				seedDone()
+				seeded = true
+				if p.converge {
+					convergence, convergenceDone := p.timeout(parent, clockConvergenceMaximum)
+					defer convergenceDone()
+					ctx = convergence
+				}
 			}
-			seedDone()
+			if p.converge {
+				if err := clocks.CheckConvergence(e, p.policy); err != nil {
+					result.Cause = clockSelectionCause(err.Error())
+					result.LeaseRefusal = leaseRefusal(result.Cause, e.Hosts)
+					if p.pause(ctx, clockRetryPause) != nil {
+						return result
+					}
+					continue
+				}
+			}
 			started = p.now()
 			end = started.Add(window)
 			admission, admissionDone := p.timeout(parent, window)

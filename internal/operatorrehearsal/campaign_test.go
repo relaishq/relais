@@ -184,4 +184,10 @@ func TestHeadCampaignFitsAfterPinnedSequence(t *testing.T) {
 	if total > 136*time.Minute+36*time.Second || rehearsalHelperMaximum-total < 43*time.Minute+24*time.Second {
 		t.Fatal("head phase exceeds helper/job margin", total, rehearsalHelperMaximum-total)
 	}
+	// Conservatively add the entire convergence cap to the existing model.
+	// It precedes the fresh pinned session, so neither session loses time.
+	total += clockConvergenceMaximum
+	if total > 146*time.Minute+36*time.Second || rehearsalHelperMaximum-total < 33*time.Minute+24*time.Second {
+		t.Fatal("convergence exceeds helper/job margin", total, rehearsalHelperMaximum-total)
+	}
 }
