@@ -64,7 +64,9 @@ jobs:
             git archive "$pin" | tar -x -C "$source_dir"
             (cd "$source_dir" && GOTOOLCHAIN=local go mod download)
           done
-          make operator-rehearsal-build
+          # Build once for both release-read and rehearsal; a 1 s later rebuild must match byte for byte.
+          make operator-rehearsal-reproducible
+          sha256sum bin/relais-gates bin/relais-load | tee "$RUNNER_TEMP/operator-binaries.sha256"
           mkdir -p runtime
       - name: Read and verify published releases
         env:
@@ -80,7 +82,9 @@ jobs:
         run: |
           set -euo pipefail
           export GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)"
-          make operator-rehearsal OPERATOR_REHEARSAL_RUNNER='sudo -n --preserve-env=GOMODCACHE,GOCACHE' \
+          # Rehearse with the exact binaries that prepared; never rebuild here.
+          sha256sum --strict --check "$RUNNER_TEMP/operator-binaries.sha256"
+          make operator-rehearsal-run OPERATOR_REHEARSAL_RUNNER='sudo -n --preserve-env=GOMODCACHE,GOCACHE' \
             OPERATOR_REHEARSAL_FLAGS="-prepared -head-commit=$TESTED_HEAD -event=$TESTED_EVENT"
       - name: Make sanitized artifacts available to uploader
         if: always()
