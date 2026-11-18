@@ -303,6 +303,37 @@ func TestLeanFailuresAndUnknowns(t *testing.T) {
 		})
 	}
 }
+
+// Issue 493: a capped caller grid used to publish the kill-to-live bound of
+// its checked cells only. With a complete bound of [1.995 s, 2.005 s], one
+// cell could report [2.005 s, 2.005 s] and fail the event falsely. The caller
+// now publishes [0, limit-earliest start] for every exhausted duration.
+func TestLeanExhaustedKillBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name, want, contains string
+		bound                callharness.DurationInterval
+	}{
+		{"partial lower bound", "fail", "actual kill to live reaches 2s", callharness.DurationInterval{Lower: 2005 * time.Millisecond, Upper: 2005 * time.Millisecond}},
+		{"safe bound", "inconclusive", "actual kill to live may reach 2s", callharness.DurationInterval{Upper: 7 * time.Second}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := leanFixture(t)
+			require.Equal(t, "kill", m.Phases[20].Kind)
+			move := &m.Phases[20].Run.Processes[0].Calls[0].Call.Moves[0]
+			d := move.Distributed
+			for name := range d.Durations {
+				d.Durations[name] = tc.bound
+			}
+			d.KillToLive = &tc.bound
+			// An exhausted grid leaves every content verdict untrusted.
+			d.WindowOutcome, d.Outcome = "inconclusive", "inconclusive"
+			move.Measurement.Inconclusive = true
+			r := judgeLean(m)
+			require.Equal(t, tc.want, r.Outcome, leanCauses(r))
+			require.Contains(t, leanCauses(r), tc.contains)
+		})
+	}
+}
 func TestLeanEntryIsSeparate(t *testing.T) {
 	for _, args := range [][]string{{"-lean-plan", "-capacity"}, {"-lean-plan", "-soak"}, {"-lean-plan", "-external-caller"}, {"-lean-plan", "-workers=2"}, {"-lean-capacity="}} {
 		require.Error(t, runArgs(args))

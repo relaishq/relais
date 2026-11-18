@@ -556,6 +556,14 @@ func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit 
 		d.Durations["resume"] = DurationInterval{Lower: max(0, observed.Lower-hi), Upper: observed.Upper - lo}
 		delete(d.Durations, "resume_observed")
 	}
+	// A partial grid can report a lower bound too high or an upper bound too
+	// low. Every duration is an observed instant at or before limit minus a start in
+	// [lo, hi], so [0, limit-lo] contains the complete grid's bounds.
+	if !complete {
+		for name := range d.Durations {
+			d.Durations[name] = DurationInterval{Upper: limit - lo}
+		}
+	}
 	for i, v := range contentVerdicts(&report.Measurement) {
 		if !complete || d.Evaluations == 0 {
 			*v = MetricVerdict{Reasons: []string{fmt.Sprintf("interval evaluation unavailable or exceeds %d evaluations; width=%s", budget, width)}}

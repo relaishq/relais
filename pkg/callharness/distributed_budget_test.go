@@ -494,3 +494,52 @@ func TestDistributedZeroIntervalCountsOneCellWithReferences(t *testing.T) {
 	require.Equal(t, contentVerdicts(&before.Measurement), contentVerdicts(&after.Measurement))
 	require.Equal(t, before.Distributed.Durations, after.Distributed.Durations)
 }
+
+// Issue 493: an exhausted grid must not publish duration bounds narrower than
+// the complete grid. With budget 1 the old code kept only the first cell:
+// takeover first_live [674.994333ms,674.994333ms] (lower too high) and move
+// resume [29ms,39ms] (upper too low).
+func TestDistributedExhaustedDurationBounds(t *testing.T) {
+	for _, kind := range []string{"takeover", "move"} {
+		t.Run(kind, func(t *testing.T) {
+			r, c := denseDistributedCall(t, true, 4*time.Millisecond, 3*time.Millisecond)
+			jitterBudgetFixture(r)
+			start, end := 5*time.Second, 5030*time.Millisecond
+			if kind == "takeover" {
+				start, end = 10*time.Second, 10500*time.Millisecond
+			}
+			recordDenseEvent(t, r, c, "event", kind, start, end)
+			r.prepareMeasurementIndex()
+			floor := DurationInterval{Lower: start - 1100*time.Millisecond, Upper: start - 950*time.Millisecond}
+			limit := start + 7*time.Second
+			makePoint := func() MoveReport { return budgetPoint(r, 0, limit, floor.Lower) }
+			refs := []FirstBaselines{firstBaselinesOf(makePoint().Measurement)}
+			full := makePoint()
+			r.classifyDistributedEventWithBudget(&full, limit, floor, refs, false, 1<<30)
+			require.Equal(t, "pass", full.Distributed.Outcome)
+			require.Contains(t, full.Distributed.Durations, "resume")
+			for _, budget := range []int{1, full.Distributed.Evaluations / 2, full.Distributed.Evaluations - 1} {
+				exhausted := makePoint()
+				r.classifyDistributedEventWithBudget(&exhausted, limit, floor, refs, false, budget)
+				d := exhausted.Distributed
+				require.Equal(t, "inconclusive", d.Outcome)
+				require.Equal(t, refs, d.FirstBaselines)
+				require.Equal(t, DurationInterval{Lower: floor.Lower, Upper: limit}, d.BaselineFloor)
+				safe := DurationInterval{Upper: limit - r.since(d.Start.Earliest)}
+				require.Len(t, d.Durations, len(full.Distributed.Durations))
+				for name, bound := range full.Distributed.Durations {
+					require.Equal(t, safe, d.Durations[name], "MUTATION: exhausted-duration-bounds "+name)
+					require.LessOrEqual(t, d.Durations[name].Lower, bound.Lower, name)
+					require.GreaterOrEqual(t, d.Durations[name].Upper, bound.Upper, name)
+				}
+				if kind == "takeover" {
+					// The lean judge fails on KillToLive.Lower >= 2s; a partial
+					// lower bound must never exceed the complete one.
+					require.Equal(t, &safe, d.KillToLive)
+				} else {
+					require.Nil(t, d.KillToLive)
+				}
+			}
+		})
+	}
+}
