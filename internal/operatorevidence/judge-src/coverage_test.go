@@ -10,8 +10,9 @@ import (
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
-func TestGeneratorCoverageUsesEventHorizon(t *testing.T) {
-	t.Parallel()
+// horizonEvent is one complete move at 120 s in a call with recorded caller
+// timing: media starts after about 92 s of probes and hangs up at 1112.91 s.
+func horizonEvent() (*callharness.Report, callharness.MoveReport, receipt) {
 	c := previewSample().Processes[0].Calls[0].Call
 	c.FirstVideoSentAt = 92410 * time.Millisecond
 	c.HungUpAt = 1112910 * time.Millisecond
@@ -29,11 +30,14 @@ func TestGeneratorCoverageUsesEventHorizon(t *testing.T) {
 	v.ContentLoss.Baselines = []callharness.ContentLossWindow{{Start: 118 * time.Second, End: 119 * time.Second}}
 	v.ObservedUntil = c.HungUpAt // Compaction does not extend a complete measurement.
 	c.Moves = []callharness.MoveReport{m}
-	r := receipt{Identity: *m.Identity, Start: c.StartedAt.Add(m.Start), End: c.StartedAt.Add(m.End)}
-	first, last, err := callerEventWindow(r, c, m)
-	if err != nil || !first.Equal(c.StartedAt.Add(118*time.Second)) || !last.Equal(c.StartedAt.Add(129*time.Second)) {
-		t.Fatal("MUTATION: event-measurement-horizon", first.Sub(c.StartedAt), last.Sub(c.StartedAt), err)
-	}
+	return c, m, receipt{Identity: *m.Identity, Start: c.StartedAt.Add(m.Start), End: c.StartedAt.Add(m.End)}
+}
+
+// horizonSaturation applies the generator guard to c with one stats row per
+// second. A non-zero flagAt marks the row ending flagAt after StartedAt as
+// saturated. The caller removes the returned stats directory.
+func horizonSaturation(t *testing.T, c *callharness.Report, r receipt, flagAt time.Duration) (string, []callerSaturation, []eventExclusion) {
+	t.Helper()
 	// Recorded caller shape: pre-media probes take about 92s; the last row is
 	// a partial zero-packet interval ending just after hangup, not hangup + 1s.
 	var raw []json.RawMessage
@@ -46,6 +50,9 @@ func TestGeneratorCoverageUsesEventHorizon(t *testing.T) {
 			s.At = c.StartedAt.Add(c.HungUpAt + time.Millisecond)
 			s.Interval = 471 * time.Millisecond
 		}
+		if s.At.Equal(c.StartedAt.Add(flagAt)) {
+			s.CPUPerGOMAXPROCS = 100
+		}
 		b, e := json.Marshal(loadgen.Message{Type: "stats", PID: 42, Stats: &s})
 		if e != nil {
 			t.Fatal(e)
@@ -56,7 +63,6 @@ func TestGeneratorCoverageUsesEventHorizon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
 	p := loadgen.ProcessReport{PID: 42, Calls: []loadgen.Message{{Call: c}}}
 	for _, b := range raw {
 		var msg loadgen.Message
@@ -67,7 +73,19 @@ func TestGeneratorCoverageUsesEventHorizon(t *testing.T) {
 	}
 	report := loadgen.RunReport{Processes: []loadgen.ProcessReport{p}}
 	budgets, excluded := applySaturation(dir, &report, []receipt{r}, []string{"caller-1"})
-	if len(budgets) != 1 || budgets[0].Outcome != "pass" || len(excluded) != 0 || len(report.Processes[0].Calls[0].Call.Moves) != 1 {
+	return dir, budgets, excluded
+}
+
+func TestGeneratorCoverageUsesEventHorizon(t *testing.T) {
+	t.Parallel()
+	c, m, r := horizonEvent()
+	first, last, err := callerEventWindow(r, c, m)
+	if err != nil || !first.Equal(c.StartedAt.Add(118*time.Second)) || !last.Equal(c.StartedAt.Add(129*time.Second)) {
+		t.Fatal("MUTATION: event-measurement-horizon", first.Sub(c.StartedAt), last.Sub(c.StartedAt), err)
+	}
+	dir, budgets, excluded := horizonSaturation(t, c, r, 0)
+	defer os.RemoveAll(dir)
+	if len(budgets) != 1 || budgets[0].Outcome != "pass" || len(excluded) != 0 || len(c.Moves) != 1 {
 		t.Fatal("event coverage rejected normal pre-media delay or final partial sample", budgets, excluded)
 	}
 	samples, err := loadSamples(dir+"/caller-1", 42, true)
@@ -87,5 +105,52 @@ func TestGeneratorCoverageUsesEventHorizon(t *testing.T) {
 	_, end, err := callerEventWindow(r, c, m)
 	if err != nil || !end.Equal(c.StartedAt.Add(c.HungUpAt+time.Second)) || eventSpan(samples, first, end) {
 		t.Fatal("incomplete horizon accepted", end, err)
+	}
+}
+
+// Issue 493: a capped caller grid used to publish a partial resume upper bound
+// (29-39 ms here) when the complete grid reached later. The caller now
+// publishes [0, limit-earliest start]; with the next event at 130 s that is
+// [0, 10 s]. A saturation flag after the partial window but inside the safe
+// one must exclude the event.
+func TestExhaustedBoundsReachSaturationFlag(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		bound    callharness.DurationInterval
+		excluded bool
+	}{
+		{"partial", callharness.DurationInterval{Lower: 29 * time.Millisecond, Upper: 39 * time.Millisecond}, false},
+		{"safe", callharness.DurationInterval{Upper: 10 * time.Second}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, m, r := horizonEvent()
+			m.Distributed.Durations = map[string]callharness.DurationInterval{}
+			for _, name := range []string{"resume", "first_content", "first_new_content", "first_live"} {
+				m.Distributed.Durations[name] = tc.bound
+			}
+			m.Distributed.WindowOutcome, m.Distributed.Outcome = "inconclusive", "inconclusive"
+			c.Moves = []callharness.MoveReport{m}
+			_, last, err := callerEventWindow(r, c, m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Rows end at 93.44 s + n s; the flagged row covers [132.44 s, 133.44 s].
+			flag := 133440 * time.Millisecond
+			if got := last.After(c.StartedAt.Add(flag - time.Second)); got != tc.excluded {
+				t.Fatal("unexpected event window end", last.Sub(c.StartedAt))
+			}
+			dir, _, excluded := horizonSaturation(t, c, r, flag)
+			defer os.RemoveAll(dir)
+			if !tc.excluded {
+				if len(excluded) != 0 || len(c.Moves) != 1 {
+					t.Fatal("flag outside the event window excluded the event", excluded)
+				}
+				return
+			}
+			if len(excluded) != 1 || excluded[0].Cause != "generator saturation overlaps event window" || excluded[0].OriginalOutcome != "inconclusive" || len(c.Moves) != 0 {
+				t.Fatal("safe exhausted bounds missed the saturation flag", excluded)
+			}
+		})
 	}
 }
