@@ -166,6 +166,9 @@ func (r Report) Write(w io.Writer) error {
 	if !fullDigest.MatchString(r.ScenarioSHA256) {
 		return errors.New("invalid-scenario-identity")
 	}
+	return r.write(w)
+}
+func (r Report) write(w io.Writer) error {
 	r.sanitize()
 	switch r.Event {
 	case "pull_request", "push", "schedule", "workflow_dispatch", "local":
@@ -181,6 +184,18 @@ func (r Report) Write(w io.Writer) error {
 func (r Report) Save(name string) error {
 	var data bytes.Buffer
 	if err := r.Write(&data); err != nil {
+		return err
+	}
+	return os.WriteFile(name, data.Bytes(), 0600)
+}
+
+// SaveReleaseReadFailure saves the only report without a scenario identity.
+// The release read runs before the scenario exists, so this report carries
+// only release-read-failed and the public refusal code, and always fails.
+func SaveReleaseReadFailure(name, code string) error {
+	r := Report{SchemaVersion: 1, Errors: []string{"release-read-failed", PublicCode(code)}, Gates: []GateReport{}}
+	var data bytes.Buffer
+	if err := r.write(&data); err != nil {
 		return err
 	}
 	return os.WriteFile(name, data.Bytes(), 0600)
