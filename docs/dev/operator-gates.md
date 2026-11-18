@@ -972,7 +972,11 @@ caller case uses synthetic product reports.
 
 The scenario digest is created after binary preparation and before container
 boot. Reports without a valid digest are refused; an earlier preparation failure
-retains diagnostics without emitting an unidentified report. The two fixed
+retains diagnostics without emitting an unidentified report. The one exception
+is a release-read failure, which happens before any scenario exists. It prints
+`release-read-failed` and `release-refusal: <code>`, and saves a failing
+`report.json` whose `errors` hold only those two fixed codes. An unknown code
+becomes `unclassified`; refusal detail text is never printed or saved. The two fixed
 release pins have identical Go sources, module locks and embedded media; only
 release compatibility JSON differs. Their deterministic judge binaries therefore
 share a hash. Source commit checks still distinguish the pins.

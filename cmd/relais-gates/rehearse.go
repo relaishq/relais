@@ -55,8 +55,7 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 	}
 	if *prepare || !*prepared {
 		if e := prepareReleases(ctx, abs(*assets), token); e != nil {
-			// The minimal report has no scenario identity, so Report.Write would refuse it.
-			// Print only the public refusal code, never free-form error text.
+			// Print and save only the public refusal code, never free-form error text.
 			code := "unclassified"
 			var refusal *artifacts.Refusal
 			if errors.As(e, &refusal) {
@@ -64,6 +63,9 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 			}
 			fmt.Fprintln(diagnostics, "release-read-failed")
 			fmt.Fprintln(diagnostics, "release-refusal:", operatorrehearsal.PublicCode(code))
+			if os.MkdirAll(abs(*output), 0700) != nil || operatorrehearsal.SaveReleaseReadFailure(filepath.Join(abs(*output), "report.json"), code) != nil {
+				fmt.Fprintln(diagnostics, "report-save-failed")
+			}
 			return 1
 		}
 	}
