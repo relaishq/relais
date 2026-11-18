@@ -834,7 +834,8 @@ or calibration success. `TestRehearseRefusesIncompleteReadiness` pins the refusa
 
 On a disposable Linux runner with systemd, Docker, ffmpeg, chrony and at least
 four allowed logical CPUs, build with `make operator-rehearsal-build`, then run
-`make operator-rehearsal OPERATOR_REHEARSAL_RUNNER='sudo -n'`. The command uses
+`make operator-rehearsal-run OPERATOR_REHEARSAL_RUNNER='sudo -n'`
+(`make operator-rehearsal` builds and runs in one step). The command uses
 v0.3.0 and v0.3.1 linux_amd64 archives with fixed SHA-256 pins. It reads the
 current checkout's template, stages both releases before media, builds both
 release-specific judges offline, and uses the unchanged v0.3.0 caller binary
@@ -868,6 +869,15 @@ The workflow separates release reads from execution. Only its release-read step
 receives `RELAIS_RELEASE_TOKEN`; it invokes `relais-gates rehearse -prepare-only`.
 The execution target uses `OPERATOR_REHEARSAL_FLAGS=-prepared`. The token stays
 inside the scoped public release reader and never reaches child processes.
+
+Both stages use the same binaries. The workflow builds `relais-gates` and
+`relais-load` once with `make operator-rehearsal-reproducible`, records their
+SHA-256 values, and the execution step checks those values before
+`make operator-rehearsal-run`, which never rebuilds. The build stamps the commit
+time as `buildinfo.Date` and disables Go VCS stamping, so builds of one commit
+are byte-identical; the target rebuilds 1 s later into `bin/rebuild` and fails
+on any byte difference. The `buildinfo.Version` from `git describe` still changes
+if a tag is later added at that commit.
 
 The actual allowed CPU mask determines the layout. Two CPUs belong to the
 caller unit, its Go bridge and decoder (`GOMAXPROCS=2`); the remaining CPUs serve

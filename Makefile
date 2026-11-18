@@ -208,15 +208,30 @@ test-operator-rehearsal-container: ## Runner only: boot actual template units an
 	test -n "$(RELAIS_REHEARSAL_ARCHIVE)" && test -n "$(RELAIS_REHEARSAL_VERSION)" && test -n "$(RELAIS_REHEARSAL_ARCH)" && test -n "$(RELAIS_REHEARSAL_SHA256)"
 	RELAIS_REHEARSAL_CONTAINERS=1 $(GOTEST) -v -count=1 -timeout 30m -run '^TestContainerTemplateBoot$$' ./internal/operatorrehearsal
 
-.PHONY: operator-rehearsal-build operator-rehearsal
+.PHONY: operator-rehearsal-build operator-rehearsal operator-rehearsal-run operator-rehearsal-reproducible
 OPERATOR_REHEARSAL_FLAGS ?=
 OPERATOR_REHEARSAL_RUNNER ?=
+OPERATOR_REHEARSAL_REBUILD_DIR ?= $(BIN_DIR)/rebuild
+OPERATOR_REHEARSAL_RUN = $(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)
+# Stamp the commit time, not the wall clock, so every build of one commit is byte-identical.
+# -buildvcs=false: Go stamps VCS data only when .git is a directory, so a linked worktree and a
+# clone of one commit would differ; ldflags already carry the version and commit.
+operator-rehearsal-build: BUILD_TIME = $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%d_%H:%M:%S)
 operator-rehearsal-build: ensure_bin_dir ## Build the gate/bridge and the diagnostic head caller before rehearsal media
-	CGO_ENABLED=0 $(GOBUILD) -trimpath -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
-	CGO_ENABLED=0 $(GOBUILD) -trimpath -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
+	CGO_ENABLED=0 $(GOBUILD) -trimpath -buildvcs=false -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
+	CGO_ENABLED=0 $(GOBUILD) -trimpath -buildvcs=false -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
+
+operator-rehearsal-reproducible: operator-rehearsal-build ## Build the rehearsal binaries, rebuild them 1 s later elsewhere and require identical bytes
+	sleep 1
+	$(MAKE) --no-print-directory operator-rehearsal-build BIN_DIR=$(OPERATOR_REHEARSAL_REBUILD_DIR)
+	cmp $(BIN_DIR)/relais-gates $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-gates
+	cmp $(BIN_DIR)/relais-load $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-load
 
 operator-rehearsal: operator-rehearsal-build ## Run the fixed four-gate Linux Docker profile; needs root systemd and four allowed CPUs
-	$(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)
+	$(OPERATOR_REHEARSAL_RUN)
+
+operator-rehearsal-run: ## Run operator-rehearsal with the already built binaries; never rebuilds
+	$(OPERATOR_REHEARSAL_RUN)
 
 .PHONY: test-chrome-relay-change
 test-chrome-relay-change: ## Opt-in Chrome relay gate; skips unless RELAIS_CHROME names a binary
