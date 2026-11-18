@@ -164,7 +164,8 @@ HARNESS_PKGS=./pkg/callharness/...
 HARNESS_FLAGS ?=
 
 test-harness: ## Run the call harness (audio+video echo calls, direct and through the relay) with the race detector; HARNESS_FLAGS=-short for 5 s calls; full VP8 decode needs ffmpeg on PATH
-	$(GOTEST) -race -v -count=1 -timeout 45m $(HARNESS_FLAGS) $(HARNESS_PKGS)
+	# The full race suite took 2659 s on a 4-CPU main runner (f7990a9) and timed out at 45 min on 722a090; keep ~2x headroom.
+	$(GOTEST) -race -v -count=1 -timeout 90m $(HARNESS_FLAGS) $(HARNESS_PKGS)
 
 # Disable Redis explicitly, including deeply nested uncertainty subtests,
 # even if the invoking shell has Redis configured and required.
