@@ -561,7 +561,10 @@ func (c *Call) restartRaced(err error, restarts uint64) bool {
 // onlyClosedPipe reports an error made only of io.ErrClosedPipe. WriteSample
 // joins its per-packet errors into one value that matches io.ErrClosedPipe
 // when any part does, and does not expose the parts; its message has one
-// line per part, so every line must be the closed-pipe message.
+// line per part, so every line must be the closed-pipe message. This is a
+// narrow check for the pinned Pion stale-pair path, which returns the bare
+// sentinel: a wrapped closed pipe with extra text fails closed (the send ends),
+// and an unrelated error whose text equals the sentinel's is not told apart.
 func onlyClosedPipe(err error) bool {
 	if !errors.Is(err, io.ErrClosedPipe) {
 		return false
