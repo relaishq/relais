@@ -206,7 +206,7 @@ func TestRemoteErrorsAndTimeouts(t *testing.T) {
 				return (&net.Dialer{}).DialContext(ctx, network, addr)
 			}}
 			defer base.CloseIdleConnections()
-			client := &http.Client{Timeout: 20 * time.Millisecond, Transport: handlerFirst{base: base, reached: reached}}
+			client := &http.Client{Timeout: 20 * time.Millisecond, Transport: handlerFirst{t: t, base: base, reached: reached}}
 			worker := &RemoteWorker{URL: slow.URL, Client: client}
 			_, _, err := worker.CreateSession(context.Background(), "offer")
 			require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -243,13 +243,17 @@ func TestRemoteErrorsAndTimeouts(t *testing.T) {
 // handlerFirst lets the client's own timeout end a request only after the
 // server handler has received it. The handler count then equals the
 // requests sent, whatever the load: a slow dial delays the request but
-// cannot drop it. The client still sees its own timeout error.
+// cannot drop it. The client still sees its own timeout error, so the
+// request must end only through that timeout: any other transport result,
+// such as a reset or EOF, fails the test here, before http.Client can
+// rewrite it as a timeout.
 type handlerFirst struct {
+	t       testing.TB
 	base    http.RoundTripper
 	reached <-chan struct{}
 }
 
-func (t handlerFirst) RoundTrip(req *http.Request) (*http.Response, error) {
+func (h handlerFirst) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(req.Context()))
 	defer cancel()
 	forwarded := req.WithContext(ctx)
@@ -257,20 +261,22 @@ func (t handlerFirst) RoundTrip(req *http.Request) (*http.Response, error) {
 	forwarded.Cancel = nil
 	result := make(chan error, 1)
 	go func() {
-		resp, err := t.base.RoundTrip(forwarded)
+		resp, err := h.base.RoundTrip(forwarded)
 		if err == nil {
 			_ = resp.Body.Close()
 		}
 		result <- err
 	}()
 	select {
-	case <-t.reached:
+	case <-h.reached:
 	case err := <-result:
 		return nil, errors.Join(errors.New("request ended before its handler started"), err)
 	}
 	<-req.Context().Done()
 	cancel()
-	<-result
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		h.t.Errorf("%s %s ended by %v, not by the client timeout", req.Method, req.URL.Path, err)
+	}
 	return nil, req.Context().Err()
 }
 
