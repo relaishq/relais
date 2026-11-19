@@ -1141,8 +1141,8 @@ journals are collected on unknown outcomes even when the unit remains active.
 Host exceptions keep their existing certainty. An effectful step still emits
 `kind: unknown`; pure observations and the failover-only `RecoveryStatus` opt-in
 still emit `kind: failed`. Unknown host envelopes additionally carry `code` from
-`read_failure()` and `elapsedMs` from the host's monotonic clock immediately
-before `execute`. A move includes `phase: status` during its control pre-read or
+`read_failure()` and `elapsedMs` from the host's monotonic clock, measured from
+script start and reset immediately before `execute`. A move includes `phase: status` during its control pre-read or
 `phase: post` during its move POST. No exception message leaves this envelope.
 The existing uncertainty row retains these fields without a second request or
 a second uncertainty. `Public()` admits only codes matching
