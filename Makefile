@@ -150,7 +150,9 @@ UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./examples/..
 JUDGE_FLAGS ?=
 
 test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_REDIS_ADDR for Redis suites
-	$(GOTEST) -race -v -count=1 -timeout 10m $(filter-out github.com/relaishq/relais/internal/operatorevidence/judge-src,$(UNIT_PKGS))
+	# The slowest packages take about 7 min on a CI runner (operatorgates 418 s,
+	# controlplane 440 s); 10m timed out on slow runners. Keep about 2x headroom.
+	$(GOTEST) -race -v -count=1 -timeout 20m $(filter-out github.com/relaishq/relais/internal/operatorevidence/judge-src,$(UNIT_PKGS))
 	$(MAKE) test-unit-judge
 
 .PHONY: test-unit-judge

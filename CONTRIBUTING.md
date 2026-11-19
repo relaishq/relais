@@ -51,7 +51,8 @@ make test-harness-smoke
 ```
 
 Install `ffmpeg` on PATH for full VP8 decode in the harness. `make test-unit`
-runs every non-harness package under the race detector with a ten-minute limit.
+runs every non-harness package under the race detector with a twenty-minute limit
+(the evidence judge suite keeps its own thirty-minute limit).
 The short harness uses memory only and five-second baseline calls; longer fault
 scenarios keep their fixed durations. It skips the long planned-consent case
 and Redis uncertainty cases. The separate Redis race command above restores
