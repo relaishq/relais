@@ -53,7 +53,7 @@ func TestMutatingWrapperKeepsUnknownFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(script, "except Exception:\n    emit({'kind':'unknown'})") || strings.Contains(script, "except Exception as error:\n    emit({'kind':'failed'") {
+	if !strings.Contains(script, "except Exception as error:\n    emit(dict(kind='unknown',") || strings.Contains(script, "except Exception as error:\n    emit({'kind':'failed'") {
 		t.Fatal("MUTATION: mutating-wrapper-unknown")
 	}
 }

@@ -43,11 +43,11 @@ type Stage struct{ Version, Arch, ArchiveSHA256, ManifestSHA256, Pool, Operation
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 var poolPattern = regexp.MustCompile(`^[A-Za-z0-9+/=]+$`)
-var operations = []string{"telemetry", "signal-stop", "signal-start", "move", "status", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "freeze", "unfreeze", "drain", "worker-stop", "replace", "worker-start", "control-stop", "control-start", "worker-down", "relay-stage", "relay-stop", "relay-replenish"}
+var operations = []string{"service-journals", "telemetry", "signal-stop", "signal-start", "move", "status", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "freeze", "unfreeze", "drain", "worker-stop", "replace", "worker-start", "control-stop", "control-start", "worker-down", "relay-stage", "relay-stop", "relay-replenish"}
 
 func IsRead(op string) bool { return IsPureRead(op) || op == "telemetry" || op == "status" }
 func IsPureRead(op string) bool {
-	return slices.Contains([]string{"store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty"}, op)
+	return slices.Contains([]string{"service-journals", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty"}, op)
 }
 
 func Process(operation string, parameters any, stage *Stage) (string, error) {
@@ -98,18 +98,21 @@ func process(operation string, parameters any, stage *Stage, readFailure bool) (
         if checked.returncode!=0 or verdict.get('allowed') is not True: raise ValueError('unknown compatibility result')
 `, stage.Version, stage.Version, downloadArch, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ManifestSHA256, stage.Pool, stage.Operation)
 	}
-	failure := "except Exception:\n    emit({'kind':'unknown'})"
+	failure := "except Exception as error:\n    emit(dict(kind='unknown',code=read_failure(error),elapsedMs=int((time.monotonic()-execution_started)*1000),**evidence))"
 	if readFailure {
 		failure = "except Exception as error:\n    emit({'kind':'failed','code':read_failure(error)})"
 	}
 	return "python3 - <<'PY'\n" + source("preview_process.py") + "\n" + source("preview_telemetry.py") + fmt.Sprintf(`
 import base64,gzip,tempfile,sys,datetime
 def emit(x): print(base64.b64encode(gzip.compress(json.dumps(x,separators=(',',':')).encode())).decode())
+evidence={}
+execution_started=time.monotonic()
 try:
 %s
     p=json.loads(base64.b64decode('%s'))
     started=datetime.datetime.now(datetime.timezone.utc).isoformat()
-    data=execute(%s,p)
+    execution_started=time.monotonic()
+    data=execute(%s,p,evidence)
     emit({'kind':'ok','started':started,'ended':datetime.datetime.now(datetime.timezone.utc).isoformat(),'data':data})
 %s
 PY
