@@ -73,9 +73,11 @@ selection cause to the run page. It reads only `report.json` and
 
 `operator-rehearsal-flake-rerun.yml` handles failed `Operator rehearsal` runs
 only on attempt 1 and only for `pull_request` or `push`. Scheduled and manual
-runs stay red. It reruns failed jobs once, then adds one short line to issue
-[#481](https://github.com/relaishq/relais/issues/481) with the signature, run URL
-and attempt numbers. The second attempt cannot trigger another automatic retry.
+runs stay red. It reruns failed jobs once, then adds one short line with the
+signature, run URL and attempt numbers to the open tracking issue
+[#511](https://github.com/relaishq/relais/issues/511), "Operator rehearsal
+automatic reruns". The workflow-level `RERUN_TRACKING_ISSUE` value is the only
+place that names it. The second attempt cannot trigger another automatic retry.
 
 The classifier requires a failed schema-1 report, clean calibration, no latch,
 no errors or uncertainties, completed cleanup, four identified gates and no

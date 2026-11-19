@@ -10,6 +10,10 @@ permissions:
   issues: write
   contents: read
 
+env:
+  # Open issue "Operator rehearsal automatic reruns"; it holds one comment per automatic rerun.
+  RERUN_TRACKING_ISSUE: 511
+
 concurrency:
   group: operator-rehearsal-flake-rerun-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
@@ -68,4 +72,4 @@ jobs:
           gh run rerun "$RUN_ID" --repo "$GH_REPO" --failed
           # Only fixed text, an allow-listed signature and trusted run metadata.
           body="Automatic rerun: $SIGNATURE; $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$RUN_ID (attempt 1 -> 2)."
-          gh api "repos/$GH_REPO/issues/481/comments" -f body="$body" --silent
+          gh api "repos/$GH_REPO/issues/$RERUN_TRACKING_ISSUE/comments" -f body="$body" --silent
