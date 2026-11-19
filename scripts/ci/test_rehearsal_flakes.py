@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import subprocess
 import sys
@@ -198,7 +199,27 @@ class FlakeClassification(unittest.TestCase):
             self.assertNotIn('untrusted', (path / 'summary').read_text())
 
 
+def tracking_issue(source):
+    values = re.findall(r'^  RERUN_TRACKING_ISSUE: (.*)$', source, re.MULTILINE)
+    assert len(values) == 1, values
+    return values[0]
+
+
 class WorkflowGuard(unittest.TestCase):
+    def test_rerun_records_go_to_one_tracking_issue(self):
+        source = (ROOT / '.github/workflows/operator-rehearsal-flake-rerun.yml').read_text()
+        issue = tracking_issue(source)
+        self.assertRegex(issue, r'^[1-9][0-9]*$')
+        self.assertNotEqual(issue, '481')
+        self.assertNotIn('481', source)
+        # The number is defined once; the step reads it from the workflow env.
+        self.assertEqual(len(re.findall(rf'\b{issue}\b', source)), 1)
+        self.assertIn('gh api "repos/$GH_REPO/issues/$RERUN_TRACKING_ISSUE/comments"', source)
+        docs = (ROOT / 'docs/dev/ci.md').read_text()
+        section = docs.split('## One automatic rehearsal rerun', 1)[1].split('\n## ', 1)[0]
+        self.assertIn(f'[#{issue}](https://github.com/relaishq/relais/issues/{issue})', section)
+        self.assertNotIn('481', section)
+
     def test_attempt_and_event_guards_precede_privileged_steps(self):
         source = (ROOT / '.github/workflows/operator-rehearsal-flake-rerun.yml').read_text()
         guard = source.split('    if: >-', 1)[1].split('    runs-on:', 1)[0]
@@ -218,6 +239,7 @@ class WorkflowGuard(unittest.TestCase):
         source = (ROOT / '.github/workflows/operator-rehearsal-flake-rerun.yml').read_text()
         script = source.rsplit('        run: |\n', 1)[1]
         script = '\n'.join(line[10:] for line in script.splitlines())
+        issue = tracking_issue(source)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             stub = path / 'gh'
@@ -245,6 +267,7 @@ if sys.argv[1:3] == ['run', 'rerun']:
                                                  'CALL_LOG': str(log), 'LIVE_ELIGIBLE': eligible,
                                                  'RERUN_EXIT': rerun_exit, 'SIGNATURE': signature,
                                                  'RUN_ID': '123', 'GH_REPO': 'relaishq/relais',
+                                                 'RERUN_TRACKING_ISSUE': issue,
                                                  'GITHUB_SERVER_URL': 'https://github.com',
                                                  'GITHUB_STEP_SUMMARY': str(path / 'summary')})
                     calls = [json.loads(line) for line in log.read_text().splitlines()]
@@ -252,7 +275,7 @@ if sys.argv[1:3] == ['run', 'rerun']:
                     self.assertEqual(result.returncode, int(rerun_exit) if signature != 'not-known' else 1)
                     if expected_count == 3:
                         self.assertEqual(calls[1], ['run', 'rerun', '123', '--repo', 'relaishq/relais', '--failed'])
-                        self.assertEqual(calls[2], ['api', 'repos/relaishq/relais/issues/481/comments', '-f',
+                        self.assertEqual(calls[2], ['api', f'repos/relaishq/relais/issues/{issue}/comments', '-f',
                                                    f'body=Automatic rerun: {signature}; '
                                                    'https://github.com/relaishq/relais/actions/runs/123 '
                                                    '(attempt 1 -> 2).', '--silent'])
