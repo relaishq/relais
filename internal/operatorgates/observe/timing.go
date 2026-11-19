@@ -32,7 +32,9 @@ func TimingCause(reason string) string {
 		return "pause-bound-uncertain"
 	case strings.HasSuffix(reason, " baseline spread not proven within 50ms"):
 		return "baseline-spread-uncertain"
-	case strings.HasSuffix(reason, " move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves across clock interval"):
+	case strings.HasSuffix(reason, " move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves across clock interval"),
+		// Pinned judges and saved evidence still emit the earlier wording.
+		strings.HasSuffix(reason, " move p95 policy not proven across clock interval"):
 		return "move-p95-unproven"
 	case strings.HasPrefix(reason, "too few distributed trials:"):
 		return "trial-count-insufficient"
