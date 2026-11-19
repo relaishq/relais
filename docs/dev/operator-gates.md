@@ -765,6 +765,24 @@ implying mutation. Inventory and clock host replies put `operator.HostOutput`
 reply. Session observation methods validate and decode stdout before accepting
 the result. Unknown or malformed replies fence later effects through the same latch.
 
+Control status stays effectful everywhere. Its exception still reports an
+unknown result and latches. The one exception is the failover gate's
+`failover-primary-recovered` wait. Only that wait opts in through
+`host.RecoveryStatus`. Its script differs only in the exception branch. That
+branch reports a definite failed read with a fixed code. The wait counts that
+read as a missing sample, retains the error and keeps the 5-second poll until
+the gate deadline. Unknown, malformed and transport results still latch. A
+failed read can still have reconciled a loss that the store already decided.
+The wait counts recovery only after a later successful read. That read exposes
+`lost_count`, and a nonzero count fails the gate as known call loss.
+`TestFailoverRecoveryFailedStatusReadIsMissingSample`,
+`TestFailoverRecoveryFailedStatusReadsUntilDeadline`,
+`TestFailoverRecoveryFailedStatusReadThenLossFails`,
+`TestFailoverRecoveryStatusOutcomesUnchanged`,
+`TestStatusFailedEnvelopeNeedsRecoveryOptIn`,
+`TestControlStatusFailureStaysUnknown` and `TestRecoveryStatusReportsFailedRead`
+check this rule.
+
 Control frames are limited to 256 KiB, scripts to 64 KiB, and host output to
 23,999 bytes at the host decoder. Larger payloads use a bounded blob reference
 with an opaque name, exact size and SHA-256. `operatortransport.ReadBlob` verifies

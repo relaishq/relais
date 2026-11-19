@@ -2,6 +2,7 @@ package operatorgates
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -34,11 +35,14 @@ type MeasurementEvidence struct {
 }
 type MeasurePorts struct {
 	ProcedurePorts
-	Calls       int
-	Store       StoreCapability
-	Observe     func(context.Context, time.Duration) (MeasurementObservation, error)
-	BeforeFault func(context.Context, time.Duration) error
-	MarkFault   func(context.Context) error
+	Calls   int
+	Store   StoreCapability
+	Observe func(context.Context, time.Duration) (MeasurementObservation, error)
+	// ObserveRecovery serves only the failover recovery wait. Nil keeps Observe,
+	// whose failed control status read stays an unknown result.
+	ObserveRecovery func(context.Context, time.Duration) (MeasurementObservation, error)
+	BeforeFault     func(context.Context, time.Duration) error
+	MarkFault       func(context.Context) error
 	// Collect starts one evidence collection. It returns a terminal channel,
 	// allowing this gate to retain telemetry while the caller is still running.
 	// Cancellation must terminate collection and publish/close the channel only
@@ -172,11 +176,11 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	r := MeasureResult{Status: operator.Inconclusive}
 	rows := []MeasurementObservation{}
 	failed := false
-	observe := func() (*MeasurementObservation, error) {
+	observeWith := func(read func(context.Context, time.Duration) (MeasurementObservation, error)) (*MeasurementObservation, error) {
 		if p.Clock.Elapsed() >= g.end {
 			return nil, fault("gate-deadline")
 		}
-		o, err := p.Observe(ctx, g.end)
+		o, err := read(ctx, g.end)
 		if o.Status != nil && o.Status.LostCount > 0 {
 			failed = true
 		}
@@ -193,7 +197,12 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		}
 		return &rows[len(rows)-1], nil
 	}
-	err := g.measureDefinition(ctx, gate, p, observe, &r.Measurement)
+	observe := func() (*MeasurementObservation, error) { return observeWith(p.Observe) }
+	observeRecovery := observe
+	if p.ObserveRecovery != nil {
+		observeRecovery = func() (*MeasurementObservation, error) { return observeWith(p.ObserveRecovery) }
+	}
+	err := g.measureDefinition(ctx, gate, p, observe, observeRecovery, &r.Measurement)
 	definitionCompleted := err == nil
 	r.Measurement.retainError(err)
 	switch code(err) {
@@ -344,7 +353,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 
 // measureDefinition owns the general admission/failover procedure. Evidence
 // collection and resource transport implement separate, typed seams.
-func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p MeasurePorts, observe func() (*MeasurementObservation, error), measurement *Measurement) error {
+func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p MeasurePorts, observe, observeRecovery func() (*MeasurementObservation, error), measurement *Measurement) error {
 	c := g.c
 
 	reg := p.Broker.Registration()
@@ -427,7 +436,18 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 		recovery := g.startWait("failover-primary-recovered")
 		for p.Clock.Elapsed() < g.end {
 			recovery.poll()
-			o, err := observe()
+			o, err := observeRecovery()
+			// Control status stays effectful: a failed read may still have
+			// reconciled a loss the store already decided. Recovery counts only
+			// after a later successful read, which exposes that lost_count.
+			if errors.As(err, new(failedStatusRead)) {
+				measurement.MissingSamples++
+				measurement.retainError(err)
+				if err = p.Sleep(ctx, min(5*time.Second, g.end-p.Clock.Elapsed())); err != nil {
+					return recovery.end(err)
+				}
+				continue
+			}
 			if err != nil {
 				return recovery.end(err)
 			}

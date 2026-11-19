@@ -756,7 +756,7 @@ func TestMeasurementDefinitionOracle(t *testing.T) {
 				c := ProcessConfig{Parameters: config.Parameters, ArmedAt: time.UnixMilli(config.ArmedAt)}
 				g := newProcedure(&c, p.ProcedurePorts, time.Duration(end)*time.Millisecond)
 				measurement := Measurement{}
-				actual := g.measureDefinition(context.Background(), gate, p, observe, &measurement)
+				actual := g.measureDefinition(context.Background(), gate, p, observe, observe, &measurement)
 				// An early definite rejection is represented by an inconclusive outer gate;
 				// compare all consumed effects and the produced admission/recovery evidence.
 				var want struct {
