@@ -17,7 +17,7 @@ func (s *Session) recordUncertainty(u operator.Uncertainty) {
 	u = u.Public()
 	s.uncertainties = append(s.uncertainties, u)
 	if s.uncertaintySink != nil {
-		s.uncertaintySink(u)
+		s.uncertaintySink(u.Public())
 	}
 }
 func (s *Session) unknownScope(kind, target, action string, end time.Duration, rule string) {
@@ -29,7 +29,11 @@ func (s *Session) SetUncertaintySink(sink func(operator.Uncertainty)) { s.uncert
 func (s *Session) Uncertainties() []operator.Uncertainty {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.uncertainties)
+	rows := slices.Clone(s.uncertainties)
+	for i := range rows {
+		rows[i] = rows[i].Public()
+	}
+	return rows
 }
 func (s *Session) unknownRequest(id, rule string) {
 	p := s.requests[id]
@@ -41,7 +45,16 @@ func (s *Session) unknownRequest(id, rule string) {
 	if p.operation == operator.HostExecute && p.action == "status" {
 		kind = "status.read"
 	}
-	s.recordUncertainty(operator.Uncertainty{Kind: kind, RequestID: id, Target: p.target, Action: p.action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(p.end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (p.end - s.clock.Elapsed()).Milliseconds(), Rule: rule})
+	s.recordUncertainty(operator.Uncertainty{Kind: kind, RequestID: id, Target: p.target, Action: p.action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(p.end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (p.end - s.clock.Elapsed()).Milliseconds(), Rule: rule, Code: p.failureCode, ElapsedMS: p.failureElapsedMS, Phase: p.failurePhase, StepDeadlineMS: p.remainingMS})
+}
+
+// Evidence decorates the existing pending identity before Accept records its
+// uncertainty. It cannot classify the result, clear the latch or submit work.
+func (s *Session) hostFailureEvidence(id, code, phase string, elapsed *int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.requests[id]
+	p.failureCode, p.failurePhase, p.failureElapsedMS = code, phase, elapsed
 }
 
 func (s *Session) noteUnknownRequest(id, rule string) {

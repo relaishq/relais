@@ -1152,6 +1152,51 @@ and the fixed certainty rule. Payloads, raw mailbox keys and error strings are
 excluded. Diagnostics never clear the fatal latch or authorize a retry. Caller
 journals are collected on unknown outcomes even when the unit remains active.
 
+Host exceptions keep their existing certainty. An effectful step still emits
+`kind: unknown`; pure observations and the failover-only `RecoveryStatus` opt-in
+still emit `kind: failed`. Unknown host envelopes additionally carry `code` from
+`read_failure()` and `elapsedMs` from the host's monotonic clock immediately
+before `execute`. A move includes `phase: status` during its control pre-read or
+`phase: post` during its move POST. No exception message leaves this envelope.
+The existing uncertainty row retains these fields without a second request or
+a second uncertainty. `Public()` admits only codes matching
+`^[a-z][a-z0-9-]{0,39}$`, move phases `status` and `post`, and elapsed milliseconds
+in `[0, stepDeadlineMs]`. `stepDeadlineMs` retains the original request budget
+so saved reports can check that bound again; `remainingMs` keeps its existing
+meaning at failure. Invalid optional fields are omitted. These additions leave
+protocol and result schema versions unchanged.
+
+The fixed pure-read host operation `service-journals` is available through
+`host.Process("service-journals", struct{}{}, nil)` and the embedded Python
+`execute("service-journals", {})`. It reads `journalctl --unit=relais-*.service
+--lines=300 --no-pager --output=short-iso`, keeping the final 12,000 bytes with a
+five-second host deadline. Its private `data` contains `tail` and `truncated`;
+the cap can discard an initial partial UTF-8 character. Read failures use the
+usual `kind: failed` and fixed `code`. The operation performs no service changes.
+`TestServiceJournalsWrapperIsPureRead` and the offline Python journal tests
+cover the read classification, byte cap, reader failure and timeout cleanup.
+
+Paid-run journal retention requires the private runner, outside this repository:
+
+1. When the session latches unknown, and in its final cleanup path before host
+   termination, invoke this operation once per distinct service host from the
+   captured topology (`relay`, `w1`, `w2`, `shared`, deduplicated by host).
+2. Use the runner's diagnostic host-command path with a bounded cleanup budget.
+   Do not send these reads through the latched session or replay the failed
+   effectful command. At final cleanup, collect a new tail if an earlier unknown
+   collection ran; retain at most those two snapshots per host.
+3. Decode the normal bounded host-output envelope. Retain each host slot,
+   collection trigger, `tail`, `truncated`, and collection failure code in a
+   private `serviceDiagnostics` output beside its existing store/caller
+   diagnostics. A collection failure records missing diagnostics and does not
+   change the session outcome or prevent teardown.
+4. Persist that private output before terminating hosts. Exclude these tails
+   from public reports, sanitized session fields, public artifacts and routine
+   stdout/stderr logging. They can contain private addresses and call details.
+
+The public session has no journal payload field and does not collect these
+tails itself. Private paid-run collection and retention remain NOT-RUN here.
+
 PR checks and one complete execution are not initial profile qualification.
 Keep three declared complete executions at the same code/profile/bounds; all
 three must meet the strict rule, without discarding failures. This rehearsal

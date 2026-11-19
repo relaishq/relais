@@ -262,14 +262,26 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			return operator.Unknown
 		}
 		var envelope struct {
-			Kind    string          `json:"kind"`
-			Code    string          `json:"code"`
-			Started time.Time       `json:"started"`
-			Ended   time.Time       `json:"ended"`
-			Data    json.RawMessage `json:"data"`
+			Kind      string          `json:"kind"`
+			Code      string          `json:"code"`
+			ElapsedMS json.RawMessage `json:"elapsedMs"`
+			Phase     json.RawMessage `json:"phase"`
+			Started   time.Time       `json:"started"`
+			Ended     time.Time       `json:"ended"`
+			Data      json.RawMessage `json:"data"`
 		}
 		if observe.Decode(data, &envelope, observe.Contract{"kind"}) != nil {
 			return operator.Unknown
+		}
+		if envelope.Kind == "unknown" {
+			var elapsed *int64
+			var phase string
+			// Optional evidence cannot turn an unknown result into a failed read.
+			if json.Unmarshal(envelope.ElapsedMS, &elapsed) != nil {
+				elapsed = nil
+			}
+			_ = json.Unmarshal(envelope.Phase, &phase)
+			r.Session.hostFailureEvidence(reply.ID, envelope.Code, phase, elapsed)
 		}
 		if envelope.Kind == "refused" {
 			operationErr = fault("compatibility-refused")

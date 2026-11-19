@@ -3,6 +3,7 @@ import json
 import os
 import re
 import resource
+import selectors
 import signal
 import time
 from urllib.parse import urlparse
@@ -161,15 +162,52 @@ def read_failure(error):
     return name if re.fullmatch(r"[a-z][a-z0-9-]{0,39}", name) else "unclassified"
 
 
-def execute(op, p):
+def service_journals():
+    """Private diagnostics only: last 300 service lines, capped at 12 KB and 5 s."""
+    args = ["journalctl", "--unit=relais-*.service", "--lines=300", "--no-pager", "--output=short-iso"]
+    tail, total = b"", 0
+    until = time.monotonic() + 5
+    with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as child:
+        try:
+            with selectors.DefaultSelector() as ready:
+                ready.register(child.stdout, selectors.EVENT_READ)
+                while True:
+                    left = until - time.monotonic()
+                    if left <= 0 or not ready.select(left):
+                        raise TimeoutError("journal read deadline")
+                    chunk = os.read(child.stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    tail = (tail + chunk)[-12000:]
+            left = until - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("journal read deadline")
+            if child.wait(timeout=left) != 0:
+                raise subprocess.CalledProcessError(child.returncode, args)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+    # A byte cap can split the first UTF-8 character; discard only that fragment.
+    return {"tail": tail.decode("utf-8", errors="ignore"), "truncated": total > 12000}
+
+
+def execute(op, p, evidence=None):
+    if evidence is None:
+        evidence = {}
+    if op == "service-journals":
+        return service_journals()
     if op == "telemetry":
         return telemetry(p)
     worker = p.get("worker")
     if op == "move":
+        evidence["phase"] = "status"
         status = http(p["control"] + "/status")
         calls = [c for c in status["calls"] if c["id"] == p["session"]]
         if len(calls) != 1 or calls[0]["owner"] != p["owner"] or calls[0]["lease_epoch"] != p["epoch"]:
             raise ValueError("trial ownership changed")
+        evidence["phase"] = "post"
         return http(p["control"] + "/calls/" + p["session"] + "/move?to=" + worker, "POST")
     if op == "status":
         return http(p["control"] + "/status")

@@ -25,15 +25,18 @@ import (
 const maxRefusalDiagnostics = 64
 
 type pending struct {
-	operation      operator.Operation
-	target, action string
-	end            time.Duration
-	deadlineUnixMS string
-	remainingMS    int64
-	effect         bool
-	expired        bool
-	terminal       bool
-	outcome        operator.Certainty
+	operation        operator.Operation
+	target, action   string
+	end              time.Duration
+	deadlineUnixMS   string
+	remainingMS      int64
+	effect           bool
+	expired          bool
+	terminal         bool
+	outcome          operator.Certainty
+	failureCode      string
+	failurePhase     string
+	failureElapsedMS *int64
 }
 type Session struct {
 	omittedRefusals int
@@ -121,7 +124,7 @@ func effectful(op operator.Operation, action string) bool {
 		return false
 	case operator.HostExecute:
 		switch action {
-		case "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "inventory", "clock":
+		case "service-journals", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "inventory", "clock":
 			return false
 		}
 	}
@@ -335,6 +338,9 @@ func (s *Session) Final(gates []operator.GateResult) operator.Result {
 	r.OmittedRefusals = s.omittedRefusals
 	r.Diagnostics = slices.Clone(s.diagnostics)
 	r.Uncertainties = slices.Clone(s.uncertainties)
+	for i := range r.Uncertainties {
+		r.Uncertainties[i] = r.Uncertainties[i].Public()
+	}
 	for id, p := range s.requests {
 		if !p.terminal {
 			r.Pending = append(r.Pending, id)

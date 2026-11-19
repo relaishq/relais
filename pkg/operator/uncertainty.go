@@ -13,6 +13,12 @@ type Uncertainty struct {
 	DeadlineUnixMS string `json:"deadlineUnixMs"`
 	RemainingMS    int64  `json:"remainingMs"`
 	Rule           string `json:"rule"`
+	Code           string `json:"code,omitempty"`
+	ElapsedMS      *int64 `json:"elapsedMs,omitempty"`
+	Phase          string `json:"phase,omitempty"`
+	// StepDeadlineMS is the original request budget, not the remaining budget
+	// at failure. Retain it so Public can recheck elapsed time in saved reports.
+	StepDeadlineMS int64 `json:"stepDeadlineMs,omitempty"`
 }
 
 type UncertaintyRecorder interface{ RecordUncertainty(Uncertainty) }
@@ -20,6 +26,21 @@ type UncertaintyRecorder interface{ RecordUncertainty(Uncertainty) }
 // Public is also applied when reading a report, so adapter text cannot enter
 // these fields through a manually constructed diagnostic.
 func (u Uncertainty) Public() Uncertainty {
+	if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`).MatchString(u.Code) {
+		u.Code = ""
+	}
+	if u.ElapsedMS != nil && (*u.ElapsedMS < 0 || u.StepDeadlineMS <= 0 || *u.ElapsedMS > u.StepDeadlineMS) {
+		u.ElapsedMS = nil
+	}
+	if u.ElapsedMS == nil {
+		u.StepDeadlineMS = 0
+	} else {
+		elapsed := *u.ElapsedMS
+		u.ElapsedMS = &elapsed
+	}
+	if u.Action != "move" || u.Phase != "status" && u.Phase != "post" {
+		u.Phase = ""
+	}
 	switch u.Kind {
 	case "host.lease-read", "host.lease-read-batch", "host.read-batch", "host.execute", "status.read", "caller.ready", "caller.start", "caller.stop", "caller.feed", "mailbox.read", "mailbox.create", "caller.collect", "judge", "store.observe", "store.failover", "session", "gate", "gate.prepare":
 	default:
