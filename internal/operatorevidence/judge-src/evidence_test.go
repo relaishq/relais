@@ -218,7 +218,7 @@ func timingSanitizationFixtures() map[string]struct{ target, reason, cause strin
 		{"baseline", "private-identity gap baseline has fewer than 10 guaranteed intervals", "baseline-intervals-insufficient"},
 		{"pause", "private-identity pause may reach 2s within clock interval", "pause-bound-uncertain"},
 		{"spread", "private-identity baseline spread not proven within 50ms", "baseline-spread-uncertain"},
-		{"p95", "private-identity move p95 policy not proven across clock interval", "move-p95-unproven"},
+		{"move-gaps", "private-identity move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves across clock interval", "move-p95-unproven"},
 		{"count", "too few distributed trials: moves 19/20, takeovers 9/10", "trial-count-insufficient"},
 		{"content", "private-identity: content loss not proven across clock interval", "content-loss-unproven"},
 	}

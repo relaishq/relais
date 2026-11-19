@@ -555,7 +555,7 @@ func judgeLeanMove(m leanManifest, p leanPhase, proc loadgen.ProcessReport, msg 
 	if _, ok := d.Durations["audio_freshness"]; !ok {
 		v.unknown("missing audio freshness duration interval")
 	}
-	// Pooled p95 is rejudged with caller-stall upper bounds separately.
+	// The pooled move-gap count is rejudged with caller-stall upper bounds separately.
 }
 
 // leanGapWindow returns certain and possible scheduled windows on the caller
@@ -1021,6 +1021,6 @@ func judgeLeanStallTrials(phases []loadgen.RunReport, v *leanVerdict) {
 	measured, _ := callharness.JudgeDistributedTrials(raw)
 	guarded, _ := callharness.JudgeDistributedTrials(worst)
 	if measured == "pass" && guarded != "pass" {
-		v.unknown("distributed pooled p95 may breach move thresholds with caller-stall bounds")
+		v.unknown("distributed move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves with caller-stall bounds")
 	}
 }

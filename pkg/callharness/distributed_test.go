@@ -88,7 +88,9 @@ func TestDistributedMinimumTrials(t *testing.T) {
 	require.Equal(t, "fail", outcome)
 }
 
-func TestDistributedP95AllowsOneMoveOutlier(t *testing.T) {
+// The nearest-rank p95 rule is a count: at most one move gap in each full 20
+// may exceed the limit, so below 20 moves every gap must be within it.
+func TestDistributedMoveGapsAllowOneOutlierPer20(t *testing.T) {
 	var moves []MoveReport
 	baseline := make([]time.Duration, 50)
 	for i := range baseline {
@@ -104,14 +106,20 @@ func TestDistributedP95AllowsOneMoveOutlier(t *testing.T) {
 	for range 10 {
 		moves = append(moves, MoveReport{Kind: "takeover", Distributed: &DistributedMeasurement{Outcome: "pass", WindowOutcome: "pass"}})
 	}
-	outcome, _ := JudgeDistributedTrials(moves)
-	require.Equal(t, "pass", outcome, "the policy gates pooled p95, not every trial's 150ms gap")
+	outcome, causes := JudgeDistributedTrials(moves)
+	require.Equal(t, "pass", outcome, "one of 20 move gaps may exceed 150ms")
+	require.Empty(t, causes)
+	outcome, causes = JudgeDistributedTrials(moves[1:])
+	require.Equal(t, "fail", outcome, "with 19 moves, every gap must be within the limit")
+	require.Contains(t, causes, "audio move gaps over 150ms or baseline p95+50ms in more than 1 per full 20 moves across clock interval")
 	moves[18].Distributed.Gaps[0].EventGap = DurationInterval{Lower: 180 * time.Millisecond, Upper: 180 * time.Millisecond}
-	outcome, _ = JudgeDistributedTrials(moves)
+	outcome, causes = JudgeDistributedTrials(moves)
 	require.Equal(t, "fail", outcome)
+	require.Equal(t, []string{"audio move gaps over 150ms or baseline p95+50ms in more than 1 per full 20 moves across clock interval"}, causes)
 	moves[18].Distributed.Gaps[0].EventGap = DurationInterval{Lower: 20 * time.Millisecond, Upper: 180 * time.Millisecond}
-	outcome, _ = JudgeDistributedTrials(moves)
+	outcome, causes = JudgeDistributedTrials(moves)
 	require.Equal(t, "inconclusive", outcome)
+	require.Equal(t, []string{"audio move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves across clock interval"}, causes)
 }
 
 func TestDistributedContentLossOverInterval(t *testing.T) {
@@ -184,7 +192,7 @@ func TestDistributedClockJumpInvalidatesSavedSummary(t *testing.T) {
 	require.NoError(t, clock.Add(probeAt(r.start, 0, time.Millisecond)))
 	r.distributed = &DistributedOptions{RunID: "run", Clock: clock}
 	id := OperationIdentity{RunID: "run", OperationID: "saved", SessionID: "session", Worker: "0", Epoch: 1}
-	// A numeric outlier may fail one window but still fit the pooled p95 policy.
+	// A numeric outlier may fail one window but still fit the pooled one-per-20 move-gap policy.
 	// A later clock jump must invalidate its window trust independently.
 	r.savedMoves = []MoveReport{{Identity: &id, Kind: "move", Distributed: &DistributedMeasurement{Mapped: true, Outcome: "fail", WindowOutcome: "pass"}}}
 	clock.Invalidate(errors.New("clock jump"))

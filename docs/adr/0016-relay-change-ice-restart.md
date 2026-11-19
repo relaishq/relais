@@ -36,7 +36,8 @@ the same keys.
   A switch commit alone never completes recovery.
 - **Planned change** (we retire a relay): keep the call through rollback. If
   rollback stays unconfirmed, an explicit end can occur after about 25 s. The
-  caller gap target stays the same as for planned moves: pooled p95 ≤ 150 ms.
+  caller gap target stays the same as for planned moves: pooled, at most one
+  gap in each full 20 changes above 150 ms.
 - **Unplanned relay-host loss:** every call recovers within **5 s**, with no
   dropped calls. This needs a second relay that is already running.
 - **Fence.** The worker, which holds the media keys, is the fence. It sends a
@@ -795,14 +796,14 @@ These record choices the accepted text left open while building sections 5,
 ## Measurement
 
 Evidence comes from the in-process harness (Pion caller), `crash-run` and a new
-headless Chrome driver with fake media. Every row reports p50, p95 and max per
-call. Planned and unplanned results are reported separately. Report packet
+headless Chrome driver with fake media. Every row reports how many events met
+its target, out of how many, plus the median and max per call. Planned and unplanned results are reported separately. Report packet
 delivery, decoded recovery and confirmation latency separately. Pion C-only
 results do not establish the decoded-media target in section 9.
 
 | # | Criterion | Method | Target |
 | --- | --- | --- | --- |
-| 1 | Planned change gap | Two slots; at least 20 changes with the Pion caller (smoke size), and 10 in Chrome; also 8 calls changed in one drain | Existing planned-move policy: each track p95 ≤ same-run baseline + 50 ms and ≤ 150 ms, pooled; zero reconnects |
+| 1 | Planned change gap | Two slots; at least 20 changes with the Pion caller (smoke size), and 10 in Chrome; also 8 calls changed in one drain | Existing planned-move policy, pooled: per track, at most one gap in each full 20 changes above the lower of same-run baseline p95 + 50 ms and 150 ms; zero reconnects |
 | 2 | Unplanned host loss | Kill the active **and** standby relay of a slot (SIGKILL), and drop all slot traffic in a network namespace; ten interleaved `crash-run` runs per mode; 8 live calls per run; Pion and Chrome | Every call recovers within 5 s; zero dropped calls |
 | 3 | Frozen host | SIGSTOP both relay processes of a slot, recover on another slot, then SIGCONT | After the cut-off, zero packets from the old slot accepted by any worker; zero worker packets sent to it |
 | 4 | Caller-stall path | Block the slot's public address only; its lease keeps renewing | Calls recover within 5 s through the caller trigger |

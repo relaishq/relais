@@ -447,10 +447,10 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 			observed, baseline time.Duration
 		}{{"audio", out.AudioP95, out.AudioBaselineP95}, {"video", out.VideoP95, out.VideoBaselineP95}} {
 			if track.observed > out.AbsoluteGapCeiling {
-				reason(true, track.kind+" move p95 exceeds absolute 150ms ceiling")
+				reason(true, track.kind+" move gaps exceed absolute 150ms ceiling in more than 1 per full 20 trials")
 			}
 			if track.observed > track.baseline+out.GapAllowance {
-				reason(true, track.kind+" move p95 exceeds same-run baseline p95 + 50ms")
+				reason(true, track.kind+" move gaps exceed same-run baseline p95 + 50ms in more than 1 per full 20 trials")
 			}
 		}
 	}
@@ -483,7 +483,7 @@ func profileResultLine(report profileReport) string {
 	if len(report.Rows) == 0 {
 		return line + " slowest_trial=unavailable slowest_phases=unavailable"
 	}
-	// Keep the largest media gap visible even when p95 excludes that trial.
+	// Keep the largest media gap visible even when the one-per-20 allowance excludes that trial.
 	slowest := report.Rows[0]
 	for _, row := range report.Rows[1:] {
 		if max(row.AudioGap, row.VideoGap) > max(slowest.AudioGap, slowest.VideoGap) {

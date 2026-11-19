@@ -54,7 +54,7 @@ func TestProfileVerdictSeparateGapsAndExactCeilings(t *testing.T) {
 			}
 			r = judgeProfile(options, rows, profileTestLinks(t, options.Name))
 			require.Equal(t, "fail", r.Verdict)
-			require.Contains(t, r.Reasons, "video move p95 exceeds same-run baseline p95 + 50ms")
+			require.Contains(t, r.Reasons, "video move gaps exceed same-run baseline p95 + 50ms in more than 1 per full 20 trials")
 			for i := range rows {
 				rows[i].VideoGap = 65 * time.Millisecond
 				rows[i].AudioGap = 151 * time.Millisecond
@@ -66,7 +66,7 @@ func TestProfileVerdictSeparateGapsAndExactCeilings(t *testing.T) {
 			}
 			r = judgeProfile(options, rows, profileTestLinks(t, options.Name))
 			require.Equal(t, "fail", r.Verdict)
-			require.Contains(t, r.Reasons, "audio move p95 exceeds absolute 150ms ceiling")
+			require.Contains(t, r.Reasons, "audio move gaps exceed absolute 150ms ceiling in more than 1 per full 20 trials")
 			for i := range rows {
 				rows[i].AudioGap = 150 * time.Millisecond
 			}
@@ -217,7 +217,7 @@ func TestProfileBaselinePoolsIntervalsInsteadOfTrialPercentiles(t *testing.T) {
 	r := judgeProfile(profileTrialOptions{Name: "region", Scenario: "move"}, rows, profileTestLinks(t, "region"))
 	require.Equal(t, 20*time.Millisecond, r.AudioBaselineP95)
 	require.Equal(t, "fail", r.Verdict)
-	require.Contains(t, r.Reasons, "audio move p95 exceeds same-run baseline p95 + 50ms")
+	require.Contains(t, r.Reasons, "audio move gaps exceed same-run baseline p95 + 50ms in more than 1 per full 20 trials")
 }
 func TestProfileScenarioOptionValidation(t *testing.T) {
 	require.NoError(t, validateProfileScenario("netns", "move", false))
