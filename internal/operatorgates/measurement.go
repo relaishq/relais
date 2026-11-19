@@ -87,6 +87,9 @@ type MeasureResult struct {
 	// ExpiredWait names the polling wait that the gate budget or its own
 	// window ended, if any. It never changes the status or reason.
 	ExpiredWait *WaitDiagnostic `json:"expiredWait,omitempty"`
+	// FailedStatusReads counts definite failed recovery status reads. Unlike a
+	// retained error, they do not make the procedure incomplete.
+	FailedStatusReads int `json:"failedStatusReads,omitempty"`
 }
 
 func (m *Measurement) retainError(err error) {
@@ -348,6 +351,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	r.Completed = definitionCompleted && r.Measurement.ErrorReason == "" && r.Reason == "" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd
 	r.CompletedSteps = g.evidence.CompletedSteps
 	r.ExpiredWait = g.evidence.ExpiredWait
+	r.FailedStatusReads = g.evidence.FailedStatusReads
 	return r
 }
 
@@ -439,10 +443,12 @@ func (g *procedure) measureDefinition(ctx context.Context, gate operator.Gate, p
 			o, err := observeRecovery()
 			// Control status stays effectful: a failed read may still have
 			// reconciled a loss the store already decided. Recovery counts only
-			// after a later successful read, which exposes that lost_count.
+			// after a later successful read, which exposes that lost_count. The
+			// failed read is a missing sample; it alone never makes the
+			// procedure incomplete.
 			if errors.As(err, new(failedStatusRead)) {
 				measurement.MissingSamples++
-				measurement.retainError(err)
+				g.evidence.FailedStatusReads++
 				if err = p.Sleep(ctx, min(5*time.Second, g.end-p.Clock.Elapsed())); err != nil {
 					return recovery.end(err)
 				}

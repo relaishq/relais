@@ -8057,14 +8057,66 @@
     "Package": "./internal/operatorgates"
   },
   {
-    "ID": "failover-status-read-error-discarded",
+    "ID": "failover-status-read-retained",
     "File": "internal/operatorgates/measurement.go",
     "Function": "measureDefinition",
     "Receiver": "procedure",
-    "Old": "measurement.retainError(err)\n\t\t\t\tif err = p.Sleep(",
-    "New": "measurement.retainError(nil)\n\t\t\t\tif err = p.Sleep(",
+    "Old": "g.evidence.FailedStatusReads++",
+    "New": "g.evidence.FailedStatusReads++\n\t\t\t\tmeasurement.retainError(err)",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-completes",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-uncounted",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "g.evidence.FailedStatusReads++",
+    "New": "",
     "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
     "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-uncounted-deadline",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "g.evidence.FailedStatusReads++",
+    "New": "",
+    "Test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+    "Marker": "MUTATION: failover-status-read-deadline",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-result-dropped",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.FailedStatusReads = g.evidence.FailedStatusReads",
+    "New": "",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-unpublished",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "measureProcedureResult",
+    "Old": ", FailedStatusReads: m.FailedStatusReads}}",
+    "New": "}}",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-completes",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failed-status-reads-negative-accepted",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "DecodeProcessEvidence",
+    "Old": "e.FailedStatusReads < 0 || ",
+    "New": "",
+    "Test": "TestProcessEvidenceFailedStatusReads",
+    "Marker": "MUTATION: failed-status-reads-negative",
     "Package": "./internal/operatorgates"
   }
 ]
