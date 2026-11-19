@@ -75,8 +75,8 @@ func TestUnknownExceptionIncludesEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := runStatus(t, script)
-	if got["kind"] != "unknown" || got["code"] != "connection-refused-error" {
-		t.Fatalf("unknown exception lost its code: %v", got)
+	if len(got) != 3 || got["kind"] != "unknown" || got["code"] != "connection-refused-error" {
+		t.Fatalf("unknown exception must carry only kind, code and elapsedMs: %v", got)
 	}
 	if elapsed, ok := got["elapsedMs"].(float64); !ok || elapsed < 0 {
 		t.Fatalf("unknown exception lost elapsed time: %v", got)

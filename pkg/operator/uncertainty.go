@@ -21,12 +21,14 @@ type Uncertainty struct {
 	StepDeadlineMS int64 `json:"stepDeadlineMs,omitempty"`
 }
 
+var publicCode = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+
 type UncertaintyRecorder interface{ RecordUncertainty(Uncertainty) }
 
 // Public is also applied when reading a report, so adapter text cannot enter
 // these fields through a manually constructed diagnostic.
 func (u Uncertainty) Public() Uncertainty {
-	if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`).MatchString(u.Code) {
+	if !publicCode.MatchString(u.Code) {
 		u.Code = ""
 	}
 	if u.ElapsedMS != nil && (*u.ElapsedMS < 0 || u.StepDeadlineMS <= 0 || *u.ElapsedMS > u.StepDeadlineMS) {
