@@ -29,6 +29,7 @@ type drainWorker struct {
 	gateAfter int64
 	failureID string
 	failure   error
+	committed chan sessionstore.RelayAssignment
 	muTimes   sync.Mutex
 	times     []time.Time
 	targets   []string
@@ -71,7 +72,10 @@ func (w *drainWorker) RelayDelivery(ctx context.Context, id string, g uint64) (m
 					return
 				}
 				if rec.Attempt != nil && rec.Attempt.Generation == g {
-					_ = w.store.(sessionstore.RelayAssignments).CommitRelay(ctx, lease, a, sessionstore.RelayAssignment{Slot: a.Pending, Generation: g})
+					to := sessionstore.RelayAssignment{Slot: a.Pending, Generation: g}
+					if err := w.store.(sessionstore.RelayAssignments).CommitRelay(ctx, lease, a, to); err == nil && w.committed != nil {
+						w.committed <- to
+					}
 					return
 				}
 				select {
@@ -181,14 +185,14 @@ func TestRelayDrainBackoffExhaustionReportsNotMovable(t *testing.T) {
 		status := relayStatusOf(t, p, ids[0])
 		require.Equal(t, "r1", status.Slot)
 		require.Equal(t, result.Moves[0].Error, status.NotMovable)
-		require.EqualValues(t, 4, w.attempts.Load())
-		require.Len(t, w.times, 4)
-		for i, want := range []float64{1, 2, 4} {
+		require.EqualValues(t, 3, w.attempts.Load())
+		require.Len(t, w.times, 3)
+		for i, want := range []float64{1, 2} {
 			require.InDelta(t, want, w.times[i+1].Sub(w.times[i]).Seconds(), 0.1)
 		}
 		// Failed attempts do not become successes; only rollback attempts complete.
-		require.Equal(t, relayEventCounts(0, 0, 0, 0, 0, 4, 0), relayEvents(t, p, "r2"))
-		require.Equal(t, relayEventCounts(4, 4, 4, 0, 4, 0, 0), relayEvents(t, p, "r1"))
+		require.Equal(t, relayEventCounts(0, 0, 0, 0, 0, 3, 0), relayEvents(t, p, "r2"))
+		require.Equal(t, relayEventCounts(3, 3, 3, 0, 3, 0, 0), relayEvents(t, p, "r1"))
 		// The next successful drain clears the previous report on the old slot.
 		w.failures.Store(0)
 		moved := drainHTTP(t, p, context.Background())
@@ -216,6 +220,27 @@ func TestRelayDrainCancellationReportsRemaining(t *testing.T) {
 			require.Equal(t, "r1", relayStatusOf(t, p, move.ID).Slot)
 		}
 		require.EqualValues(t, 17, w.attempts.Load(), "sleeping calls release capacity for queued calls")
+	})
+}
+
+// Expiring the drain request must still let ChangeRelay confirm its rollback.
+func TestRelayDrainCancellationSettlesRollback(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, ids := drainPlane(t, 1)
+		w.gate = make(chan struct{})
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		result := drainHTTP(t, p, ctx)
+		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", Error: context.DeadlineExceeded.Error()}}, result.Moves)
+		a, rec, err := confirmations(p.store).RelayConfirmation(context.Background(), ids[0])
+		require.NoError(t, err)
+		require.Equal(t, sessionstore.RelayAssignment{Slot: "r1", Generation: 2}, a)
+		require.True(t, rec.Confirmed(a), "rollback survives request cancellation")
+		require.Equal(t, sessionstore.RelayPhaseConfirmed, rec.Attempt.Phase)
+		require.False(t, rec.Episode.Open())
+		require.EqualValues(t, 1, w.attempts.Load())
+		_, err = p.lookup(ids[0])
+		require.NoError(t, err, "call remains live on the old path")
 	})
 }
 
@@ -370,6 +395,236 @@ func TestRelayDrainRecoveryLeavesSlot(t *testing.T) {
 				require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
 				require.EqualValues(t, 2, w.attempts.Load(), "one failed planned attempt and one recovery attempt")
 				require.Empty(t, relayStatusOf(t, p, ids[0]).NotMovable)
+			})
+		})
+	}
+}
+
+func TestRelayDrainRecoveryCommitNeedsConfirmation(t *testing.T) {
+	for _, confirm := range []bool{true, false} {
+		t.Run(map[bool]string{true: "confirmed", false: "ended"}[confirm], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				stopRelayRecoveries(t, p)
+				store := &drainObservationStore{Memory: p.store.(*sessionstore.Memory), confirmed: make(chan sessionstore.RelayAssignment, 4)}
+				p.store, w.store = store, store
+				w.failures.Store(1)
+				w.committed = make(chan sessionstore.RelayAssignment, 4)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan RelayDrainResult, 1)
+				go func() { done <- drainHTTP(t, p, ctx) }()
+				synctest.Wait()
+				require.Equal(t, "r1", (<-w.committed).Slot)
+				require.Equal(t, "r1", (<-store.confirmed).Slot)
+				synctest.Wait()
+				_, rollback, err := confirmations(p.store).RelayConfirmation(context.Background(), ids[0])
+				require.NoError(t, err)
+				require.Equal(t, sessionstore.RelayPhaseConfirmed, rollback.Attempt.Phase)
+				w.noDelivery.Store(true)
+				c, err := p.lookup(ids[0])
+				require.NoError(t, err)
+				require.NoError(t, p.startRelayRecovery(context.Background(), c, false))
+				require.Equal(t, "r2", (<-w.committed).Slot)
+				synctest.Wait()
+				a, rec, err := confirmations(p.store).RelayConfirmation(context.Background(), ids[0])
+				require.NoError(t, err)
+				require.Empty(t, a.Pending, "worker has committed before the test holds confirmation")
+				require.True(t, rec.Episode.Open())
+				require.False(t, rec.Confirmed(a))
+				time.Sleep(2 * time.Second) // cross the drain's next observation
+				synctest.Wait()
+				var result RelayDrainResult
+				returned := false
+				select {
+				case result = <-done:
+					returned = true
+				default:
+				}
+				if confirm {
+					w.noDelivery.Store(false)
+				}
+				if !returned {
+					result = <-done
+				}
+				require.False(t, returned, "commit alone must not finish the drain")
+				if confirm {
+					require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
+					a, rec, err = confirmations(p.store).RelayConfirmation(context.Background(), ids[0])
+					require.NoError(t, err)
+					require.True(t, rec.Confirmed(a))
+					require.Equal(t, sessionstore.RelayPhaseConfirmed, rec.Attempt.Phase)
+					require.Equal(t, sessionstore.RelayEpisodeCompleted, rec.Episode.Outcome)
+				} else {
+					require.Empty(t, result.Moves[0].To)
+					require.NotEmpty(t, result.Moves[0].Error)
+					require.False(t, result.Moves[0].NotMovable)
+					require.Equal(t, "relay_change_failed", endReason(c))
+				}
+				require.EqualValues(t, 2, w.attempts.Load(), "recovery must not be followed by another media move")
+			})
+		})
+	}
+}
+
+// Pause the first observation after its store read, so recovery can commit
+// before target selection fails and the drain reads the post-attempt state.
+type drainObservationStore struct {
+	*sessionstore.Memory
+	mu        sync.Mutex
+	afterRead func()
+	confirmed chan sessionstore.RelayAssignment
+}
+
+func (s *drainObservationStore) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	a, rec, err := s.Memory.RelayConfirmation(ctx, id)
+	s.mu.Lock()
+	hook := s.afterRead
+	s.afterRead = nil
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return a, rec, err
+}
+
+func (s *drainObservationStore) CASRelayConfirmation(ctx context.Context, id string, at sessionstore.RelayAssignment, from, to sessionstore.RelayConfirmation, notBefore, notAfter time.Time) error {
+	err := s.Memory.CASRelayConfirmation(ctx, id, at, from, to, notBefore, notAfter)
+	if err == nil && s.confirmed != nil && to.Attempt != nil && to.Attempt.Phase == sessionstore.RelayPhaseConfirmed &&
+		(from.Attempt == nil || from.Attempt.Phase != sessionstore.RelayPhaseConfirmed) {
+		s.confirmed <- at
+	}
+	return err
+}
+
+func TestRelayDrainRecoveryCommitsDuringObservation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, ids := drainPlane(t, 1)
+		stopRelayRecoveries(t, p)
+		store := &drainObservationStore{Memory: p.store.(*sessionstore.Memory)}
+		p.store, w.store = store, store
+		w.noDelivery.Store(true)
+		w.committed = make(chan sessionstore.RelayAssignment, 1)
+		c, err := p.lookup(ids[0])
+		require.NoError(t, err)
+		observed := make(chan struct{})
+		store.afterRead = func() {
+			require.NoError(t, p.startRelayRecovery(context.Background(), c, false))
+			require.Equal(t, "r2", (<-w.committed).Slot)
+			p.mu.Lock()
+			b := p.relaySet["r2"]
+			b.draining = true // no planned target remains after recovery's commit
+			p.relaySet["r2"] = b
+			p.mu.Unlock()
+			close(observed)
+		}
+		done := make(chan RelayDrainResult, 1)
+		go func() { done <- drainHTTP(t, p, context.Background()) }()
+		<-observed
+		synctest.Wait()
+		a, rec, err := store.RelayConfirmation(context.Background(), ids[0])
+		require.NoError(t, err)
+		require.Equal(t, "r2", a.Slot)
+		require.Empty(t, a.Pending)
+		require.True(t, rec.Episode.Open())
+		require.False(t, rec.Confirmed(a))
+		var result RelayDrainResult
+		returned := false
+		select {
+		case result = <-done:
+			returned = true
+		default:
+		}
+		w.noDelivery.Store(false)
+		if !returned {
+			result = <-done
+		}
+		require.False(t, returned, "post-attempt observation must not accept commit alone")
+		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
+		require.Equal(t, sessionstore.RelayEpisodeCompleted, episodeOf(t, store, ids[0]).Outcome)
+		require.EqualValues(t, 1, w.attempts.Load())
+	})
+}
+
+func TestRelayDrainOverallDeadline(t *testing.T) {
+	for _, leaseLoss := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no target", true: "lease loss"}[leaseLoss], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				lease, err := p.store.Get(context.Background(), ids[0])
+				require.NoError(t, err)
+				_, err = p.store.Renew(context.Background(), lease, 5*time.Minute)
+				require.NoError(t, err)
+				if leaseLoss {
+					store := &drainCompetingStore{Memory: p.store.(*sessionstore.Memory)}
+					store.failures.Store(1000)
+					p.store, w.store = store, store
+				} else {
+					b := p.relaySet["r2"]
+					b.draining = true
+					p.relaySet["r2"] = b
+				}
+				// No caller deadline: cancellation is only a cleanup for broken code.
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan RelayDrainResult, 1)
+				start := time.Now()
+				go func() { done <- drainHTTP(t, p, ctx) }()
+				synctest.Wait()
+				time.Sleep(2*time.Minute - time.Nanosecond)
+				synctest.Wait()
+				select {
+				case <-done:
+					t.Fatal("drain expired before its overall deadline")
+				default:
+				}
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				var result RelayDrainResult
+				returned := false
+				select {
+				case result = <-done:
+					returned = true
+				default:
+					cancel()
+					result = <-done
+				}
+				require.True(t, returned, "drain must finish at its own deadline")
+				require.Equal(t, 2*time.Minute, time.Since(start))
+				require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", Error: context.DeadlineExceeded.Error()}}, result.Moves)
+				require.Zero(t, result.NotMovable)
+				require.Zero(t, w.attempts.Load(), "waiting does not start or exhaust planned attempts")
+				require.Equal(t, "r1", relayStatusOf(t, p, ids[0]).Slot)
+				_, err = p.lookup(ids[0])
+				require.NoError(t, err, "deadline must preserve the working call")
+			})
+		})
+	}
+}
+
+func TestRelayDrainReportsCleanupFailure(t *testing.T) {
+	for _, http := range []bool{false, true} {
+		t.Run(map[bool]string{false: "error API", true: "HTTP report"}[http], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				cleanup := &retryTenureRelay{fakeRelay: &fakeRelay{}, failures: 1}
+				b := p.relaySet["r1"]
+				b.Relay = cleanup
+				p.relaySet["r1"] = b
+				if http {
+					result := drainHTTP(t, p, context.Background())
+					require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2", Error: sessionstore.ErrTransient.Error()}}, result.Moves)
+					require.Zero(t, result.NotMovable)
+				} else {
+					require.ErrorIs(t, p.DrainRelay(context.Background(), "r1"), sessionstore.ErrTransient)
+				}
+				require.EqualValues(t, 1, w.attempts.Load(), "cleanup failure must not repeat a confirmed media move")
+				require.Equal(t, 1, cleanup.attempts)
+				a, rec, err := confirmations(p.store).RelayConfirmation(context.Background(), ids[0])
+				require.NoError(t, err)
+				require.Equal(t, "r2", a.Slot)
+				require.True(t, rec.Confirmed(a))
+				require.False(t, rec.Episode.Open())
 			})
 		})
 	}

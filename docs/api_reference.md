@@ -72,21 +72,27 @@ confirmed under the same mode.
 ### Planned relay drain (private control API)
 
 `POST /relays/{id}/drain` marks the slot draining, excluding it from new
-placement. At most eight calls change relay at once. A failed planned change
-can be retried up to three times, picking a target again for each retry. A caller without relay-change support or a worker without C is
+placement. At most eight calls change relay at once. After three failed planned
+attempts, the call is reported as not movable. Control picks a target again for
+each retry. A caller without relay-change support or a worker without C is
 reported immediately. Sleeping calls release capacity, so other calls can
 start. Before each retry, control reads the current assignment and recovery
-episode. A call already off the draining slot with no pending change is
-reported moved to its current slot. An open recovery episode settles before
+episode. A call already off the draining slot is reported moved only after
+durable media confirmation and episode settlement. An open recovery episode settles before
 another planned attempt; observing a busy operation does not consume a retry.
 No target, a target lost or draining after selection, and lease loss before the
 pending assignment is saved also retry without consuming that allowance.
 Control re-reads call state and re-picks the target. These waits advance through
-1 s, 2 s and 4 s, then stay at 4 s until the request context ends. A call that
+1 s, 2 s and 4 s, then stay at 4 s until the drain deadline. With no intervening
+waits, three failed planned attempts have only the 1 s and 2 s delays. A call that
 never starts an attempt still reports the context error without `not_movable`.
 Only failed planned attempts whose pending assignment was accepted and which
 leave the call on the draining slot count toward exhaustion. Change, rollback and
-episode bounds apply; backoff uses the request context and adds no deadline.
+episode bounds apply. One two-minute budget covers the whole drain, including
+queued calls, backoff and waits for a target or ownership. An earlier request
+deadline wins. Expiry stops planned attempts and reports `context deadline exceeded`.
+An in-flight change still completes its bounded rollback or recovery before
+returning the report; expiry does not abandon a call between paths.
 
 A completed report returns HTTP `200`, including partial drains and cancellation:
 
@@ -97,6 +103,8 @@ A completed report returns HTTP `200`, including partial drains and cancellation
 `to` names the successful destination, including a recovery move observed
 between attempts. Per-call `not_movable` is true only for exhausted planned
 attempts or unsupported contracts. The top-level `not_movable` is their count.
+If a confirmed move fails to clean up the old relay, its result includes both
+`to` and `error`; control does not repeat the media move.
 Cancellation and ended/unknown calls instead have `error` without
 `not_movable`, and do not store a status reason. They stop without another
 attempt once observed. For example, cancellation can return:

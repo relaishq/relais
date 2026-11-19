@@ -755,10 +755,18 @@ func (p *Plane) DrainRelay(ctx context.Context, slot string) error {
 	return err
 }
 
+// Bound the whole drain, including queued calls and waits for a live target or
+// ownership. An earlier caller deadline wins. ChangeRelay retains its detached,
+// bounded rollback/recovery when this budget expires; reporting waits for that
+// safety work rather than abandoning a call between paths.
+const relayDrainLimit = 2 * time.Minute
+
 func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, error) {
 	if err := p.requireMutationReady(); err != nil {
 		return RelayDrainResult{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, relayDrainLimit)
+	defer cancel()
 	p.relayPlacement.Lock()
 	p.mu.Lock()
 	b, ok := p.relaySet[slot]
@@ -827,23 +835,26 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 }
 
 // relayDrainState observes ownership and episode authority before any new
-// planned attempt. An open episode must settle before planning another move.
-func (p *Plane) relayDrainState(ctx context.Context, id string) (sessionstore.RelayAssignment, bool, error) {
+// planned attempt. Success requires durable confirmation and episode settlement,
+// even when the worker has already committed an assignment off the draining slot.
+func (p *Plane) relayDrainState(ctx context.Context, id string) (sessionstore.RelayAssignment, bool, bool, error) {
 	_, a, err := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
 	if err != nil {
-		return a, false, err
+		return a, false, false, err
 	}
 	if store, ok := p.store.(sessionstore.RelayConfirmations); ok {
 		current, rec, err := store.RelayConfirmation(ctx, id)
 		if err != nil {
-			return a, false, err
+			return a, false, false, err
 		}
 		if rec.Episode != nil && rec.Episode.Outcome == sessionstore.RelayEpisodeEnded {
-			return current, false, errRelayEpisodeEnded
+			return current, false, false, errRelayEpisodeEnded
 		}
-		return current, rec.Episode.Open(), nil
+		confirmed := rec.Attempt != nil && rec.Attempt.Phase == sessionstore.RelayPhaseConfirmed &&
+			rec.Switched(current) && rec.Confirmed(current)
+		return current, rec.Episode.Open(), confirmed, nil
 	}
-	return a, false, nil
+	return a, false, false, nil
 }
 
 func relayDrainEnded(err error) bool {
@@ -871,18 +882,21 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 			if err := ctx.Err(); err != nil {
 				return true, err
 			}
-			before, open, err := p.relayDrainState(ctx, c.id)
+			before, open, confirmed, err := p.relayDrainState(ctx, c.id)
 			if errors.Is(err, sessionstore.ErrLeaseLost) {
 				return false, nil
 			}
 			if err != nil {
 				return true, err
 			}
-			if before.Slot != slot && before.Pending == "" {
-				res.To = before.Slot
-				return true, nil
+			if open {
+				return false, nil
 			}
-			if open || before.Slot != slot && before.Pending != "" {
+			if before.Slot != slot {
+				if confirmed {
+					res.To = before.Slot
+					return true, nil
+				}
 				return false, nil
 			}
 			target, err := p.pickRelay(ctx, slot)
@@ -899,20 +913,26 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 			if ctx.Err() != nil {
 				return true, ctx.Err()
 			}
-			after, open, readErr := p.relayDrainState(ctx, c.id)
+			after, open, confirmed, readErr := p.relayDrainState(ctx, c.id)
 			if errors.Is(readErr, sessionstore.ErrLeaseLost) {
 				return false, nil
 			}
 			if readErr != nil {
 				return true, readErr
 			}
-			if after.Slot != slot && after.Pending == "" {
-				res.To = after.Slot
-				return true, nil
+			if open {
+				return false, nil
+			}
+			if after.Slot != slot {
+				if confirmed {
+					res.To = after.Slot
+					return true, err // preserve a confirmed move's old-relay cleanup failure
+				}
+				return false, nil
 			}
 			// The episode owns recovery. Busy/conflicting operations did not run a
 			// planned attempt and do not consume the drain's failure allowance.
-			if open || after.Slot != slot && after.Pending != "" || errors.Is(err, errRelayUnconfirmed) ||
+			if errors.Is(err, errRelayUnconfirmed) ||
 				errors.Is(err, ErrMoveInProgress) || errors.Is(err, sessionstore.ErrRelayConflict) ||
 				errors.Is(err, ErrNoTarget) || errors.Is(err, sessionstore.ErrLeaseLost) {
 				return false, nil
@@ -940,7 +960,7 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 				return true, err
 			}
 			failures++
-			if failures > len(backoff) {
+			if failures >= len(backoff) {
 				res.NotMovable = true
 				return true, err
 			}
