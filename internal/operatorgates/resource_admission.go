@@ -70,7 +70,7 @@ func (p resourceCallers) stopAll(ctx context.Context, end time.Time) bool {
 	return stopped
 }
 func (r *ProcessRuntime) measurePorts(caller *CallerRuntime, calls int) MeasurePorts {
-	ports := MeasurePorts{ProcedurePorts: ProcedurePorts{Clock: r.Session.clock, Sleep: resourcePause, Step: r.Step, Inventory: r.Inventory, Broker: caller}, Calls: calls, Store: r.Session.OptionalStore(r.Peer), Observe: r.Observe, BeforeFault: func(ctx context.Context, end time.Duration) error {
+	ports := MeasurePorts{ProcedurePorts: ProcedurePorts{Clock: r.Session.clock, Sleep: resourcePause, Step: r.Step, Inventory: r.Inventory, Broker: caller}, Calls: calls, Store: r.Session.OptionalStore(r.Peer), Observe: r.Observe, ObserveRecovery: r.ObserveRecovery, BeforeFault: func(ctx context.Context, end time.Duration) error {
 		if err := r.Inventory(ctx, "from", end); err != nil {
 			return err
 		}

@@ -85,6 +85,9 @@ type ProcessExtra struct {
 	Owner      string   `json:"owner,omitempty"`
 	Epoch      uint64   `json:"epoch,omitempty"`
 	Sessions   []string `json:"sessions,omitempty"`
+	// RecoveryStatus is the failover recovery wait's opt-in for control status.
+	// It changes only the script's failure branch, never its parameters.
+	RecoveryStatus bool `json:"-"`
 }
 type WorkerEndpoint struct {
 	HTTP  string         `json:"http"`

@@ -199,7 +199,14 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		}
 		parameters.TargetDir = "/opt/relais/preview/" + r.Pins[i].Version
 	}
-	script, err := host.Process(op, parameters, stage)
+	// Only the failover recovery wait opts in; see host.RecoveryStatus.
+	recoveryStatus := op == "status" && extra.RecoveryStatus
+	var script string
+	if recoveryStatus {
+		script, err = host.RecoveryStatus(parameters)
+	} else {
+		script, err = host.Process(op, parameters, stage)
+	}
 	if err != nil {
 		return StepResult{}, err
 	}
@@ -268,8 +275,11 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			operationErr = fault("compatibility-refused")
 			return operator.Failed
 		}
-		if envelope.Kind == "failed" && host.IsPureRead(op) && regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`).MatchString(envelope.Code) {
+		if envelope.Kind == "failed" && (host.IsPureRead(op) || recoveryStatus) && regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`).MatchString(envelope.Code) {
 			operationErr = fault("precondition-failed:" + envelope.Code)
+			if recoveryStatus {
+				operationErr = failedStatusRead{operationErr}
+			}
 			return operator.Failed
 		}
 		if envelope.Kind != "ok" || envelope.Started.IsZero() || envelope.Ended.IsZero() {
@@ -403,6 +413,12 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	}
 	return observed, nil
 }
+
+// failedStatusRead is a definite failed control status read in the failover
+// recovery wait. Its code stays precondition-failed:<host code>.
+type failedStatusRead struct{ error }
+
+func (e failedStatusRead) Unwrap() error { return e.error }
 
 // DecodeStepResult is the one product JSON ingress for fixed steps. Values are
 // never reconstructed in the resource adapter. Missing required proof is an error.
