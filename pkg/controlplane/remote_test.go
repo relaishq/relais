@@ -270,7 +270,10 @@ func (h handlerFirst) RoundTrip(req *http.Request) (*http.Response, error) {
 	select {
 	case <-h.reached:
 	case err := <-result:
-		return nil, errors.Join(errors.New("request ended before its handler started"), err)
+		// Only this helper cancels forwarded, and only below, so any result
+		// here ended some other way.
+		h.t.Errorf("%s %s ended by %v before the handler signalled", req.Method, req.URL.Path, err)
+		return nil, errors.Join(errors.New("request ended before the handler signalled"), err)
 	}
 	<-req.Context().Done()
 	cancel()
