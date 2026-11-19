@@ -277,9 +277,9 @@ a worker checkpoint. A concurrent worker failure still needs this envelope.
 
 ## Planned move
 
-**Guarantee:** Under the tested conditions, successful planned moves keep
-audio and video gap p95 within the same-run baseline plus 50 ms and at or below
-150 ms, without reconnecting the caller.
+**Guarantee:** Under the tested conditions, successful planned moves do not
+reconnect the caller. For each of audio and video, at least 19 of 20 moves have
+a gap within the same-run baseline p95 plus 50 ms and at or below 150 ms.
 
 **Conditions:** The four profiles above; the harness audio/VP8 source; one call
 per profile trial; the relay buffer on; private-route TCP tuning on. N+1 load
@@ -289,9 +289,11 @@ the latest accepted state; uncertain recovery needs the checkpoint envelope.
 
 The numbers below are caller gaps, not control-plane operation durations.
 All values are milliseconds. The [final #37 result comment][network-result]
-reports them from main run 38197061923.
+reports them from main run 38197061923. Each profile ran 20 move trials. The
+move columns show the 19th of the 20 sorted gaps: the value the rule checks,
+because at most one of 20 gaps may exceed the limit.
 
-| Profile | Audio move p95 | Audio baseline p95 | Video move p95 | Video baseline p95 | Status |
+| Profile | Audio move gap, 19th of 20 | Audio baseline p95 | Video move gap, 19th of 20 | Video baseline p95 | Status |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `lan` | 20.9 | 20.7 | 34.2 | 34.0 | Pass |
 | `region` | 29.0 | 20.8 | 34.0 | 33.8 | Pass |
@@ -300,7 +302,7 @@ reports them from main run 38197061923.
 
 The [profile policy][profiles] also requires every move trial to stay below
 2 seconds. Known integrity or connection failures in any trial fail the run,
-even if p95 passes. Moves record content loss but do not gate on zero content
+even if the gap count passes. Moves record content loss but do not gate on zero content
 loss. On lossy links, a passing move is not a promise that the network loses
 no packets.
 
@@ -309,8 +311,8 @@ than in the harness:
 
 | Browser sample | Moves | Audio gap | Video gap | Source |
 | --- | --- | --- | --- | --- |
-| Desktop Chrome, 1280×720 camera, buffer on | 10/10 pass | 0 ms max | 80 / 92 / 92 ms median / p95 / max | [#45 result][device-result] |
-| Desktop Chrome, 1280×720 camera, buffer off | 10/10 pass | 0 ms max | 79 / 92 / 92 ms median / p95 / max | [#45 result][device-result] |
+| Desktop Chrome, 1280×720 camera, buffer on | 10/10 pass | 0 ms max | 80 / 92 ms median / max | [#45 result][device-result] |
+| Desktop Chrome, 1280×720 camera, buffer off | 10/10 pass | 0 ms max | 79 / 92 ms median / max | [#45 result][device-result] |
 | Desktop Chrome over the real internet, buffer on | 7 pass, 3 inconclusive | 0 ms on every move | 85–106 ms; median 94.5 ms | [#48 browser result][cloud-browser] |
 
 In #45, the camera's no-event video gaps were **75–91 ms**, so move gaps stayed
@@ -358,7 +360,7 @@ soak. The separate real-process
 cloud confirmation passes [#48][cloud-result]. The browser run over the real
 internet could not measure crash gaps; see [Cloud confirmation](#cloud-confirmation).
 
-| Profile | Audio takeover gap p95 | Video takeover gap p95 | Content-loss rule | Status |
+| Profile | Audio takeover gap, max of 10 | Video takeover gap, max of 10 | Content-loss rule | Status |
 | --- | ---: | ---: | --- | --- |
 | `lan` | 423 ms | 423 ms | Trusted zero lost content | Pass |
 | `region` | 449 ms | 463 ms | No excess over network baseline | Pass |
@@ -366,7 +368,8 @@ internet could not measure crash gaps; see [Cloud confirmation](#cloud-confirmat
 | `lossy-dc` | 460 ms | 473 ms | No excess over network baseline | Pass |
 
 Source: [final #37 results][network-result], main run 38197061923. The
-**2-second ceiling checks every takeover trial**, not just the displayed p95.
+**2-second ceiling checks every takeover trial**: in each profile, 10 of 10
+takeovers paused for less than 2 seconds.
 Lossy acceptance uses pooled, same-call baseline windows and a per-trial burst
 guard. Its statistical bound has at least **95% combined one-sided confidence**
 under independent, stationary content loss. It cannot detect every small
@@ -901,7 +904,7 @@ assumption and fixed by [PR #143][second-crash-fix].
 | Spec threshold | Status | Evidence or what the blocking run must show |
 | --- | --- | --- |
 | Takeover with relay buffer (`lan`): no lost content or keyframe wait; pause reported against phase 1; freshness back to baseline within 2 s | **Pass** | [Main buffered process job][buffer-job]: 10/10, median 413.4 ms versus 416 ms; zero loss; outage media first; freshness recovered. [Strict harness controls][harness-job] pass on both stores. |
-| Planned move under `region` and `far-caller`: each track p95 ≤ baseline + 50 ms and ≤150 ms; zero decryption failures; no reconnect | **Pass in final sample** | [Final #37 matrix][network-result]. #51 remains a known integrity failure on an uncertain-reply rollback outside a successful planned move. This row does not gate content loss. The first soak's move content loss did not recur after [PR #132][udp-buffer-pr]. The remaining ordering race ([#127][move-loss]) is fixed by [PR #146][move-fix-pr] when the relay buffer is on. |
+| Planned move under `region` and `far-caller`: per track, at least 19 of 20 move gaps ≤ baseline p95 + 50 ms and ≤150 ms; zero decryption failures; no reconnect | **Pass in final sample** | [Final #37 matrix][network-result]. #51 remains a known integrity failure on an uncertain-reply rollback outside a successful planned move. This row does not gate content loss. The first soak's move content loss did not recur after [PR #132][udp-buffer-pr]. The remaining ordering race ([#127][move-loss]) is fixed by [PR #146][move-fix-pr] when the relay buffer is on. |
 | Takeover under `region` and `far-caller`: pause <2 s; no lost content with buffer; zero decryption failures; no reconnect | **Pass under the implemented lossy-link policy** | [Final #37 matrix][network-result]. [Profile rules][profiles] judge loss against the network baseline and burst guard; exact zero loss applies only to lossless media paths. |
 | Relay restart or standby: gap <1 s; no reconnect; pause → takeover → resume never creates two forwarders | **Pass** | [Main restart][restart-job] restore-on and [standby][standby-job] SIGKILL/SIGSTOP tables pass; old process dead before new readiness; zero duplicate media. Single-call loopback scope. |
 | Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample and 50-call full soak** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. [Passing full soak][soak-pass]: N+1 capacity validated at 50 calls with W=3 and no manual overrides; 424 call moves (moves and drains) and 893 takeovers lost 0 content; audio pause max 31 ms (moves) and 515 ms (takeovers). The [first full soak][soak-fail] lost one packet or frame per affected track in 9 of 432 move recoveries and 1 of 900 takeovers; that loss did not recur after [PR #132][udp-buffer-pr]. The planned-move ordering race ([#127][move-loss]) is fixed by [PR #146][move-fix-pr]. [#114][second-crash-flake], a harness second-crash failure under CPU starvation, was a test timing assumption ([PR #143][second-crash-fix]). |

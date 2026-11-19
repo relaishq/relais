@@ -138,9 +138,9 @@ func TestDistributedWindowRowsKeepPoolOnlyCauses(t *testing.T) {
 	call := r.Processes[0].Calls[0].Call
 	call.Distributed.ClockError = "first_content not proven throughout event-time interval; width=1ms"
 	call.Moves[0].Distributed.WindowOutcome = "inconclusive"
-	// The pool independently emits the same p95 reason. Removing window
+	// The pool independently emits the same move-gap reason. Removing window
 	// reasons by set membership would lose that pool-owned occurrence.
-	call.Moves[0].Distributed.Causes = []string{"audio move p95 policy not proven across clock interval", "audio move p95 policy not proven across clock interval"}
+	call.Moves[0].Distributed.Causes = []string{"audio move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves across clock interval", "audio move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves across clock interval"}
 	for i := 0; i < 20; i++ {
 		call.Moves[i].Distributed.Gaps[0].EventGap.Upper = 200 * time.Millisecond
 	}

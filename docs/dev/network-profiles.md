@@ -66,8 +66,9 @@ caller yardstick and other callers keep their existing windows.
 The run's baseline p95 pools these intervals across trials. It never compares
 against a separate LAN run or the old 416ms phase-1 median.
 
-Moves judge audio and video independently. Their nearest-rank p95 must be
-at most the pooled baseline p95 + 50ms and at most **150ms**, inclusive.
+Moves judge audio and video independently. Each track's move gap limit is
+the lower of the pooled baseline p95 + 50ms and **150ms**, inclusive. At most
+one move gap in each full 20 trials may exceed it.
 Takeovers require each track's pause strictly below **2s**. When every media
 link is lossless (currently `lan`), they require trusted **zero lost content**
 in #32's event window. Loss on any media link (currently `region`, `far-caller`
@@ -86,16 +87,19 @@ profiles deliberately lose packets. Invalid payload identities still fail,
 and unavailable decoding makes the row inconclusive. Takeover content loss
 still gates independently through the caller event window and its profile policy.
 
-Moves require **20 trials** for every profile. Nearest-rank p95 selects
-the 19th sorted value at 20 trials, so a single timing outlier does not become
-the p95. At ten trials, p95 selects the maximum. The move thresholds stay
-at baseline p95 + 50ms and the absolute 150ms ceiling. This sample count does
-not guarantee a precise population p95; all trials remain visible, and known
-integrity or connection failures in any trial still fail the run. Every move
-trial must also stay strictly below 2s, even when p95 excludes it.
+Moves require **20 trials** for every profile. A pass therefore means at
+least 19 of 20 move gaps per track were within the limit, so a single timing
+outlier does not fail the run. With fewer than 20 trials, every gap must be
+within it. The code computes the rule as a nearest-rank p95, which selects the
+19th of 20 sorted gaps; 20 trials cannot estimate a population percentile.
+Report move results as counts, for example "20 of 20 moves had an audio gap
+within the limit". All trials remain visible, and known integrity or connection
+failures in any trial still fail the run. Every move trial must also stay
+strictly below 2s, including a gap the one-in-20 allowance excludes.
 
-Takeovers retain **ten trials**. Their pause ceiling checks every trial,
-not the displayed p95, so one pause at or above 2s still fails acceptance.
+Takeovers retain **ten trials**. Their pause ceiling checks every trial: a
+pass means 10 of 10 takeovers paused for less than 2s, and one pause at or
+above 2s fails acceptance.
 Each track needs at least ten baseline intervals.
 A gap baseline p95-minus-median above 50ms makes the row inconclusive. This
 budget includes normal intra-frame packet bursts and video cadence. The
@@ -111,8 +115,8 @@ records `AudioSpreadMargin` and `VideoSpreadMargin`: the profile spread limit
 minus that track's content-age p95-minus-median. The run records
 `ContentAgeSpreadLimit`, also printed in `PROFILE_POLICY`.
 
-Known failures take precedence over unknown metrics. Rows carry conclusive, fail or inconclusive states and reasons; move p95
-judgment belongs to the full run, not each individual trial. The run reports `pass`, `fail`, or `inconclusive`; both
+Known failures take precedence over unknown metrics. Rows carry conclusive, fail or inconclusive states and reasons; the move-gap
+count belongs to the full run, not each individual trial. The run reports `pass`, `fail`, or `inconclusive`; both
 fail and inconclusive exit nonzero. A short developer run cannot pass the
 60-second consent gate. Too few trials, noisy baselines, untrusted loss,
 unavailable decoding or missing fault evidence are never silently passed.
@@ -210,7 +214,7 @@ and [netfilter drop verdict](https://github.com/torvalds/linux/blob/v6.8/net/net
 Media packets are not selected; the original barrier deadline is unchanged.
 The relay's new `relais_relay_barrier_resends_total` counter counts actual
 resend attempts. Both scenario baselines start after the preliminary move's full
-six-second settling window. Forced probes are excluded from profile p95;
+six-second settling window. Forced probes are excluded from the profile move-gap count;
 their measurements remain in the report, and whole-call integrity covers
 them. Each lossy-DC trial must have exactly two earlier **move** probes; every
 other profile must have zero. Any earlier crash takeover (`Kind == "takeover"`)
@@ -240,7 +244,7 @@ Each row retains the acceptance event's controller result in `event_result`,
 including total `Duration`, barrier `Drain`, `Export`, and `Resume` timings.
 Preliminary fault probes remain separate in `probe_events`. The
 `PROFILE_RESULT` summary names `slowest_trial`, selected by the largest audio
-or video gap, even if p95 excludes that outlier. It prints both gaps and
+or video gap, even if the one-in-20 allowance excludes that outlier. It prints both gaps and
 the event's phase timings. `slowest_other` is total duration minus barrier,
 export and resume: transfer, routing, release and coordination overhead
 combined. Detailed diagnostics time their private calls separately. Missing phase data is
@@ -261,8 +265,10 @@ profile-specific test failures cannot block its LAN trials. Platform-independent
 profile tests still run in the unit job; native profile tests run in the matrix.
 Each matrix lane builds as the ordinary user, then runs namespace tests and
 the driver as root. Each trial retains service logs, `caller-report.json` and
-`metrics.json`. JSON durations are nanoseconds; the log also prints the thresholds and p95s
-with readable units. Profile JSON results upload on every run; failures and
+`metrics.json`. JSON durations are nanoseconds; the log also prints the thresholds and the
+checked gaps with readable units. `audio_p95` and `video_p95` in
+`PROFILE_RESULT` are nearest-rank values: the 19th of 20 sorted move gaps, or
+the largest of ten takeover gaps. Profile JSON results upload on every run; failures and
 cancellations also upload all logs. Always-run leftover checks detect owned
 namespaces or links after teardown. Move jobs use 20 trials, a 35-minute
 driver timeout and a 45-minute job timeout. Takeovers retain ten trials,
@@ -306,7 +312,7 @@ Private DC routes use `rto_min 5ms quickack 1` by default. Disable with
 records `private_route_tuning`; enabled reports include observed route metrics.
 Host, caller and fabric routes remain unchanged.
 
-| Lossy DC move run (20 trials) | Tuning | Verdict | Caller audio gap | Audio / video gap p95 |
+| Lossy DC move run (20 trials) | Tuning | Verdict | Caller audio gap | Audio / video gap, 19th of 20 |
 | --- | --- | --- | --- | --- |
 | [38169245053](https://github.com/relaishq/relais/actions/runs/38169245053) | Off | Fail | 19 at 25–38ms; one at 253ms | 37.6 / 37.5ms |
 | [38169250273](https://github.com/relaishq/relais/actions/runs/38169250273) | On | Pass | All at 23–43ms | 43.1 / 47.0ms |

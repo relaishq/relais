@@ -162,7 +162,7 @@ func TestDistributedRunPoolsAcrossCallsAndAllowsMoveOutlier(t *testing.T) {
 	for _, row := range r.Yardstick {
 		require.Equal(t, "pass", row.Outcome, row)
 	}
-	// A second outlier changes pooled p95 and must fail the distributed row.
+	// A second outlier in 20 moves exceeds the one-per-20 allowance and must fail the distributed row.
 	calls[18].Call.Moves[0].Distributed.Gaps[0].EventGap = callharness.DurationInterval{Lower: 180 * time.Millisecond, Upper: 180 * time.Millisecond}
 	r.Judge()
 	require.Equal(t, "fail", r.Distributed.Outcome)

@@ -441,11 +441,13 @@ func JudgeDistributedTrials(moves []MoveReport) (string, []string) {
 		slices.Sort(p.possible)
 		baseline := baselineQuantileBounds(p.certain, p.possible, 95)
 		baselineLo, baselineHi := baseline.Lower, baseline.Upper
+		// Nearest-rank p95 of N move gaps is within the limit exactly when at
+		// most floor(N/20) gaps exceed it: none below 20 moves, one at 20-39.
 		lower, upper := durationP95(p.lower), durationP95(p.upper)
 		if lower > 150*time.Millisecond || lower > baselineHi+50*time.Millisecond {
-			fail(kind + " move p95 exceeds policy across clock interval")
+			fail(kind + " move gaps over 150ms or baseline p95+50ms in more than 1 per full 20 moves across clock interval")
 		} else if upper > 150*time.Millisecond || upper > baselineLo+50*time.Millisecond {
-			unknown(kind + " move p95 policy not proven across clock interval")
+			unknown(kind + " move gaps over 150ms or baseline p95+50ms may exceed 1 per full 20 moves across clock interval")
 		}
 	}
 	if moveCount < 20 || killCount < 10 {

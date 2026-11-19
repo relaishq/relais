@@ -180,15 +180,20 @@ For takeover, `kill_to_live` bounds the actual kill origin to identified live
 content received by the caller. Video requires decoded, non-repeated content;
 audio uses identified returned sends. It is not command-submission-to-RTP time.
 
-The final numeric trial policy uses pooled move-gap p95: at most pooled
-baseline p95 +50 ms and at most 150 ms. Every pause must remain below 2 seconds.
-At least 20 move trials and 10 takeover trials are required. A single move-gap
-outlier does not fail pooled p95 unless it changes that percentile. Per-event
+The final numeric trial policy counts pooled move gaps for each track. The
+gap limit is the lower of 150 ms and the pooled baseline p95 +50 ms. At most
+one move gap in each full 20 moves may exceed the limit: one in 20 to 39
+moves, none below 20 moves. The code computes this as a nearest-rank p95, but
+at these sample sizes that value is the second-largest or largest gap, not an
+estimate of a population percentile. Report results as counts, for example
+"19 of 20 moves had an audio gap within the limit; 10 of 10 takeovers paused
+for less than 2 s". Every pause must remain below 2 seconds. At least 20 move
+trials and 10 takeover trials are required. Per-event
 `distributed.outcome` is a window diagnostic; the final call's
 `distributed.outcome` applies counts/policy within that call. The load report
 `distributed.outcome` and its `distributed_window` rows pool trials **across all
 calls in the run**. The run requires one run ID. Per-event move outliers do not
-poison generator validity when pooled p95 passes. Gap baseline qualification
+poison generator validity when the pooled count passes. Gap baseline qualification
 uses a conservative p95 upper bound minus a median lower bound, at most 50 ms,
 rather than max-minus-min. One move and one kill cannot establish acceptance.
 
@@ -276,7 +281,7 @@ remain in the caller report.
 
 Unit tests cover interval composition/drift/overflow, jump rejection, all
 identity fields, failed/uncertain ingestion, retention, pass/fail/inconclusive
-windows, pooled p95, zero-interval equivalence, threshold straddles and interior
+windows, pooled move-gap counts, zero-interval equivalence, threshold straddles and interior
 non-monotonic classifications. The frontend integration test
 uses a real in-process relay/control/worker cluster and an external caller over
 trusted authenticated HTTPS. A three-second server clock skew is recovered by
