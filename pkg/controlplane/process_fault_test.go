@@ -247,7 +247,7 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	system.harness = h
 	return system
 }
-func flowingCall(t *testing.T, s *httpSystem, action func(context.Context, *callharness.Call)) *callharness.Report {
+func flowingCall(t testing.TB, s *httpSystem, action func(context.Context, *callharness.Call)) *callharness.Report {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -263,6 +263,7 @@ func flowingCall(t *testing.T, s *httpSystem, action func(context.Context, *call
 	observedUntil := time.Now()
 	report, err := call.Hangup(ctx)
 	require.NoError(t, err, "caller DELETE must still find its live recovered call")
+	logSRTPFailures(t, report)
 	require.True(t, report.ConnectedThroughout())
 	require.Zero(t, report.DecryptionFailures.Total())
 	require.Zero(t, report.ICERestarts)
@@ -276,6 +277,24 @@ func flowingCall(t *testing.T, s *httpSystem, action func(context.Context, *call
 	}
 	return report
 }
+
+// logSRTPFailures prints a diagnostics-enabled call's failure samples, so a
+// failed zero-failure assertion still shows which packets were rejected.
+func logSRTPFailures(t testing.TB, report *callharness.Report) {
+	t.Helper()
+	d := report.SRTPDiagnostics
+	if d == nil || report.DecryptionFailures.Total() == 0 && d.Failures.Total() == 0 {
+		return
+	}
+	t.Logf("caller decryption failures %+v; SRTP diagnostics ready=%t unavailable=%q packets=%d skipped=%d failures=%+v samples=%d omitted=%d",
+		report.DecryptionFailures, d.Ready, d.Unavailable, d.Packets, d.Skipped, d.Failures, len(d.Samples), d.SamplesOmitted)
+	for _, sample := range d.Samples {
+		encoded, err := json.Marshal(sample)
+		require.NoError(t, err)
+		t.Logf("SRTP failure sample: %s", encoded)
+	}
+}
+
 func TestHTTPTakeoverLostResumeReply(t *testing.T) {
 	for _, failure := range []error{context.DeadlineExceeded, errors.New("connection reset after commit")} {
 		t.Run(failure.Error(), func(t *testing.T) {
