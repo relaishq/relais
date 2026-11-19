@@ -4,7 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net"
+	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,4 +132,76 @@ func TestHTTPCallerCryptoDiagnostics(t *testing.T) {
 			}
 		}
 	})
+}
+
+// failureRecorder runs a helper up to its first failed assertion and keeps
+// the order of what it logged and reported.
+type failureRecorder struct {
+	testing.TB
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *failureRecorder) Helper() {}
+func (r *failureRecorder) Logf(format string, args ...any) {
+	r.record("log: " + fmt.Sprintf(format, args...))
+}
+func (r *failureRecorder) Errorf(format string, args ...any) {
+	r.record("error: " + fmt.Sprintf(format, args...))
+}
+func (r *failureRecorder) FailNow() { runtime.Goexit() }
+func (r *failureRecorder) record(event string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+// A diagnostics-enabled flowingCall with corrupted caller ciphertext must print
+// each failure sample before its zero-failure assertion stops the call (#474).
+func TestFlowingCallPrintsSRTPFailureSamples(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	wire := &corruptCryptoConn{PacketConn: conn, corrupted: make(map[string]corruptedCryptoPacket)}
+	s := newHTTPSystemWithSettings(t, nil, nil, nil, httpSystemSettings{
+		buffer: &relay.BufferConfig{}, diagnostics: true,
+		callerSocket: func() (net.PacketConn, error) { return wire, nil },
+	})
+	recorder := &failureRecorder{TB: t}
+	returned := make(chan bool, 1)
+	go func() {
+		ok := false
+		defer func() { returned <- ok }()
+		flowingCall(recorder, s, func(context.Context, *callharness.Call) {})
+		ok = true
+	}()
+	require.False(t, <-returned, "corrupted ciphertext must fail flowingCall")
+	recorder.mu.Lock()
+	events := slices.Clone(recorder.events)
+	recorder.mu.Unlock()
+	for _, event := range events {
+		t.Log(event)
+	}
+	failure := slices.IndexFunc(events, func(event string) bool { return strings.HasPrefix(event, "error: ") })
+	require.NotEqual(t, -1, failure)
+	require.Contains(t, events[failure], "Should be zero")
+	logged := make(map[string]bool)
+	for _, event := range events[:failure] {
+		encoded, found := strings.CutPrefix(event, "log: SRTP failure sample: ")
+		if !found {
+			continue
+		}
+		var sample callharness.SRTPFailureSample
+		require.NoError(t, json.Unmarshal([]byte(encoded), &sample))
+		require.NotZero(t, sample.SSRC)
+		require.NotEmpty(t, sample.Error)
+		logged[sample.CiphertextSHA256] = true
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	require.NotEmpty(t, wire.corrupted)
+	for kind, packet := range wire.corrupted {
+		digest := sha256.Sum256(packet.after)
+		require.True(t, logged[hex.EncodeToString(digest[:])], "printed sample for corrupted %s", kind)
+	}
 }
