@@ -29,6 +29,12 @@ type relayPlannedFailure struct{ error }
 
 func (e *relayPlannedFailure) Unwrap() error { return e.error }
 
+// relayCleanupFailure identifies old-relay cleanup that failed after the move
+// itself confirmed. A failed move or rollback never gets this classification.
+type relayCleanupFailure struct{ error }
+
+func (e *relayCleanupFailure) Unwrap() error { return e.error }
+
 type RelayBinding struct {
 	Slot           mediaworker.RelaySlot
 	Relay          Relay
@@ -281,7 +287,11 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 	if r, ok := old.(interface {
 		ForgetSessionTenure(context.Context, sessionstore.Lease) error
 	}); ok {
-		return errors.Join(err, r.ForgetSessionTenure(ctx, lease))
+		cleanupErr := r.ForgetSessionTenure(ctx, lease)
+		if err == nil && cleanupErr != nil {
+			return &relayCleanupFailure{cleanupErr}
+		}
+		return errors.Join(err, cleanupErr)
 	}
 	return err
 }
@@ -910,10 +920,18 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 			if relayDrainEnded(err) {
 				return true, err
 			}
+			readCtx := ctx
 			if ctx.Err() != nil {
+				// Cleanup can outlast the request after media has confirmed. Keep
+				// that outcome, with one bounded read independent of cancellation.
+				var cancel context.CancelFunc
+				readCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), privateapi.Timeout)
+				defer cancel()
+			}
+			after, open, confirmed, readErr := p.relayDrainState(readCtx, c.id)
+			if ctx.Err() != nil && (readErr != nil || open || !confirmed || after.Slot == slot) {
 				return true, ctx.Err()
 			}
-			after, open, confirmed, readErr := p.relayDrainState(ctx, c.id)
 			if errors.Is(readErr, sessionstore.ErrLeaseLost) {
 				return false, nil
 			}
@@ -926,7 +944,11 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 			if after.Slot != slot {
 				if confirmed {
 					res.To = after.Slot
-					return true, err // preserve a confirmed move's old-relay cleanup failure
+					var cleanup *relayCleanupFailure
+					if errors.As(err, &cleanup) {
+						return true, err
+					}
+					return true, nil // recovery supersedes a failed pick or planned attempt
 				}
 				return false, nil
 			}

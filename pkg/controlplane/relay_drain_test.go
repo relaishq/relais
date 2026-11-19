@@ -508,19 +508,26 @@ func TestRelayDrainRecoveryCommitsDuringObservation(t *testing.T) {
 		c, err := p.lookup(ids[0])
 		require.NoError(t, err)
 		observed := make(chan struct{})
+		var recoveryErr error
+		var committed sessionstore.RelayAssignment
 		store.afterRead = func() {
-			require.NoError(t, p.startRelayRecovery(context.Background(), c, false))
-			require.Equal(t, "r2", (<-w.committed).Slot)
+			defer close(observed)
+			recoveryErr = p.startRelayRecovery(context.Background(), c, false)
+			if recoveryErr != nil {
+				return
+			}
+			committed = <-w.committed
 			p.mu.Lock()
 			b := p.relaySet["r2"]
 			b.draining = true // no planned target remains after recovery's commit
 			p.relaySet["r2"] = b
 			p.mu.Unlock()
-			close(observed)
 		}
 		done := make(chan RelayDrainResult, 1)
 		go func() { done <- drainHTTP(t, p, context.Background()) }()
 		<-observed
+		require.NoError(t, recoveryErr)
+		require.Equal(t, "r2", committed.Slot)
 		synctest.Wait()
 		a, rec, err := store.RelayConfirmation(context.Background(), ids[0])
 		require.NoError(t, err)
@@ -542,6 +549,40 @@ func TestRelayDrainRecoveryCommitsDuringObservation(t *testing.T) {
 		require.False(t, returned, "post-attempt observation must not accept commit alone")
 		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
 		require.Equal(t, sessionstore.RelayEpisodeCompleted, episodeOf(t, store, ids[0]).Outcome)
+		require.EqualValues(t, 1, w.attempts.Load())
+	})
+}
+
+func TestRelayDrainConfirmedRecoveryDiscardsPickError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, ids := drainPlane(t, 1)
+		stopRelayRecoveries(t, p)
+		store := &drainObservationStore{Memory: p.store.(*sessionstore.Memory), confirmed: make(chan sessionstore.RelayAssignment, 4)}
+		p.store, w.store = store, store
+		w.committed = make(chan sessionstore.RelayAssignment, 1)
+		c, err := p.lookup(ids[0])
+		require.NoError(t, err)
+		var recoveryErr error
+		var committed, confirmed sessionstore.RelayAssignment
+		store.afterRead = func() {
+			recoveryErr = p.startRelayRecovery(context.Background(), c, false)
+			if recoveryErr != nil {
+				return
+			}
+			committed, confirmed = <-w.committed, <-store.confirmed
+			synctest.Wait()
+			p.mu.Lock()
+			b := p.relaySet["r2"]
+			b.draining = true // target selection fails after recovery has confirmed
+			p.relaySet["r2"] = b
+			p.mu.Unlock()
+		}
+		result, drainErr := p.drainRelay(context.Background(), "r1")
+		require.NoError(t, recoveryErr)
+		require.Equal(t, "r2", committed.Slot)
+		require.Equal(t, committed, confirmed)
+		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
+		require.NoError(t, drainErr, "a confirmed recovery supersedes target selection failure")
 		require.EqualValues(t, 1, w.attempts.Load())
 	})
 }
@@ -628,6 +669,97 @@ func TestRelayDrainReportsCleanupFailure(t *testing.T) {
 			})
 		})
 	}
+}
+
+type drainDeadlineCleanupRelay struct {
+	*fakeRelay
+	failure error
+	calls   int
+}
+
+func (r *drainDeadlineCleanupRelay) ForgetSessionTenure(ctx context.Context, _ sessionstore.Lease) error {
+	r.calls++
+	<-ctx.Done()
+	if r.failure != nil {
+		return r.failure
+	}
+	return ctx.Err()
+}
+
+func TestRelayDrainDeadlinePreservesConfirmedCleanupFailure(t *testing.T) {
+	for _, failure := range []error{context.DeadlineExceeded, errors.New("old relay cleanup failed")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				cleanup := &drainDeadlineCleanupRelay{fakeRelay: &fakeRelay{}, failure: failure}
+				b := p.relaySet["r1"]
+				b.Relay = cleanup
+				p.relaySet["r1"] = b
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				result, drainErr := p.drainRelay(ctx, "r1")
+				require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2", Error: failure.Error()}}, result.Moves)
+				require.ErrorIs(t, drainErr, failure)
+				require.Zero(t, result.NotMovable)
+				a, rec, err := confirmations(p.store).RelayConfirmation(context.Background(), ids[0])
+				require.NoError(t, err)
+				require.Equal(t, "r2", a.Slot)
+				require.True(t, rec.Confirmed(a))
+				require.False(t, rec.Episode.Open())
+				require.EqualValues(t, 1, w.attempts.Load(), "deadline must not repeat the media move")
+				require.Equal(t, 1, cleanup.calls)
+			})
+		})
+	}
+}
+
+// Cleanup errors keep their cause for both a confirmed move and a rollback.
+// A rollback must also retain the original planned failure.
+func TestRelayDrainChangeRelayCleanupOutcomes(t *testing.T) {
+	for _, rollback := range []bool{false, true} {
+		t.Run(map[bool]string{false: "move", true: "rollback"}[rollback], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				cleanupSlot, destination := "r1", "r2"
+				if rollback {
+					w.failures.Store(1)
+					cleanupSlot, destination = "r2", "r1"
+				}
+				cleanup := &retryTenureRelay{fakeRelay: &fakeRelay{}, failures: 1}
+				b := p.relaySet[cleanupSlot]
+				b.Relay = cleanup
+				p.relaySet[cleanupSlot] = b
+				err := p.ChangeRelay(context.Background(), ids[0], "r2")
+				require.ErrorIs(t, err, sessionstore.ErrTransient)
+				var cleanupErr *relayCleanupFailure
+				require.Equal(t, !rollback, errors.As(err, &cleanupErr), "only a confirmed move classifies its cleanup failure")
+				if rollback {
+					require.ErrorIs(t, err, ErrRelayRolledBack)
+					require.ErrorIs(t, err, w.failure)
+				} else {
+					require.EqualError(t, err, sessionstore.ErrTransient.Error())
+				}
+				require.Equal(t, destination, relayStatusOf(t, p, ids[0]).Slot)
+				require.EqualValues(t, 1, w.attempts.Load())
+				require.Equal(t, 1, cleanup.attempts)
+			})
+		})
+	}
+}
+
+func TestRelayDrainDeadlineKeepsUnmovedCall(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, ids := drainPlane(t, 1)
+		w.gate = make(chan struct{})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		result, err := p.drainRelay(ctx, "r1")
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", Error: context.DeadlineExceeded.Error()}}, result.Moves)
+		require.Zero(t, result.NotMovable)
+		require.Equal(t, "r1", relayStatusOf(t, p, ids[0]).Slot)
+		require.EqualValues(t, 1, w.attempts.Load())
+	})
 }
 
 func TestRelayDrainBackoffReleasesCapacity(t *testing.T) {
