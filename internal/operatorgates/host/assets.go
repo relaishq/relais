@@ -51,6 +51,17 @@ func IsPureRead(op string) bool {
 }
 
 func Process(operation string, parameters any, stage *Stage) (string, error) {
+	return process(operation, parameters, stage, IsPureRead(operation))
+}
+
+// RecoveryStatus renders control status for the failover recovery wait only.
+// Control status stays effectful: a reconcile can run before the read fails.
+// That wait accepts a definite failed read as a missing sample.
+func RecoveryStatus(parameters any) (string, error) {
+	return process("status", parameters, nil, true)
+}
+
+func process(operation string, parameters any, stage *Stage, readFailure bool) (string, error) {
 	if !slices.Contains(operations, operation) || !IsRead(operation) && stage == nil {
 		return "", fmt.Errorf("invalid fixed process step")
 	}
@@ -88,7 +99,7 @@ func Process(operation string, parameters any, stage *Stage) (string, error) {
 `, stage.Version, stage.Version, downloadArch, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ManifestSHA256, stage.Pool, stage.Operation)
 	}
 	failure := "except Exception:\n    emit({'kind':'unknown'})"
-	if IsPureRead(operation) {
+	if readFailure {
 		failure = "except Exception as error:\n    emit({'kind':'failed','code':read_failure(error)})"
 	}
 	return "python3 - <<'PY'\n" + source("preview_process.py") + "\n" + source("preview_telemetry.py") + fmt.Sprintf(`

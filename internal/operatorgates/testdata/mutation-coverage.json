@@ -747,7 +747,26 @@
     "rehearsal-setup-opening-unadjusted",
     "rehearsal-hosted-opening-probes-skipped",
     "rehearsal-convergence-history-discarded",
-    "rehearsal-final-falsification-retried"
+    "rehearsal-final-falsification-retried",
+    "recovery-status-script-unknown",
+    "recovery-status-script-unknown-gate",
+    "control-status-script-failed",
+    "recovery-status-failed-unknown",
+    "recovery-status-failed-unknown-step",
+    "status-opt-in-every-step",
+    "status-opt-in-every-step-gate",
+    "measure-observe-opts-in",
+    "recovery-observe-unwired",
+    "failover-status-read-fatal",
+    "failover-status-read-fatal-deadline",
+    "failover-any-read-missing-sample",
+    "failover-recovery-plain-observe",
+    "failover-status-read-retained",
+    "failover-status-read-uncounted",
+    "failover-status-read-uncounted-deadline",
+    "failover-status-read-result-dropped",
+    "failover-status-read-unpublished",
+    "failed-status-reads-negative-accepted"
   ],
   "killed": [
     {
@@ -6091,6 +6110,120 @@
       "id": "rehearsal-final-falsification-retried",
       "test": "TestRehearsalClockSelectionFalsificationPrecedesLaterCause/clock-select-growth",
       "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-script-unknown",
+      "test": "TestRecoveryStatusReportsFailedRead",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-script-unknown-gate",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "control-status-script-failed",
+      "test": "TestControlStatusFailureStaysUnknown",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-failed-unknown",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-failed-unknown-step",
+      "test": "TestStatusFailedEnvelopeNeedsRecoveryOptIn/true",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "status-opt-in-every-step",
+      "test": "TestStatusFailedEnvelopeNeedsRecoveryOptIn/false",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "status-opt-in-every-step-gate",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measure-observe-opts-in",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-observe-unwired",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-fatal",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-fatal-deadline",
+      "test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-any-read-missing-sample",
+      "test": "TestFailoverRecoveryStatusOutcomesUnchanged/worker-status-failed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-recovery-plain-observe",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-retained",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-uncounted",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-uncounted-deadline",
+      "test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-result-dropped",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-unpublished",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failed-status-reads-negative-accepted",
+      "test": "TestProcessEvidenceFailedStatusReads",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

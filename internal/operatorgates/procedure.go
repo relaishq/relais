@@ -85,6 +85,9 @@ type ProcessExtra struct {
 	Owner      string   `json:"owner,omitempty"`
 	Epoch      uint64   `json:"epoch,omitempty"`
 	Sessions   []string `json:"sessions,omitempty"`
+	// RecoveryStatus is the failover recovery wait's opt-in for control status.
+	// It changes only the script's failure branch, never its parameters.
+	RecoveryStatus bool `json:"-"`
 }
 type WorkerEndpoint struct {
 	HTTP  string         `json:"http"`
@@ -168,6 +171,9 @@ type ProcessEvidence struct {
 	ExcludedKills             int     `json:"excludedKills,omitempty"`
 	KillReplacements          int     `json:"killReplacements,omitempty"`
 	KillReplacementSkipped    string  `json:"killReplacementSkipped,omitempty"`
+	// FailedStatusReads counts definite failed control status reads in the
+	// failover recovery wait. They are missing samples, not incomplete steps.
+	FailedStatusReads int `json:"failedStatusReads,omitempty"`
 	// ExpiredWait names the polling wait that the gate budget ended, if any.
 	ExpiredWait *WaitDiagnostic `json:"expiredWait,omitempty"`
 }

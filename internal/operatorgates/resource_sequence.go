@@ -399,8 +399,18 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 
 // Observe retains the product's own status and independent local inventories.
 func (r *ProcessRuntime) Observe(ctx context.Context, end time.Duration) (MeasurementObservation, error) {
+	return r.observe(ctx, end, ProcessExtra{})
+}
+
+// ObserveRecovery is Observe for the failover recovery wait. Its control status
+// read reports a definite host failure instead of an unknown result.
+func (r *ProcessRuntime) ObserveRecovery(ctx context.Context, end time.Duration) (MeasurementObservation, error) {
+	return r.observe(ctx, end, ProcessExtra{RecoveryStatus: true})
+}
+
+func (r *ProcessRuntime) observe(ctx context.Context, end time.Duration, statusExtra ProcessExtra) (MeasurementObservation, error) {
 	out := MeasurementObservation{At: r.Session.clock.Wall(), Hosts: map[string]HostTelemetry{}, Local: map[string]mediaworker.WorkerStatus{}}
-	status, err := r.Step(ctx, "status", "shared", end, ProcessExtra{})
+	status, err := r.Step(ctx, "status", "shared", end, statusExtra)
 	if err != nil {
 		return out, err
 	}
@@ -475,5 +485,5 @@ func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime,
 
 // measureProcedureResult projects measurement outcomes into sequence accounting.
 func measureProcedureResult(m MeasureResult) ProcedureResult {
-	return ProcedureResult{Completed: m.Completed, ProcedureReason: m.Measurement.ErrorReason, Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{CompletedSteps: m.CompletedSteps, ExpiredWait: m.ExpiredWait}}
+	return ProcedureResult{Completed: m.Completed, ProcedureReason: m.Measurement.ErrorReason, Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{CompletedSteps: m.CompletedSteps, ExpiredWait: m.ExpiredWait, FailedStatusReads: m.FailedStatusReads}}
 }
