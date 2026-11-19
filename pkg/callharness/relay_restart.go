@@ -149,7 +149,11 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 				gatherComplete()
 			}
 		})
+		// Odd only while CreateOffer restarts the ICE agent: a reused offer
+		// (above) restarts nothing, so it opens no window (see restartRaced).
+		c.iceRestarts.Add(1)
 		offer, err := c.pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
+		c.iceRestarts.Add(1)
 		if err != nil {
 			return err
 		}

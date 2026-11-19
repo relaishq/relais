@@ -2,6 +2,9 @@ package callharness
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,9 +34,10 @@ func TestRelayDrainLive(t *testing.T) {
 			_, e := c.Hangup(ctx)
 			require.NoError(t, e)
 		}
+		watch := watchRelayAttempts(store, calls)
 		sent := make(chan error, 8)
 		for _, c := range calls {
-			go func() { sent <- c.SendMedia(ctx, 5*time.Second) }()
+			go func() { sent <- watch.sendMedia(ctx, c, 5*time.Second) }()
 		}
 		time.Sleep(time.Second)
 		baselines := map[*Call]*Report{}
@@ -45,7 +49,9 @@ func TestRelayDrainLive(t *testing.T) {
 			DrainRelay(context.Context, string) error
 		})
 		require.True(t, ok, "one drain must change eight calls")
-		require.NoError(t, drain.DrainRelay(ctx, "r1"))
+		err := drain.DrainRelay(ctx, "r1")
+		watch.stop()
+		require.NoError(t, err, "drain evidence:\n%s", watch.evidence(calls, start))
 		time.Sleep(time.Second)
 		old := relays[0].Stats().WorkerPackets
 		time.Sleep(100 * time.Millisecond)
@@ -105,4 +111,103 @@ func TestRelayDrainLive(t *testing.T) {
 		_, e = c.Hangup(ctx)
 		require.NoError(t, e)
 	})
+}
+
+// relayAttemptWatch saves each call's durable relay attempts while a drain
+// runs. A drain that fails starts recovery, which replaces the failed attempt
+// in the store, so the saved copy is the only record of its evidence.
+type relayAttemptWatch struct {
+	mu       sync.Mutex
+	attempts map[string]map[uint64]sessionstore.RelayAttempt
+	sends    map[*Call]string
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+func watchRelayAttempts(store sessionstore.Store, calls []*Call) *relayAttemptWatch {
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &relayAttemptWatch{attempts: map[string]map[uint64]sessionstore.RelayAttempt{}, sends: map[*Call]string{}, cancel: cancel, done: make(chan struct{})}
+	confirmations := store.(sessionstore.RelayConfirmations)
+	go func() {
+		defer close(w.done)
+		tick := time.NewTicker(50 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			for _, c := range calls {
+				if _, rec, err := confirmations.RelayConfirmation(ctx, c.SessionID()); err == nil && rec.Attempt != nil {
+					w.mu.Lock()
+					if w.attempts[c.SessionID()] == nil {
+						w.attempts[c.SessionID()] = map[uint64]sessionstore.RelayAttempt{}
+					}
+					w.attempts[c.SessionID()][rec.Attempt.Generation] = *rec.Attempt
+					w.mu.Unlock()
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	return w
+}
+
+func (w *relayAttemptWatch) stop() { w.cancel(); <-w.done }
+
+// sendMedia runs c.SendMedia and saves its result for the evidence.
+func (w *relayAttemptWatch) sendMedia(ctx context.Context, c *Call, d time.Duration) error {
+	w.mu.Lock()
+	w.sends[c] = "running"
+	w.mu.Unlock()
+	err := c.SendMedia(ctx, d)
+	w.mu.Lock()
+	w.sends[c] = fmt.Sprint(err)
+	w.mu.Unlock()
+	return err
+}
+
+// evidence names, per call, what the caller sent and received and what
+// control saved: the caller's media send result, its packets per track after
+// the attempt's observed switch commit, its selected relay address and
+// generation, and each attempt's phase, required and delivered MIDs. Times
+// are relative to the drain start.
+func (w *relayAttemptWatch) evidence(calls []*Call, start time.Time) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var b strings.Builder
+	for _, c := range calls {
+		c.relayRestartMu.Lock()
+		generation := c.relayGeneration
+		c.relayRestartMu.Unlock()
+		c.mu.Lock()
+		restartErr := c.restartErr
+		c.mu.Unlock()
+		fmt.Fprintf(&b, "call=%s caller_generation=%d selected=%s restart_err=%v send=%s\n", c.SessionID(), generation, c.selectedRemoteAddr(), restartErr, w.sends[c])
+		var commit time.Time
+		for g := uint64(0); g <= generation+2; g++ {
+			t, ok := w.attempts[c.SessionID()][g]
+			if !ok {
+				continue
+			}
+			if commit.IsZero() {
+				commit = t.CommitAt
+			}
+			at := "none"
+			if !t.CommitAt.IsZero() {
+				at = t.CommitAt.Sub(start).Round(time.Millisecond).String()
+			}
+			fmt.Fprintf(&b, "  attempt generation=%d slot=%s phase=%s kind=%s commit_at=+%s required=%v delivered=%v decoded=%v\n", t.Generation, t.Slot, t.Phase, t.Kind, at, t.Required, t.Delivered, t.Decoded)
+		}
+		for _, track := range c.rec.report().Tracks {
+			after := 0
+			for _, arrival := range track.Arrivals {
+				if !commit.IsZero() && c.rec.start.Add(arrival).After(commit) {
+					after++
+				}
+			}
+			fmt.Fprintf(&b, "  caller track=%s packets=%d after_commit=%d last_arrival=+%s\n", track.Kind, track.Packets, after, c.rec.start.Add(track.LastArrival).Sub(start).Round(time.Millisecond))
+		}
+	}
+	return b.String()
 }

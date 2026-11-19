@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -111,6 +113,9 @@ type Call struct {
 	inboundMedia      atomic.Pointer[time.Time]
 	liveMedia         atomic.Bool
 	iceStalled        atomic.Bool
+	// iceRestarts is odd while CreateOffer restarts the caller's ICE agent;
+	// it advances once on entry and once on return (see restartRaced).
+	iceRestarts atomic.Uint64
 
 	eventsCancel context.CancelFunc
 	restartErr   error
@@ -520,11 +525,15 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 		if err != nil {
 			return err
 		}
+		restarts := c.iceRestarts.Load()
 		if err := c.audio.WriteSample(media.Sample{Data: frame, Duration: frameDuration}); err != nil {
-			return fmt.Errorf("callharness: send audio: %w", err)
+			if !c.restartRaced(err, restarts) {
+				return fmt.Errorf("callharness: send audio: %w", err)
+			}
+		} else {
+			c.rec.sent(kindAudio, false)
+			pacer.sentFrame()
 		}
-		c.rec.sent(kindAudio, false)
-		pacer.sentFrame()
 
 		select {
 		case <-ctx.Done():
@@ -535,6 +544,37 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 	}
 
 	return nil
+}
+
+// restartRaced reports a media write that failed only because the caller's
+// own ICE restart overlapped it: Pion's Agent.Restart closes the old pair's
+// connection, and a write that already chose that pair fails with
+// io.ErrClosedPipe. A browser keeps sending through its ICE restart, so the
+// caller drops that frame (it is not counted as sent) and continues. restarts
+// is iceRestarts read before the write. Any other failure, a closed pipe
+// joined with any other error, or a closed pipe outside a restart, still
+// ends the send.
+func (c *Call) restartRaced(err error, restarts uint64) bool {
+	return onlyClosedPipe(err) && (restarts%2 == 1 || c.iceRestarts.Load() != restarts)
+}
+
+// onlyClosedPipe reports an error made only of io.ErrClosedPipe. WriteSample
+// joins its per-packet errors into one value that matches io.ErrClosedPipe
+// when any part does, and does not expose the parts; its message has one
+// line per part, so every line must be the closed-pipe message. This is a
+// narrow check for the pinned Pion stale-pair path, which returns the bare
+// sentinel: a wrapped closed pipe with extra text fails closed (the send ends),
+// and an unrelated error whose text equals the sentinel's is not told apart.
+func onlyClosedPipe(err error) bool {
+	if !errors.Is(err, io.ErrClosedPipe) {
+		return false
+	}
+	for _, line := range strings.Split(err.Error(), "\n") {
+		if line != io.ErrClosedPipe.Error() {
+			return false
+		}
+	}
+	return true
 }
 
 // sendVideo sends one VP8 frame per frame interval. When the worker asks for
@@ -574,11 +614,15 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 			return err
 		}
 		frame = c.rec.sendingVideo(frame, requestedAt, src.frameDuration) // records the observable PictureID before writing
+		restarts := c.iceRestarts.Load()
 		if err := c.video.WriteSample(media.Sample{Data: frame, Duration: src.frameDuration}); err != nil {
-			return fmt.Errorf("callharness: send video: %w", err)
+			if !c.restartRaced(err, restarts) {
+				return fmt.Errorf("callharness: send video: %w", err)
+			}
+		} else {
+			c.rec.sent(kindVideo, keyframe)
+			pacer.sentFrame()
 		}
-		c.rec.sent(kindVideo, keyframe)
-		pacer.sentFrame()
 
 		select {
 		case <-ctx.Done():

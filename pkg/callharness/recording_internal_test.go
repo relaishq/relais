@@ -61,6 +61,7 @@ func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 	if testing.Short() {
 		first, end = 32500, 33300
 		r.sentVideo.Frames = first
+		r.videoAttempts = uint64(first)
 		for i := 0; i < first; i++ {
 			payloader.Payload(1000, []byte{1})
 		}
