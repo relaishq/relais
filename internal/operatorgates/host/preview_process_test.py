@@ -5,6 +5,8 @@ import copy
 import hashlib
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -69,6 +71,39 @@ class Transcript:
 
 
 class ProcessTests(unittest.TestCase):
+    def test_service_journals_bounded_private_tail(self):
+        popen = subprocess.Popen
+        commands = []
+        def start(args, **kwargs):
+            commands.append(args)
+            return popen([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x'*20000+b'private journal tail')"], **kwargs)
+        with patch.object(host.subprocess, "Popen", start):
+            result = host.execute("service-journals", {})
+        self.assertEqual(commands, [["journalctl", "--unit=relais-*.service", "--lines=300", "--no-pager", "--output=short-iso"]])
+        self.assertTrue(result["truncated"])
+        self.assertEqual(len(result["tail"].encode()), 12000)
+        self.assertTrue(result["tail"].endswith("private journal tail"))
+
+    def test_service_journals_failure_stays_read_failure(self):
+        popen = subprocess.Popen
+        with patch.object(host.subprocess, "Popen", lambda args, **kwargs: popen([sys.executable, "-c", "raise SystemExit(3)"], **kwargs)):
+            with self.assertRaises(subprocess.CalledProcessError):
+                host.execute("service-journals", {})
+
+    def test_service_journals_timeout_reaps_reader(self):
+        popen, children = subprocess.Popen, []
+        def start(args, **kwargs):
+            child = popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE, **kwargs)
+            children.append(child)
+            return child
+        with patch.object(host.subprocess, "Popen", start), patch.object(host.selectors, "DefaultSelector") as selector:
+            selector.return_value.__enter__.return_value.select.return_value = []
+            with self.assertRaises(TimeoutError):
+                host.execute("service-journals", {})
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].returncode)
+        children[0].stdin.close()
+
     def run_step(self, op, transcript=None):
         t = transcript or Transcript()
         opened, sent, closed = t.signals()
@@ -293,6 +328,19 @@ class InventoryTests(unittest.TestCase):
 
 
 class TrialTests(unittest.TestCase):
+    def test_unknown_move_records_inflight_phase(self):
+        for phase in ("status", "post"):
+            evidence, log = {}, []
+            def http(url, method="GET"):
+                log.append(method)
+                if phase == "status" or method == "POST":
+                    raise TimeoutError("private error must not be emitted")
+                return {"calls": [{"id": "one", "owner": "w1", "lease_epoch": 7}]}
+            with self.subTest(phase=phase), patch.object(host, "http", http), self.assertRaises(TimeoutError):
+                host.execute("move", dict(P, worker="w2", session="one", owner="w1", epoch=7), evidence)
+            self.assertEqual(evidence, {"phase": phase})
+            self.assertEqual(log, ["GET"] if phase == "status" else ["GET", "POST"])
+
     def test_move_checks_real_owner_epoch_then_posts_once(self):
         p = dict(P, worker="w2", session="one", owner="w1", epoch=7)
         log = []
