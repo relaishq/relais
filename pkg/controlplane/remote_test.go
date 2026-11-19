@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -178,35 +180,107 @@ func TestRemoteErrorsAndTimeouts(t *testing.T) {
 	require.ErrorAs(t, err, &transient)
 	require.Equal(t, &candidate, transient.Candidate)
 	server.Close()
-	var attempts atomic.Int32
-	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { attempts.Add(1); time.Sleep(60 * time.Millisecond) }))
-	defer slow.Close()
-	client := &http.Client{Timeout: 20 * time.Millisecond}
-	worker := &RemoteWorker{URL: slow.URL, Client: client}
-	_, _, err = worker.CreateSession(context.Background(), "offer")
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.ErrorIs(t, worker.EndSession("call"), context.DeadlineExceeded)
-	_, err = worker.ExportSession("call")
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	_, err = worker.ResumeSession(nil, mediaworker.ResumeOptions{})
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	_, err = worker.Status(context.Background())
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	r := &RemoteRelay{URL: slow.URL, Client: client}
-	require.ErrorIs(t, r.HoldSession(context.Background(), "call", netip.AddrPort{}), context.DeadlineExceeded)
-	require.ErrorIs(t, r.MoveSession("call", netip.AddrPort{}, netip.AddrPort{}), context.DeadlineExceeded)
-	_, err = r.ReleaseSession("call", netip.AddrPort{})
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.ErrorIs(t, r.Forget(context.Background(), "call"), context.DeadlineExceeded)
-	require.ErrorIs(t, r.AddWorker(context.Background(), netip.AddrPort{}), context.DeadlineExceeded)
-	require.ErrorIs(t, r.RemoveWorker(context.Background(), netip.AddrPort{}), context.DeadlineExceeded)
-	_, err = r.Status(context.Background())
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	ctx, cancel := context.WithCancel(context.Background())
+	// A stalled first dial stands in for a loaded machine: without
+	// handlerFirst the client times out before that request reaches the
+	// handler, and the count below drops to 11.
+	for _, stall := range []time.Duration{0, 100 * time.Millisecond} {
+		t.Run("timeouts/first_dial_stall="+stall.String(), func(t *testing.T) {
+			var attempts atomic.Int32
+			reached := make(chan struct{}, 1)
+			slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				// The server sees the client hang up only after the body is read.
+				_, _ = io.Copy(io.Discard, r.Body)
+				select {
+				case reached <- struct{}{}:
+				case <-r.Context().Done():
+				}
+				<-r.Context().Done()
+			}))
+			defer slow.Close()
+			var dials atomic.Int32
+			base := &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if dials.Add(1) == 1 {
+					time.Sleep(stall)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, addr)
+			}}
+			defer base.CloseIdleConnections()
+			client := &http.Client{Timeout: 20 * time.Millisecond, Transport: handlerFirst{t: t, base: base, reached: reached}}
+			worker := &RemoteWorker{URL: slow.URL, Client: client}
+			_, _, err := worker.CreateSession(context.Background(), "offer")
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.ErrorIs(t, worker.EndSession("call"), context.DeadlineExceeded)
+			_, err = worker.ExportSession("call")
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			_, err = worker.ResumeSession(nil, mediaworker.ResumeOptions{})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			_, err = worker.Status(context.Background())
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			r := &RemoteRelay{URL: slow.URL, Client: client}
+			require.ErrorIs(t, r.HoldSession(context.Background(), "call", netip.AddrPort{}), context.DeadlineExceeded)
+			require.ErrorIs(t, r.MoveSession("call", netip.AddrPort{}, netip.AddrPort{}), context.DeadlineExceeded)
+			_, err = r.ReleaseSession("call", netip.AddrPort{})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.ErrorIs(t, r.Forget(context.Background(), "call"), context.DeadlineExceeded)
+			require.ErrorIs(t, r.AddWorker(context.Background(), netip.AddrPort{}), context.DeadlineExceeded)
+			require.ErrorIs(t, r.RemoveWorker(context.Background(), netip.AddrPort{}), context.DeadlineExceeded)
+			_, err = r.Status(context.Background())
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.EqualValues(t, 12, attempts.Load(), "mutations must not retry after a lost response")
+			// Every handler above has started, so the count is settled. This
+			// client has no handlerFirst and must send nothing.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			worker.Client = &http.Client{Timeout: 20 * time.Millisecond, Transport: base}
+			_, err = worker.ResumeSession(nil, mediaworker.ResumeOptions{Context: ctx})
+			require.ErrorIs(t, err, context.Canceled)
+			require.EqualValues(t, 12, attempts.Load(), "a cancelled call must send no request")
+		})
+	}
+}
+
+// handlerFirst lets the client's own timeout end a request only after the
+// server handler has received it. The handler count then equals the
+// requests sent, whatever the load: a slow dial delays the request but
+// cannot drop it. The client still sees its own timeout error, so the
+// request must end only through that timeout: any other transport result,
+// such as a reset or EOF, fails the test here, before http.Client can
+// rewrite it as a timeout.
+type handlerFirst struct {
+	t       testing.TB
+	base    http.RoundTripper
+	reached <-chan struct{}
+}
+
+func (h handlerFirst) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(req.Context()))
+	defer cancel()
+	forwarded := req.WithContext(ctx)
+	//nolint:staticcheck // SA1019: http.Client also signals its timeout on Cancel.
+	forwarded.Cancel = nil
+	result := make(chan error, 1)
+	go func() {
+		resp, err := h.base.RoundTrip(forwarded)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		result <- err
+	}()
+	select {
+	case <-h.reached:
+	case err := <-result:
+		// Only this helper cancels forwarded, and only below, so any result
+		// here ended some other way.
+		h.t.Errorf("%s %s ended by %v before the handler signalled", req.Method, req.URL.Path, err)
+		return nil, errors.Join(errors.New("request ended before the handler signalled"), err)
+	}
+	<-req.Context().Done()
 	cancel()
-	_, err = worker.ResumeSession(nil, mediaworker.ResumeOptions{Context: ctx})
-	require.ErrorIs(t, err, context.Canceled)
-	require.EqualValues(t, 12, attempts.Load(), "mutations must not retry after a lost response")
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		h.t.Errorf("%s %s ended by %v, not by the client timeout", req.Method, req.URL.Path, err)
+	}
+	return nil, req.Context().Err()
 }
 
 func TestHTTPResumeExhaustionIsTerminal(t *testing.T) {
