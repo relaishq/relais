@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -112,9 +113,8 @@ type Call struct {
 	inboundMedia      atomic.Pointer[time.Time]
 	liveMedia         atomic.Bool
 	iceStalled        atomic.Bool
-	// iceRestarts is odd while the caller restarts its ICE agent; it
-	// advances when the restart starts and once CreateOffer has restarted
-	// the agent (see restartRaced).
+	// iceRestarts is odd while CreateOffer restarts the caller's ICE agent;
+	// it advances once on entry and once on return (see restartRaced).
 	iceRestarts atomic.Uint64
 
 	eventsCancel context.CancelFunc
@@ -551,10 +551,27 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 // connection, and a write that already chose that pair fails with
 // io.ErrClosedPipe. A browser keeps sending through its ICE restart, so the
 // caller drops that frame (it is not counted as sent) and continues. restarts
-// is iceRestarts read before the write. Any other failure, or a closed pipe
-// outside a restart, still ends the send.
+// is iceRestarts read before the write. Any other failure, a closed pipe
+// joined with any other error, or a closed pipe outside a restart, still
+// ends the send.
 func (c *Call) restartRaced(err error, restarts uint64) bool {
-	return errors.Is(err, io.ErrClosedPipe) && (restarts%2 == 1 || c.iceRestarts.Load() != restarts)
+	return onlyClosedPipe(err) && (restarts%2 == 1 || c.iceRestarts.Load() != restarts)
+}
+
+// onlyClosedPipe reports an error made only of io.ErrClosedPipe. WriteSample
+// joins its per-packet errors into one value that matches io.ErrClosedPipe
+// when any part does, and does not expose the parts; its message has one
+// line per part, so every line must be the closed-pipe message.
+func onlyClosedPipe(err error) bool {
+	if !errors.Is(err, io.ErrClosedPipe) {
+		return false
+	}
+	for _, line := range strings.Split(err.Error(), "\n") {
+		if line != io.ErrClosedPipe.Error() {
+			return false
+		}
+	}
+	return true
 }
 
 // sendVideo sends one VP8 frame per frame interval. When the worker asks for

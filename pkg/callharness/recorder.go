@@ -63,6 +63,7 @@ type recorder struct {
 	// history; event summaries retain their finite observation horizon.
 	sentAudio             SentTrack
 	sentVideo             SentTrack
+	videoAttempts         uint64 // video frames identified for sending, written or not
 	sentFrames            map[string]map[string]struct{}
 	firstVideoSentAt      time.Duration
 	sentVideoFrames       map[uint16]sentVideoFrame
@@ -287,7 +288,7 @@ func (r *recorder) sent(kind string, keyframe bool) {
 		track = &r.sentVideo
 	}
 	if kind == kindVideo {
-		id := uint16(track.Frames & 0x7fff)
+		id := uint16((r.videoAttempts - 1) & 0x7fff) // the frame sendingVideo identified last
 		source := r.sentVideoFrames[id]
 		source.written = true
 		r.sentVideoFrames[id] = source

@@ -58,15 +58,19 @@ type sentVideoFrame struct {
 func (r *recorder) sendingVideo(frame []byte, request *keyframeResponseRequest, interval time.Duration) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	identity := uint64(r.sentVideo.Frames)
+	// Identities count attempted frames: Pion's payloader advances the
+	// PictureID for every frame it packetizes, written or not, so a frame
+	// whose write failed still consumes its identity.
+	identity := r.videoAttempts
+	r.videoAttempts++
 	frame = identifyVP8(frame, identity)
 	data := string(frame)
 	r.sentFrames[kindVideo][data] = struct{}{}
-	if r.sentVideo.Frames == 0 {
+	if identity == 0 {
 		r.firstVideoSentAt = r.since(time.Now())
 	}
-	id := uint16(r.sentVideo.Frames & 0x7fff)
-	r.sentVideoFrames[id] = sentVideoFrame{identity: uint64(r.sentVideo.Frames), at: r.since(time.Now()), data: data, pli: request != nil, duration: interval}
+	id := uint16(identity & 0x7fff)
+	r.sentVideoFrames[id] = sentVideoFrame{identity: identity, at: r.since(time.Now()), data: data, pli: request != nil, duration: interval}
 	r.videoSends = append(r.videoSends, evidenceRef{at: r.sentVideoFrames[id].at, video: id, generation: identity})
 	if request != nil {
 		source := r.sentVideoFrames[id]

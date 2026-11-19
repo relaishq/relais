@@ -130,12 +130,6 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 	parent := ctx
 	ctx, cancel := context.WithDeadline(ctx, event.Deadline)
 	defer cancel()
-	// iceRestarts is odd from here until CreateOffer has restarted the ICE
-	// agent: a media write that fails with a closed pipe meanwhile raced
-	// this restart (see restartRaced).
-	c.iceRestarts.Add(1)
-	restarted := sync.OnceFunc(func() { c.iceRestarts.Add(1) })
-	defer restarted()
 	if relaytrace.Enabled() {
 		relaytrace.Emit("offer-start-pair", c.selectedRemoteAddr(), nil)
 	}
@@ -155,8 +149,11 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 				gatherComplete()
 			}
 		})
+		// Odd only while CreateOffer restarts the ICE agent: a reused offer
+		// (above) restarts nothing, so it opens no window (see restartRaced).
+		c.iceRestarts.Add(1)
 		offer, err := c.pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
-		restarted()
+		c.iceRestarts.Add(1)
 		if err != nil {
 			return err
 		}
