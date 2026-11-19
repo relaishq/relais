@@ -182,7 +182,7 @@ func TestActiveGateDeadlineBeforeEffect(t *testing.T) {
 func TestExchangeWaitUsesClampedEnd(t *testing.T) {
 	s, c := fixtureSession(t)
 	_, _ = s.BeginGate()
-	c.Advance(19 * time.Minute)
+	c.Advance(GateMaximum - time.Minute)
 	p := &responsePeer{response: operator.Reply{Transport: operator.Succeeded, ExitCode: new(int)}}
 	out, err := s.Exchange(context.Background(), p, operator.HostExecute, "shared", "move", nil, nil, SessionMaximum, func(operator.Reply) operator.Certainty { return operator.Succeeded })
 	if err != nil || out != operator.Succeeded {

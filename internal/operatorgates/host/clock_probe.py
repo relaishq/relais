@@ -119,7 +119,8 @@ def main():
     args = parser.parse_args()
     address, port = args.listen.rsplit(':', 1)
     targets = peers(args.peer)
-    if not 1 <= args.seconds <= 6300 or bool(targets) != bool(args.output):
+    # Match operatorrehearsal.rehearsalHelperMaximum (180 minutes).
+    if not 1 <= args.seconds <= 10800 or bool(targets) != bool(args.output):
         raise ValueError('invalid clock helper configuration')
     server = http.server.HTTPServer((private_ip(address), int(port)), ClockHandler)
     stop = threading.Event()

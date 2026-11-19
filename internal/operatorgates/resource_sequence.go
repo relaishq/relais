@@ -82,20 +82,23 @@ func (r ResourceRunner) validate(s *Session) error {
 	}
 	data, err := os.ReadFile(c.JudgeBinary)
 	sum := sha256.Sum256(data)
-	if err != nil || hex.EncodeToString(sum[:]) != s.scenario.Judge.SHA256 || s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit || s.scenario.Judge.SourceCommit != c.Pins[0].Commit {
+	if err != nil || hex.EncodeToString(sum[:]) != s.scenario.Judge.SHA256 || s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit {
 		return errors.New("invalid-resource-config")
 	}
 	return nil
 }
 func CampaignDuration(g operator.Gate) time.Duration {
-	if g == operator.RelayDeploy {
+	switch g {
+	case operator.Rollout, operator.ControlRestart, operator.UpgradeRollback:
+		return 1500 * time.Second
+	case operator.RelayDeploy:
 		return 600 * time.Second
 	}
 	return 1020 * time.Second
 }
 
-const callerCollectionReserve = time.Minute
-const callerStopReserve = time.Minute
+const callerCollectionReserve = 2 * time.Minute
+const callerStopReserve = 2 * time.Minute
 
 func CampaignMinimum(g operator.Gate) time.Duration {
 	return CampaignDuration(g) + time.Minute + callerCollectionReserve + callerStopReserve
@@ -341,7 +344,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 					out = runResourceAdmission(ctx, s, runtime, caller, boundary, launchers, end, c.Token, &result)
 				case operator.Failover:
 					m := RunMeasureGate(ctx, gate, process, runtime.measurePorts(caller, 1), end)
-					out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{ExpiredWait: m.ExpiredWait}}
+					out = measureProcedureResult(m)
 				default:
 					out = RunProcessGate(ctx, gate, process, p, end)
 				}
@@ -396,8 +399,18 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 
 // Observe retains the product's own status and independent local inventories.
 func (r *ProcessRuntime) Observe(ctx context.Context, end time.Duration) (MeasurementObservation, error) {
+	return r.observe(ctx, end, ProcessExtra{})
+}
+
+// ObserveRecovery is Observe for the failover recovery wait. Its control status
+// read reports a definite host failure instead of an unknown result.
+func (r *ProcessRuntime) ObserveRecovery(ctx context.Context, end time.Duration) (MeasurementObservation, error) {
+	return r.observe(ctx, end, ProcessExtra{RecoveryStatus: true})
+}
+
+func (r *ProcessRuntime) observe(ctx context.Context, end time.Duration, statusExtra ProcessExtra) (MeasurementObservation, error) {
 	out := MeasurementObservation{At: r.Session.clock.Wall(), Hosts: map[string]HostTelemetry{}, Local: map[string]mediaworker.WorkerStatus{}}
-	status, err := r.Step(ctx, "status", "shared", end, ProcessExtra{})
+	status, err := r.Step(ctx, "status", "shared", end, statusExtra)
 	if err != nil {
 		return out, err
 	}
@@ -468,4 +481,9 @@ func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime,
 	}
 	stopDeadline := min(clock.Elapsed()+callerStopReserve, stopEnd)
 	return Stopped(stop(ctx, stopDeadline), out)
+}
+
+// measureProcedureResult projects measurement outcomes into sequence accounting.
+func measureProcedureResult(m MeasureResult) ProcedureResult {
+	return ProcedureResult{Completed: m.Completed, ProcedureReason: m.Measurement.ErrorReason, Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{CompletedSteps: m.CompletedSteps, ExpiredWait: m.ExpiredWait, FailedStatusReads: m.FailedStatusReads}}
 }

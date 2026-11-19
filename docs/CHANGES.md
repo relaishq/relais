@@ -1,6 +1,8 @@
 # Relais: Recent Changes and Engineering Notes
 
-This document records detailed changes and important notes as we evolve the distributed WebRTC media server. It is intended to be updated continuously.
+Historical engineering notes from 2025. The stored-frame pipeline, its runners,
+bootstrap helpers, and Viper configuration were removed in issue #262. The paths
+and configuration below record the retired architecture, not current instructions.
 
 Last updated: 2025-08-20 13:13:49 -0700
 

@@ -246,3 +246,19 @@ func (r *rehearsal) runResourceSequence(ctx context.Context, init operator.Init,
 	}
 	return nil
 }
+
+// pinnedInit starts the gate budget after setup, retaining the clock receipt.
+func (r *rehearsal) pinnedInit() operator.Init {
+	init := r.boundInit
+	armed := r.clock.Wall()
+	init.ArmedAtUnixMS = strconv.FormatInt(armed.UnixMilli(), 10)
+	init.EndUnixMS = strconv.FormatInt(armed.Add(operatorgates.SessionMaximum).UnixMilli(), 10)
+	return init
+}
+
+func (r *rehearsal) runPinnedSequence(ctx context.Context) error {
+	if r.session.Latched() || len(r.session.Uncertainties()) != 0 {
+		return errors.New("command-result-unknown")
+	}
+	return r.runResourceSequence(ctx, r.pinnedInit(), r.pinnedSequence())
+}

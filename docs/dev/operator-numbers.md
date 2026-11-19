@@ -41,7 +41,7 @@ The audit covered these arithmetic sites:
 | `pool.go`: `ReadPool` | Event/receipt numbers checked without discarding independently valid failure facts; an unrepresentable numeric sibling marks the pool incomplete after strict member checks. |
 | `judge.go`: `extract` | Reject negative/member sizes above 64 MiB; compare against remaining 512 MiB total before addition. |
 | Caller `feed.go`: `CollectProbes`; `protocol.go`: `Burst.Validate`, `Register`, `Host.Validate` | Clock timestamps, RTT, bounded probe count and CPU counts; order/range checks precede arithmetic. |
-| Caller `protocol.go`: `CallerArgs`, `Plan.Validate`, `Manifest.Validate` | Nonnegative bounded clock parameters; 1–1200 second plan; ordered nonnegative manifest times and 20/105 minute windows bound deadline differences/products. |
+| Caller `protocol.go`: `CallerArgs`, `Plan.Validate`, `Manifest.Validate` | Nonnegative bounded clock parameters; 1–1680 second plan; ordered nonnegative manifest times and 31-minute gate, 33-minute caller and 105-minute session windows bound deadline differences/products. |
 | Caller `feed.go`: `SaturationWindow.Add`, `RecordGeneratorSample` | Generator numeric validation and pacing denominators; checked floating accumulated flagged/streak time; rolling window clipped to 30 seconds; invalid samples abort before publication. |
 | Procedure `caller.go`: `receiptEvents` | Receipt count is bounded by the exact-integer range before grouping. Affected/count fields use complete group lengths; timestamp bounds use comparisons, with no sum or subtraction. Collection errors retain receipts for independent failure judgment. |
 | Caller `broker.go`: `Feed`, `sameIdentities` | Sequence exhaustion checked before increment; bounded input lengths keep multiset deltas representable. |
@@ -49,7 +49,7 @@ The audit covered these arithmetic sites:
 | Caller `transport.go`: `ProtocolMailbox.exchange` | Request-ID exhaustion checked before increment. |
 | Caller `host.go`: `CollectHost` | Logical CPU count bounded before increment. |
 | Caller `mailbox.go`: `Directory.Read`, `Directory.Create`; bridge spool reads | Fixed bounded blob lengths and fixed extra-byte overflow detection; no evidence-controlled size sum. |
-| Caller launcher scripts, broker waits and feed deadlines | Runtime limited to 20 minutes, manifest lifetime to 105 minutes; remaining time uses bounded deadlines and fixed reserves; exit status is compared, never aggregated. |
+| Caller launcher scripts, broker waits and feed deadlines | Runtime limited to 33 minutes, manifest lifetime to 105 minutes; remaining time uses bounded deadlines and fixed reserves; exit status is compared, never aggregated. |
 
 Regression tests start with the passing pooled fixture, then inject cancelling
 counters, extreme counters, negative packet/gap measurements, overflowing pacing

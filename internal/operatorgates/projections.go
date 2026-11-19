@@ -15,7 +15,7 @@ func DecodeProcessEvidence(data json.RawMessage) (e ProcessEvidence, err error) 
 	if err != nil {
 		return e, err
 	}
-	if e.CompletedSteps < 0 || e.WorkerRollouts < 0 || e.Restarts < 0 || e.ExcludedKills < 0 || e.KillReplacements < 0 || e.KillReplacements > MaxKillReplacements {
+	if e.CompletedSteps < 0 || e.WorkerRollouts < 0 || e.Restarts < 0 || e.ExcludedKills < 0 || e.FailedStatusReads < 0 || e.KillReplacements < 0 || e.KillReplacements > MaxKillReplacements {
 		return e, fault("invalid-process-measurement")
 	}
 	if e.KillReplacementSkipped != "" && e.KillReplacementSkipped != "replacement-budget" && e.KillReplacementSkipped != "replacement-time" {

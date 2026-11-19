@@ -2,7 +2,7 @@
 
 Relais keeps a caller's WebRTC connection alive while its media worker changes.
 The live path uses Pion v4 protocol libraries directly, so it can save and restore
-connection state. It does not use the [legacy stored-frame pipeline](legacy/plugin-pipeline.md).
+connection state.
 The earlier `relais-core`, `pkg/server`, and Pion v3 signaling path are retired.
 
 ## Components and flow
@@ -82,7 +82,3 @@ DTLS-SRTP protects the caller-to-worker media leg. Redis supports verified TLS a
 and external topologies. [`cmd/relais-demo`](../cmd/relais-demo) runs the browser
 cluster demo. The older [`cmd/echo-demo`](../cmd/echo-demo) shares one UDP socket
 between in-process workers, or runs one relayed worker. See [demo guide](demo.md).
-
-The historical plugin system has ingress, transform, and egress runners with
-Redis or memory frame storage. Its camera is simulated and its WebRTC egress
-polls storage. It is experimental, unmaintained, and separate from this media path.

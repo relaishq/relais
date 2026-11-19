@@ -101,7 +101,8 @@ func runWithAdapter(startAdapter func(context.Context, string, []string) (*opera
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		callerEnd := time.Now().Add(20 * time.Minute)
+		// Adapter callers require a deadline; directory mailboxes do not use it.
+		var callerEnd time.Time
 		if *deadline != "" {
 			callerEnd, err = time.Parse(time.RFC3339Nano, *deadline)
 			if err != nil || !callerEnd.After(time.Now()) {

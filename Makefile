@@ -10,8 +10,6 @@ GOLANGCI_LINT_VERSION := v2.14.0
 # Explicit-version go run ignores the main module toolchain directive. Reuse
 # the module-selected toolchain instead of downloading a newer one for lint.
 GOLANGCI_LINT = GOTOOLCHAIN=$(shell $(GOCMD) env GOVERSION) $(GOCMD) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-BINARY_NAME=relais
-BINARY_UNIX=$(BINARY_NAME)_unix
 BIN_DIR=bin
 
 # Build-time variables
@@ -26,11 +24,7 @@ LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION)
 
 all: test build
 
-build: ensure_bin_dir ## Build plugin runners, relay, worker, control, signal, crash-run and demo/example binaries
-	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-ingress -v $(LDFLAGS) ./cmd/ingress-runner
-	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-egress -v $(LDFLAGS) ./cmd/egress-runner
-	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-transform -v $(LDFLAGS) ./cmd/transform-runner
-
+build: ensure_bin_dir ## Build relay, worker, control, signal, crash-run and demo/example binaries
 	$(GOBUILD) -o $(BIN_DIR)/relais-relay $(LDFLAGS) ./cmd/relais-relay
 	$(GOBUILD) -o $(BIN_DIR)/relais-worker $(LDFLAGS) ./cmd/relais-worker
 	$(GOBUILD) -o $(BIN_DIR)/relais-control $(LDFLAGS) ./cmd/relais-control
@@ -152,12 +146,13 @@ test-cluster: ## Run opt-in Redis Cluster tests (RELAIS_TEST_REDIS_CLUSTER=1; bu
 	$(GOTEST) -race -p 1 -v -count=1 -timeout 10m -run '^Test(Cluster|RedisCluster|Redis.*Slot|SlotCRC16)' ./pkg/storage ./pkg/sessionstore ./pkg/framecache ./internal/processrun ./internal/redistestcluster ./cmd/crash-run ./cmd/relais-control
 
 # Cover all packages except the call harness, which has a separate CI job.
-# Include the plugin and pipeline suites previously covered by make test.
-UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./examples/... ./plugins/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
+UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./examples/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
 JUDGE_FLAGS ?=
 
 test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_REDIS_ADDR for Redis suites
-	$(GOTEST) -race -v -count=1 -timeout 10m $(filter-out github.com/relaishq/relais/internal/operatorevidence/judge-src,$(UNIT_PKGS))
+	# The slowest packages take about 7 min on a CI runner (operatorgates 418 s,
+	# controlplane 440 s); 10m timed out on slow runners. Keep about 2x headroom.
+	$(GOTEST) -race -v -count=1 -timeout 20m $(filter-out github.com/relaishq/relais/internal/operatorevidence/judge-src,$(UNIT_PKGS))
 	$(MAKE) test-unit-judge
 
 .PHONY: test-unit-judge
@@ -171,7 +166,8 @@ HARNESS_PKGS=./pkg/callharness/...
 HARNESS_FLAGS ?=
 
 test-harness: ## Run the call harness (audio+video echo calls, direct and through the relay) with the race detector; HARNESS_FLAGS=-short for 5 s calls; full VP8 decode needs ffmpeg on PATH
-	$(GOTEST) -race -v -count=1 -timeout 45m $(HARNESS_FLAGS) $(HARNESS_PKGS)
+	# The full race suite took 2659 s on a 4-CPU main runner (f7990a9) and timed out at 45 min on 722a090; keep ~2x headroom.
+	$(GOTEST) -race -v -count=1 -timeout 90m $(HARNESS_FLAGS) $(HARNESS_PKGS)
 
 # Disable Redis explicitly, including deeply nested uncertainty subtests,
 # even if the invoking shell has Redis configured and required.
@@ -214,15 +210,30 @@ test-operator-rehearsal-container: ## Runner only: boot actual template units an
 	test -n "$(RELAIS_REHEARSAL_ARCHIVE)" && test -n "$(RELAIS_REHEARSAL_VERSION)" && test -n "$(RELAIS_REHEARSAL_ARCH)" && test -n "$(RELAIS_REHEARSAL_SHA256)"
 	RELAIS_REHEARSAL_CONTAINERS=1 $(GOTEST) -v -count=1 -timeout 30m -run '^TestContainerTemplateBoot$$' ./internal/operatorrehearsal
 
-.PHONY: operator-rehearsal-build operator-rehearsal
+.PHONY: operator-rehearsal-build operator-rehearsal operator-rehearsal-run operator-rehearsal-reproducible
 OPERATOR_REHEARSAL_FLAGS ?=
 OPERATOR_REHEARSAL_RUNNER ?=
+OPERATOR_REHEARSAL_REBUILD_DIR ?= $(BIN_DIR)/rebuild
+OPERATOR_REHEARSAL_RUN = $(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)
+# Stamp the commit time, not the wall clock, so every build of one commit is byte-identical.
+# -buildvcs=false: Go stamps VCS data only when .git is a directory, so a linked worktree and a
+# clone of one commit would differ; ldflags already carry the version and commit.
+operator-rehearsal-build: BUILD_TIME = $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%d_%H:%M:%S)
 operator-rehearsal-build: ensure_bin_dir ## Build the gate/bridge and the diagnostic head caller before rehearsal media
-	CGO_ENABLED=0 $(GOBUILD) -trimpath -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
-	CGO_ENABLED=0 $(GOBUILD) -trimpath -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
+	CGO_ENABLED=0 $(GOBUILD) -trimpath -buildvcs=false -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
+	CGO_ENABLED=0 $(GOBUILD) -trimpath -buildvcs=false -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
+
+operator-rehearsal-reproducible: operator-rehearsal-build ## Build the rehearsal binaries, rebuild them 1 s later elsewhere and require identical bytes
+	sleep 1
+	$(MAKE) --no-print-directory operator-rehearsal-build BIN_DIR=$(OPERATOR_REHEARSAL_REBUILD_DIR)
+	cmp $(BIN_DIR)/relais-gates $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-gates
+	cmp $(BIN_DIR)/relais-load $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-load
 
 operator-rehearsal: operator-rehearsal-build ## Run the fixed four-gate Linux Docker profile; needs root systemd and four allowed CPUs
-	$(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)
+	$(OPERATOR_REHEARSAL_RUN)
+
+operator-rehearsal-run: ## Run operator-rehearsal with the already built binaries; never rebuilds
+	$(OPERATOR_REHEARSAL_RUN)
 
 .PHONY: test-chrome-relay-change
 test-chrome-relay-change: ## Opt-in Chrome relay gate; skips unless RELAIS_CHROME names a binary

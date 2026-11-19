@@ -140,7 +140,7 @@ func TestControlRestartTrialsCountGateOwnedTakeover(t *testing.T) {
 	c.g.c.Trials = true
 	r := RunProcessGate(context.Background(), operator.ControlRestart, c.g.c, c.g.p, c.g.end)
 	moves, takeovers := receiptKinds(c.g.p.Broker)
-	if r.Status != operator.Passed || moves != 7 || takeovers != 4 {
+	if r.Status != operator.Passed || moves != 7 || takeovers != 6 {
 		t.Fatalf("control restart trial population changed: %+v moves=%d takeovers=%d", r, moves, takeovers)
 	}
 }
@@ -229,10 +229,11 @@ func TestExcludedGateOwnedKillMadeUpByTrials(t *testing.T) {
 	for _, tc := range []struct {
 		wide                int
 		takeovers, replaced int
-	}{{1, 4, 0}, {2, 5, 1}} {
+	}{{1, 6, 0}, {2, 7, 1}} {
 		t.Run(fmt.Sprint(tc.wide), func(t *testing.T) {
 			c := newTrialCluster(t)
 			c.g.c.Trials = true
+			c.g.end = GateMaximum
 			c.wide = map[int]bool{tc.wide: true}
 			// Media starts two minutes after registration, leaving room for one more cycle.
 			media := c.clock.Now.Add(2 * time.Minute).UnixMilli()

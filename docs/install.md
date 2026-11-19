@@ -24,7 +24,7 @@ It contains `relais-relay`, `relais-worker`, `relais-control`, `relais-signal`,
 `relais-demo`, `relais-load`, `relais-compat`, `compatibility.json`, `start.sh`,
 `stop.sh`, `LICENSE`, `NOTICE`, and `README.md`. `relais-compat` checks a rolling
 upgrade (see [Upgrading](#upgrading)). `compatibility.json` is the release
-manifest it reads. Legacy plugin runners are not included.
+manifest it reads.
 
 ## Checksum
 

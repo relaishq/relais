@@ -191,11 +191,7 @@ do not put them in command-line arguments or logs.
 
 The Go store constructors also accept `storage.RedisConfig.Username` and
 `storage.RedisConfig.TLSConfig`, including Redis Cluster connections. The
-process flags enable Cluster discovery with `-redis-cluster`. Legacy plugin runners also use
-the TLS and ACL environment settings when their storage type is Redis; existing
-storage configuration still selects their Cluster seed addresses. Their addresses
-and passwords remain under `RELAIS_STORAGE_REDIS_URL` and
-`RELAIS_STORAGE_REDIS_PASSWORD`.
+process flags enable Cluster discovery with `-redis-cluster`.
 
 ### Cluster mode
 

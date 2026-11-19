@@ -14,12 +14,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/stretchr/testify/require"
@@ -38,7 +40,9 @@ func admissionFixture(t *testing.T, old bool, selectBounds func(context.Context,
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	return clockAdmissionPorts{policy: rehearsalClockPolicy(), leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, timeout: context.WithTimeout, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
+	policy := rehearsalClockPolicy()
+	policy.WindowSeconds = 120 // Preserve the paid admission fixtures.
+	return clockAdmissionPorts{policy: policy, leapMode: "unsmeared", start: func(context.Context, time.Time) error { return nil }, read: read, timeout: context.WithTimeout, selectBounds: selectBounds, pause: func(ctx context.Context, d time.Duration) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -216,6 +220,7 @@ func TestClockSelectionRejectsPreRestoreWindow(t *testing.T) {
 func TestClockSelectionVerifiesCLI(t *testing.T) {
 	var evidence clocks.SelectionEvidence
 	policy := rehearsalClockPolicy()
+	policy.WindowSeconds = 120
 	p := admissionFixture(t, false, func(_ context.Context, e clocks.SelectionEvidence, p clocks.SelectionPolicy) (clocks.ClockSelection, string) {
 		evidence = e
 		selection, err := clocks.Select(e, p)
@@ -484,7 +489,7 @@ type clockAdmissionRun struct {
 	result                          *ClockSelectionReport
 }
 
-func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase int64) clockAdmissionRun {
+func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase int64, configure ...func(*clockAdmissionPorts)) clockAdmissionRun {
 	t.Helper()
 	clock := &virtualClock{now: time.Unix(1792886400, 0)}
 	dir := t.TempDir()
@@ -496,7 +501,9 @@ func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase in
 		n      int
 	}
 	interval := max(int64(poll/time.Second), 1)
-	a := ClockAdmission{RunID: "timing-test", FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, HelpersUntil: clock.Now().Add(time.Hour), Output: t.TempDir(), HostReadLatency: latency, PollPeriod: poll, Now: clock.Now, Pause: clock.Pause, Timeout: clock.Timeout}
+	policy := rehearsalClockPolicy()
+	policy.WindowSeconds = 120
+	a := ClockAdmission{RunID: "timing-test", FrontendSlot: "shared", ControlSlot: "shared", CallerLeapMode: "unsmeared", Policy: policy, Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, HelpersUntil: clock.Now().Add(time.Hour), Output: t.TempDir(), HostReadLatency: latency, PollPeriod: poll, Now: clock.Now, Pause: clock.Pause, Timeout: clock.Timeout}
 	a.Host = func(ctx context.Context, slot string, detach bool, input []byte, args ...string) (string, error) {
 		if args[0] != "sh" {
 			if err := clock.spend(ctx, clock.Now(), cost); err != nil {
@@ -539,6 +546,9 @@ func runClockAdmission(t *testing.T, latency, poll, cost time.Duration, phase in
 	}
 	var r clockAdmissionRun
 	p := a.ports()
+	for _, configure := range configure {
+		configure(&p)
+	}
 	start, selectBounds := p.start, p.selectBounds
 	p.start = func(ctx context.Context, end time.Time) error {
 		r.began, r.end = clock.Now(), end
@@ -622,6 +632,83 @@ func TestClockAdmissionTiming(t *testing.T) {
 		err := CheckClockAdmissionTiming(c.latency, c.poll)
 		if seed != c.seed || setup != c.setup || window != c.window || c.cause == "" != (err == nil) || err != nil && err.Error() != c.cause {
 			t.Fatal("MUTATION: admission-timing", c.latency, c.poll, seed, setup, window, err)
+		}
+	}
+}
+
+func TestRehearsalHelpersCoverFreshGateWindow(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("python3 is required in CI for the embedded helper lifetime check")
+		}
+		t.Skip("python3 is unavailable locally; embedded helper lifetime check requires python3")
+	}
+	base := time.Unix(1793930000, 0)
+	clock := &operatorgates.FakeClock{Now: base}
+	type command struct {
+		slot   string
+		source []byte
+		args   []string
+	}
+	sources := map[string][]byte{}
+	commands := []command{}
+	a := ClockAdmission{FrontendSlot: "relay", ControlSlot: "shared", Addresses: map[string]string{"relay": "192.0.2.1", "shared": "192.0.2.2", "w1": "192.0.2.3", "w2": "192.0.2.4"}, Now: clock.Wall, HelpersUntil: base.Add(rehearsalHelperMaximum)}
+	a.Host = func(_ context.Context, slot string, background bool, source []byte, args ...string) (string, error) {
+		if background {
+			commands = append(commands, command{slot, sources[slot], append([]string{}, args...)})
+		} else {
+			sources[slot] = append([]byte{}, source...)
+		}
+		return "", nil
+	}
+	require.NoError(t, a.startHelpers(context.Background()))
+	require.Len(t, commands, 4)
+	clock.Advance(8*time.Minute + 20*time.Second)
+	r := &rehearsal{clock: clock}
+	init := r.pinnedInit()
+	gateEnd, err := strconv.ParseInt(init.EndUnixMS, 10, 64)
+	require.NoError(t, err)
+	for _, c := range commands {
+		args := append([]string{}, c.args[2:]...)
+		for i, arg := range args {
+			switch arg {
+			case "--until-unix-ns":
+				until, e := strconv.ParseInt(args[i+1], 10, 64)
+				if e != nil || time.Unix(0, until).Before(time.UnixMilli(gateEnd)) || until != base.Add(180*time.Minute).UnixNano() {
+					t.Fatal("MUTATION: rehearsal-helper-window", until, e)
+				}
+			case "--listen":
+				args[i+1] = "127.0.0.1:0"
+			case "--output":
+				args[i+1] = filepath.Join(t.TempDir(), c.slot+"-probes.bin")
+			case "--peer":
+				name, _, _ := strings.Cut(args[i+1], "=")
+				args[i+1] = name + "=http://127.0.0.1:24891"
+			}
+		}
+		// Execute the delivered embedded source and real background argv. Mock
+		// serving and time so validation runs without sockets or a three-hour wait.
+		wrapper := `import sys
+from unittest.mock import Mock, patch
+helper = {"__name__": "clock_probe"}
+exec(compile(sys.stdin.read(), "clock_probe.py", "exec"), helper)
+class Timer:
+    def __init__(self, seconds, done): self.done = done
+    def start(self): self.done()
+    def cancel(self): pass
+server = Mock()
+with patch.object(helper["http"].server, "HTTPServer", return_value=server), patch.object(helper["threading"], "Timer", Timer):
+    helper["main"]()
+server.shutdown.assert_called_once()
+server.server_close.assert_called_once()
+`
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, "python3", append([]string{"-I", "-B", "-c", wrapper}, args...)...)
+		cmd.Stdin = bytes.NewReader(c.source)
+		output, runErr := cmd.CombinedOutput()
+		cancel()
+		if runErr != nil {
+			t.Fatalf("MUTATION: rehearsal-helper-cap: slot=%s: %v\n%s", c.slot, runErr, output)
 		}
 	}
 }

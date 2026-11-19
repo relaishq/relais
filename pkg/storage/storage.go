@@ -35,7 +35,7 @@ type Frame struct {
 type Storage interface {
 	// PutFrame stores a frame for a given session.
 	// This method should be optimized for high-throughput writes as it's
-	// called frequently by ingress plugins.
+	// called frequently by frame producers.
 	//
 	// Parameters:
 	//   - ctx: Context for cancellation and timeouts
@@ -93,8 +93,7 @@ type Storage interface {
 	ListFramesSince(ctx context.Context, sessionID string, fromIndex int64, limit int) ([]Frame, error)
 
 	// ListSessions returns all active session IDs.
-	// This method is used to discover available media sessions,
-	// typically by transform plugins that need to process all sessions.
+	// This method is used to discover available media sessions.
 	//
 	// Parameters:
 	//   - ctx: Context for cancellation and timeouts

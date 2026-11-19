@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
@@ -77,8 +78,13 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 		fmt.Fprintln(diagnostics, "clock-admit-input")
 		return 2
 	}
+	// A nil clock is the real clock here as in AdmitClock, which receives it unchanged.
+	now := time.Now
+	if clock.now != nil {
+		now = clock.now
+	}
 	until, err := strconv.ParseInt(plan.HelpersUntilUnixMS, 10, 64)
-	valid := err == nil && *latencyMS >= 0 && *latencyMS <= 150000 && *pollSeconds >= 0 && *pollSeconds <= 300 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(inventory.Slots, plan.FrontendSlot) && slices.Contains(inventory.Slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(inventory.Slots)
+	valid := err == nil && until <= now().Add(operatorgates.SessionMaximum).UnixMilli() && *latencyMS >= 0 && *latencyMS <= 150000 && *pollSeconds >= 0 && *pollSeconds <= 300 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(inventory.Slots, plan.FrontendSlot) && slices.Contains(inventory.Slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(inventory.Slots)
 	for _, slot := range inventory.Slots {
 		address, err := netip.ParseAddr(plan.Addresses[slot])
 		valid = valid && err == nil && address.Is4()

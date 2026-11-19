@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
 	"github.com/relaishq/relais/pkg/operator"
@@ -339,6 +340,55 @@ func TestClockAdmitHostReadEndsWithDeadline(t *testing.T) {
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatal("MUTATION: clock-admit-host-deadline", "read still blocked after 10 s")
+			}
+		})
+	}
+}
+
+// Paid admission must refuse an overlong helper before issuing any host command.
+func TestClockAdmitHelperLifetimeBound(t *testing.T) {
+	for _, delta := range []time.Duration{0, time.Millisecond, time.Hour} {
+		t.Run(delta.String(), func(t *testing.T) {
+			f := newClockAdmitFixture(t)
+			f.plan.HelpersUntilUnixMS = fmt.Sprint(f.clock.now().Add(operatorgates.SessionMaximum + delta).UnixMilli())
+			code, cause := f.run(t)
+			if delta == 0 {
+				if code != 0 || cause != "" {
+					t.Fatal("MUTATION: clock-admit-helper-lifetime", code, cause)
+				}
+				require.FileExists(t, filepath.Join(f.output, "clock-binding.json"))
+			} else {
+				if code != 2 || cause != "clock-admit-input" {
+					t.Fatal("MUTATION: clock-admit-helper-lifetime", code, cause)
+				}
+				require.NoFileExists(t, filepath.Join(f.dir, "calls"))
+				entries, err := os.ReadDir(f.output)
+				require.NoError(t, err)
+				require.Empty(t, entries)
+			}
+		})
+	}
+}
+
+// The CLI passes the zero clock (main.go). Admission must use the real clock
+// for its helper-lifetime check instead of calling a nil function.
+func TestClockAdmitZeroClockUsesRealClock(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		until time.Duration
+		cause string
+	}{{"overlong", operatorgates.SessionMaximum + time.Hour, "clock-admit-input"}, {"within", time.Hour, "clock-select-policy"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClockAdmitFixture(t)
+			f.clock = clockAdmitClock{}
+			f.plan.HelpersUntilUnixMS = fmt.Sprint(time.Now().Add(tc.until).UnixMilli())
+			if tc.name == "within" {
+				// Pass the real-clock lifetime check, then refuse on policy before any host command.
+				f.policy.WindowSeconds = 240
+			}
+			code, cause := f.run(t)
+			if code != 2 || !strings.HasPrefix(cause, tc.cause) {
+				t.Fatal("MUTATION: clock-admit-zero-clock", code, cause)
 			}
 		})
 	}

@@ -54,7 +54,7 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	r.report.Bounds = clocks.Bounds{FrontendControlBoundNS: 2000000, FrontendWorkerBoundNS: 3000000, DriftPPM: 100}
 	now := time.Now()
 	init := operator.Init{Scenario: fixture.Scenario, ArmedAtUnixMS: strconv.FormatInt(now.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(now.Add(105*time.Minute).UnixMilli(), 10)}
-	binding, e := bindingtest.New(r.run, now)
+	binding, e := bindingtest.NewWithWindow(r.run, now, rehearsalClockAdmissionWindowSeconds)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -66,8 +66,23 @@ func TestRehearsalUsesSessionResourceRequests(t *testing.T) {
 	r.report.Bounds = binding.Selection.Receipt.Bounds
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err = r.runResourceSequence(ctx, init, r.pinnedSequence()); err != nil {
+	// Setup has consumed the measured worst-case time before gates are armed.
+	r.clock = operatorgates.NewRealClock()
+	setupArmed := now.Add(-21*time.Minute - 10*time.Second)
+	init.ArmedAtUnixMS = strconv.FormatInt(setupArmed.UnixMilli(), 10)
+	init.EndUnixMS = strconv.FormatInt(setupArmed.Add(operatorgates.SessionMaximum).UnixMilli(), 10)
+	r.boundInit = init
+	r.session, err = operatorgates.NewSession(r.run, init, r.clock)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err = r.runPinnedSequence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The real clock runs while the sequence executes; a loaded race runner took
+	// 1.14 s (0cb046d). Reusing setup's arming would lose 21 min, far beyond this slack.
+	if r.session.Budget.Remaining() < operatorgates.SessionMaximum-time.Minute || r.session.Budget.MutationEnd() < operatorgates.MutationWindow-time.Minute {
+		t.Fatal("MUTATION: rehearsal-session-arming: setup consumed the resource session", r.session.Budget.Remaining(), r.session.Budget.MutationEnd())
 	}
 	if calls != 4 || r.session == nil || !r.session.Latched() || len(r.report.Gates) != 1 || r.report.Gates[0].Reason != "command-result-unknown" || r.report.Gates[0].ProcedureCompleted {
 		t.Fatalf("MUTATION: rehearsal-session-seam calls=%d gates=%+v", calls, r.report.Gates)

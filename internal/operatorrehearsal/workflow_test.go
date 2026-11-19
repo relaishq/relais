@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,8 +18,9 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		On          map[string]any    `yaml:"on"`
 		Permissions map[string]string `yaml:"permissions"`
 		Jobs        map[string]struct {
-			RunsOn string `yaml:"runs-on"`
-			Steps  []struct {
+			RunsOn         string `yaml:"runs-on"`
+			TimeoutMinutes int    `yaml:"timeout-minutes"`
+			Steps          []struct {
 				Name, Run, Uses string
 				If              string `yaml:"if"`
 				ContinueOnError bool   `yaml:"continue-on-error"`
@@ -46,9 +48,20 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 	if job.RunsOn != "ubuntu-24.04" {
 		t.Fatal(job.RunsOn)
 	}
+	if job.TimeoutMinutes != 180 || time.Duration(job.TimeoutMinutes)*time.Minute != rehearsalHelperMaximum {
+		t.Fatal("hosted job and clock helper deadlines differ", job.TimeoutMinutes, rehearsalHelperMaximum)
+	}
 	tokens, uploads, execute := 0, 0, false
 	chowned, summaries := false, 0
+	// One step builds and records the binaries before release-read; rehearsal checks
+	// those hashes and runs without a rebuild (#476).
+	builds, recorded, released := 0, false, false
 	for _, step := range job.Steps {
+		if strings.Contains(step.Run, "make operator-rehearsal") && !strings.Contains(step.Run, "make operator-rehearsal-run ") {
+			builds++
+			recorded = !released && strings.Contains(step.Run, "make operator-rehearsal-reproducible") && strings.Contains(step.Run, `sha256sum bin/relais-gates bin/relais-load | tee "$RUNNER_TEMP/operator-binaries.sha256"`)
+		}
+		released = released || strings.Contains(step.Run, "-prepare-only")
 		chowned = chowned || strings.Contains(step.Run, "chown -R") && strings.Contains(step.Run, "runtime/operator-report")
 		if strings.Contains(step.Run, "scripts/ci/rehearsal_summary.py") {
 			summaries++
@@ -72,10 +85,12 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 				t.Fatal(paths)
 			}
 		}
-		execute = execute || strings.Contains(step.Run, "make operator-rehearsal OPERATOR_REHEARSAL_RUNNER=") && strings.Contains(step.Run, "-prepared")
+		check := strings.Index(step.Run, `sha256sum --strict --check "$RUNNER_TEMP/operator-binaries.sha256"`)
+		run := strings.Index(step.Run, "make operator-rehearsal-run OPERATOR_REHEARSAL_RUNNER=")
+		execute = execute || released && check >= 0 && run > check && strings.Contains(step.Run, "-prepared")
 	}
-	if tokens != 1 || uploads != 1 || !execute || summaries != 1 || strings.Contains(string(raw), "secrets.") {
-		t.Fatal(tokens, uploads, execute, summaries)
+	if tokens != 1 || uploads != 1 || !execute || summaries != 1 || builds != 1 || !recorded || strings.Contains(string(raw), "secrets.") {
+		t.Fatal(tokens, uploads, execute, summaries, builds, recorded)
 	}
 	paths := w.On["pull_request"].(map[string]any)["paths"].([]any)
 	for _, expected := range []string{"internal/operator*/**", "deploy/aws/**", "cmd/relais-gates/**", "pkg/operator/**", "scripts/ci/gate-mutation/**", ".github/workflows/operator-rehearsal.yml"} {

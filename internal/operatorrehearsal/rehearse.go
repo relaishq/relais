@@ -37,7 +37,7 @@ type rehearsal struct {
 	deployment              *Deployment
 	runner                  Runner
 	diagnostics             io.Writer
-	clock                   *operatorgates.RealClock
+	clock                   operatorgates.Clock
 	session                 *operatorgates.Session
 	peer                    *LocalPeer
 	pins                    []inventory.Pin
@@ -252,7 +252,7 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	}
 	// Carry setup trust loss before the first resource sequence starts.
 	r.clockCoverageFalsified = r.clockCoverageFalsified || r.session.ClockCoverageFalsified()
-	if e = r.runResourceSequence(ctx, init, r.pinnedSequence()); e != nil {
+	if e = r.runPinnedSequence(ctx); e != nil {
 		r.recordError("operator-session-incomplete", e)
 		return report, e
 	}
@@ -423,10 +423,7 @@ func (r *rehearsal) setup(ctx context.Context) error {
 	return e
 }
 func duration(g operator.Gate) int {
-	if g == operator.RelayDeploy {
-		return 600
-	}
-	return 1020
+	return int(operatorgates.CampaignDuration(g) / time.Second)
 }
 func campaignMinimum(g operator.Gate) time.Duration {
 	return operatorgates.CampaignMinimum(g)

@@ -116,6 +116,61 @@ func TestCallerCollectionCompleteness(t *testing.T) {
 		})
 	}
 }
+
+func TestExhaustedEventBaselineCollections(t *testing.T) {
+	t.Parallel()
+	control := previewSample()
+	if err := callCollections(control.Processes[0].Calls[0].Call); err != nil {
+		t.Fatal("invalid control collections", err)
+	}
+	if got := previewMedia(&control); got.Status != "passed" {
+		t.Fatal("invalid passing control", got)
+	}
+	for _, tc := range []struct {
+		name  string
+		index int
+	}{{"later event", 20}, {"first event", 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := previewSample()
+			call := r.Processes[0].Calls[0].Call
+			// Event 20 is a takeover after the first move established references.
+			first := tc.index == 0
+			m := &call.Moves[tc.index]
+			// Shape emitted by a capped caller: partial metric evidence cannot pass.
+			m.Distributed.Evaluations = 8192
+			m.Distributed.WindowOutcome, m.Distributed.Outcome = "inconclusive", "inconclusive"
+			m.Distributed.BaselineFloor = callharness.DurationInterval{Upper: m.Measurement.ObservedUntil}
+			for _, v := range []*callharness.MetricVerdict{&m.Measurement.AudioLoss, &m.Measurement.VideoLoss,
+				&m.Measurement.Audio.Verdict, &m.Measurement.Video.Verdict, &m.Measurement.ResumeVerdict,
+				&m.Measurement.FirstContentVerdict, &m.Measurement.FirstNewContentVerdict, &m.Measurement.FirstLiveVerdict} {
+				*v = callharness.MetricVerdict{Reasons: []string{"interval evaluation unavailable or exceeds 8192 evaluations"}}
+			}
+			m.Measurement.Inconclusive = true
+			if first {
+				m.Distributed.FirstBaselines = nil
+			}
+			err := callCollections(call)
+			if first && (err == nil || err.Error() != "missing classification population") {
+				t.Fatal("exhausted first event must still be rejected", err)
+			}
+			if !first && err != nil {
+				t.Fatal("later exhaustion must retain valid collections", err)
+			}
+			if !first {
+				if err := reportCollections(&r); err != nil {
+					t.Fatal("later exhaustion must remain valid report evidence", err)
+				}
+				if err := callNumbers(call); err != nil {
+					t.Fatal("later exhaustion must retain valid metric numbers", err)
+				}
+			}
+			if got := previewMedia(&r); got.Status != "inconclusive" {
+				t.Fatal("exhausted evidence cannot pass", got)
+			}
+		})
+	}
+}
+
 func TestPhaseCollectionJoins(t *testing.T) {
 	t.Parallel()
 	changes := map[string]func(*previewMediaInput){

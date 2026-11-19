@@ -56,8 +56,6 @@ can repeat. Applications must make external side effects safe to repeat.
   established. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
 - Private control APIs are unauthenticated. The signaling frontend is for
   controlled tests; a proven public service is outside the current evidence.
-- The [legacy stored-frame pipeline](docs/legacy/plugin-pipeline.md) is
-  experimental, unmaintained, and not used by live calls.
 
 ## Five-minute quick start
 
@@ -170,7 +168,6 @@ in [the fact-checked comparison](docs/comparison.md); it is not a benchmark.
 | Understand the design | [Architecture](docs/architecture.md) · [Decisions](docs/adr/) |
 | Compare tools | [Comparison](docs/comparison.md) |
 | Develop and test | [Contributing](CONTRIBUTING.md) · [Developer guides](docs/dev/) |
-| Inspect the old plugin system | [Legacy pipeline](docs/legacy/plugin-pipeline.md) |
 
 ## What stays open
 

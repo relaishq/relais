@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/relaishq/relais/internal/operatorgates/artifacts"
+	"github.com/relaishq/relais/internal/operatorrehearsal"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 func TestRehearseRefusesIncompleteReadiness(t *testing.T) {
@@ -45,11 +48,20 @@ func TestRehearseReleaseReadFailurePrintsRefusalCode(t *testing.T) {
 		old := prepareReleases
 		prepareReleases = func(context.Context, string, string) error { return c.err }
 		var diagnostics bytes.Buffer
-		status := rehearseWithReadiness([]string{"-prepare-only"}, func() error { return nil }, &diagnostics)
+		output := filepath.Join(t.TempDir(), "report")
+		status := rehearseWithReadiness([]string{"-prepare-only", "-output", output}, func() error { return nil }, &diagnostics)
 		prepareReleases = old
 		out := diagnostics.String()
 		if status != 1 || !strings.Contains(out, "release-read-failed") || !strings.Contains(out, c.want) || strings.Contains(out, "secret") || strings.Contains(out, "invalid-scenario-identity") {
 			t.Fatal(status, out)
+		}
+		raw, err := os.ReadFile(filepath.Join(output, "report.json"))
+		if err != nil {
+			t.Fatal("release-read failure saved no report", err)
+		}
+		var saved operatorrehearsal.Report
+		if json.Unmarshal(raw, &saved) != nil || saved.Verdict != operator.Failure || len(saved.Errors) != 2 || saved.Errors[0] != "release-read-failed" || "release-refusal: "+saved.Errors[1] != c.want || strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "x.invalid") {
+			t.Fatal("saved report lost the refusal code", string(raw))
 		}
 	}
 }

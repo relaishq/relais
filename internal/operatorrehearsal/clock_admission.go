@@ -29,7 +29,7 @@ type ClockAdmission struct {
 	Policy                    clocks.SelectionPolicy
 	// Addresses holds each slot's private IPv4 address for the probe helpers.
 	Addresses map[string]string
-	// HelpersUntil is the session deadline; helpers outlive admission until then.
+	// HelpersUntil is the finite helper deadline; helpers outlive admission until then.
 	HelpersUntil time.Time
 	Output       string
 	Host         ClockHostCommand
@@ -50,7 +50,7 @@ type ClockAdmissionBinding struct {
 	ClockBinding operator.ClockBindingArtifacts `json:"clockBinding"`
 }
 
-// Collection always freezes this trailing window, so no other policy window can be admitted.
+// Paid admission freezes this trailing window; rehearsal opts into its own window.
 const clockAdmissionWindowSeconds = 120
 
 // Seed, helper setup and the admission window never drop below the fixed

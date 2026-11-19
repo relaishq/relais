@@ -165,6 +165,21 @@
   ],
   "pending": [],
   "additionalProtocolCases": [
+    "helper-rehearsal-lifetime-cap",
+    "head-init-reuses-setup-window",
+    "pinned-init-reuses-setup-window",
+    "pinned-sequence-reuses-setup-window",
+    "load-admission-inherits-part-a-limit",
+    "rehearsal-helpers-expire-with-setup",
+    "part-a-media-margin",
+    "part-a-rollout-trial-margin",
+    "part-a-restart-trial-margin",
+    "part-a-duration-scope",
+    "gate-maximum-margin",
+    "caller-maximum-margin",
+    "caller-plan-margin",
+    "caller-collection-margin",
+    "caller-stop-margin",
     "protocol-publication-fence",
     "protocol-write-deadline",
     "protocol-adapter-expiry",
@@ -674,9 +689,176 @@
     "boundary-move-failure-cleared",
     "boundary-rows-listed-twice",
     "boundary-move-row-counted-back-twice",
-    "boundary-move-requires-both-label-only"
+    "boundary-move-requires-both-label-only",
+    "restoration-expiry-retry-skipped",
+    "restoration-late-read-covered",
+    "restoration-retry-rows-lost",
+    "restoration-proof-stage-lost",
+    "restoration-poll-cap-removed",
+    "restoration-next-basis-lost",
+    "restoration-stage-snapshot-lost",
+    "restoration-retry-headroom-lost",
+    "restoration-lease-window-shortened",
+    "measurement-conversion-drops-completion",
+    "measurement-conversion-drops-steps",
+    "admission-conversion-drops-completion",
+    "admission-conversion-drops-steps",
+    "measurement-error-reason-discarded",
+    "measurement-error-first-cause-overwritten",
+    "measurement-error-marks-complete",
+    "failover-refusal-wrong-condition",
+    "failover-recovery-error-discarded",
+    "admission-only-one-population-completes",
+    "admission-discards-survivor-diagnostic",
+    "paid-clock-admit-helper-lifetime-unbounded",
+    "measurement-evidence-error-latches-session",
+    "measurement-cutoff-uses-stop-code",
+    "measurement-observation-stop-code-unmapped",
+    "measurement-diagnostic-promoted-to-stop",
+    "measurement-skipped-collection-unreported",
+    "measurement-skipped-collection-completes",
+    "measurement-codes-expand-public-reasons",
+    "measurement-evidence-deadline-unmapped",
+    "admission-boundary-overwrites-first-diagnostic",
+    "prefault-expired-entry-refused",
+    "prefault-scheduling-margin-omitted",
+    "prefault-post-wait-headroom-skipped",
+    "prefault-refusal-slot-discarded",
+    "rehearsal-retry-window-end",
+    "rehearsal-extra-window-bound",
+    "rehearsal-combined-admission-limit",
+    "rehearsal-opening-probe-recovery-budget",
+    "resource-caller-forced-to-release-a",
+    "resource-judge-hash-unchecked",
+    "resource-caller-judge-source-unchecked",
+    "resource-release-a-unbound",
+    "resource-release-b-unbound",
+    "pool-caller-forced-to-deployment",
+    "pool-registration-source-unchecked",
+    "pool-mixed-caller-source-unchecked",
+    "resource-inventory-commit-unchecked",
+    "resource-inventory-archive-unchecked",
+    "resource-inventory-manifest-commit-unchecked",
+    "scenario-release-a-source-tamper",
+    "scenario-release-b-source-tamper",
+    "scenario-caller-source-tamper",
+    "scenario-judge-source-tamper",
+    "rehearsal-transient-probes-terminal",
+    "rehearsal-setup-opening-unadjusted",
+    "rehearsal-hosted-opening-probes-skipped",
+    "rehearsal-convergence-history-discarded",
+    "rehearsal-final-falsification-retried",
+    "recovery-status-script-unknown",
+    "recovery-status-script-unknown-gate",
+    "control-status-script-failed",
+    "recovery-status-failed-unknown",
+    "recovery-status-failed-unknown-step",
+    "status-opt-in-every-step",
+    "status-opt-in-every-step-gate",
+    "measure-observe-opts-in",
+    "recovery-observe-unwired",
+    "failover-status-read-fatal",
+    "failover-status-read-fatal-deadline",
+    "failover-any-read-missing-sample",
+    "failover-recovery-plain-observe",
+    "failover-status-read-retained",
+    "failover-status-read-uncounted",
+    "failover-status-read-uncounted-deadline",
+    "failover-status-read-result-dropped",
+    "failover-status-read-unpublished",
+    "failed-status-reads-negative-accepted"
   ],
   "killed": [
+    {
+      "id": "helper-rehearsal-lifetime-cap",
+      "test": "TestRehearsalHelpersCoverFreshGateWindow",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "head-init-reuses-setup-window",
+      "test": "TestHeadCampaignFitsAfterPinnedSequence",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "pinned-init-reuses-setup-window",
+      "test": "TestCampaignsFitAfterCalibrationAndCallerPreparation",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "pinned-sequence-reuses-setup-window",
+      "test": "TestRehearsalUsesSessionResourceRequests",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "load-admission-inherits-part-a-limit",
+      "test": "TestLoadAdmissionKeepsTwentyMinuteLimit",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-helpers-expire-with-setup",
+      "test": "TestRehearsalHelpersCoverFreshGateWindow",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-media-margin",
+      "test": "TestPartATrialMargin",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-rollout-trial-margin",
+      "test": "TestPartATrialMargin",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-restart-trial-margin",
+      "test": "TestPartATrialMargin",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "part-a-duration-scope",
+      "test": "TestCampaignLimitsPreserveOtherGates",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "gate-maximum-margin",
+      "test": "TestCampaignLimitsPreserveOtherGates",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-maximum-margin",
+      "test": "TestCallerPlanDurationCeiling",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-plan-margin",
+      "test": "TestCallerPlanDurationCeiling",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-collection-margin",
+      "test": "TestResourceDeadlineArithmetic/gate-first",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stop-margin",
+      "test": "TestResourceDeadlineArithmetic/gate-first",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
     {
       "id": "unknown-not-latched",
       "owner": "P1",
@@ -5580,6 +5762,468 @@
       "id": "boundary-move-requires-both-label-only",
       "test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
       "package": "./internal/operatorevidence/judge-src",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-expiry-retry-skipped",
+      "test": "TestRestorationExpiredThenFresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-late-read-covered",
+      "test": "TestRestorationRetryBudget/read-over-cutoff",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-retry-rows-lost",
+      "test": "TestRestorationRetryRetainsHistory/bound",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-proof-stage-lost",
+      "test": "TestRollbackContinuousLeaseCoverage/gap",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-poll-cap-removed",
+      "test": "TestRestorationRetryPollCap/persistent",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-next-basis-lost",
+      "test": "TestRestorationEmptyRetryKeepsNextBasis/gap=false",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-stage-snapshot-lost",
+      "test": "TestRestorationStageSnapshot",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-retry-headroom-lost",
+      "test": "TestRestorationRetryLeavesProofHeadroom",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "restoration-lease-window-shortened",
+      "test": "TestRestorationReferenceFreshAtTwoPointFiveSeconds",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-conversion-drops-completion",
+      "test": "TestMeasurementProcedureAccounting/failover/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-conversion-drops-steps",
+      "test": "TestMeasurementProcedureAccounting/failover/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-conversion-drops-completion",
+      "test": "TestMeasurementProcedureAccounting/load/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-conversion-drops-steps",
+      "test": "TestMeasurementProcedureAccounting/load/success",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-error-reason-discarded",
+      "test": "TestMeasurementErrorRetention/observe",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-error-first-cause-overwritten",
+      "test": "TestMeasurementErrorRetention/collection-observe",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-error-marks-complete",
+      "test": "TestMeasurementErrorRetention/persist",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-refusal-wrong-condition",
+      "test": "TestFailoverPrimaryRefusalReason/durability",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-recovery-error-discarded",
+      "test": "TestFailoverRecoveryMeasurementError",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-only-one-population-completes",
+      "test": "TestAdmissionPartialAccounting/boundary",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-discards-survivor-diagnostic",
+      "test": "TestAdmissionRetainsSurvivorError",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "paid-clock-admit-helper-lifetime-unbounded",
+      "test": "TestClockAdmitHelperLifetimeBound/1ms",
+      "package": "./cmd/relais-gates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-evidence-error-latches-session",
+      "test": "TestMeasurementErrorRetention/collection-unclassified",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-cutoff-uses-stop-code",
+      "test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-observation-stop-code-unmapped",
+      "test": "TestMeasurementCollectionReserveDoesNotStopSequence/observation-deadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-diagnostic-promoted-to-stop",
+      "test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-skipped-collection-unreported",
+      "test": "TestMeasurementSkippedCollectionIsIncomplete",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-skipped-collection-completes",
+      "test": "TestMeasurementSkippedCollectionIsIncomplete",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-codes-expand-public-reasons",
+      "test": "TestRolloutPublicReasonsKeepLegacyClassification/known-call-loss",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measurement-evidence-deadline-unmapped",
+      "test": "TestMeasurementEvidenceStopCodesAreDiagnosticOnly/gate-deadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "admission-boundary-overwrites-first-diagnostic",
+      "test": "TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-expired-entry-refused",
+      "test": "TestPreFaultExpiredEntry/fresh",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-scheduling-margin-omitted",
+      "test": "TestPreFaultSchedulingMargin/projected",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-post-wait-headroom-skipped",
+      "test": "TestPreFaultSchedulingMargin/oversleep",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "prefault-refusal-slot-discarded",
+      "test": "TestPreFaultRefusalDiagnostics/headroom",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-retry-window-end",
+      "test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-extra-window-bound",
+      "test": "TestRehearsalClockSelectionThreeUpdateFailures",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-combined-admission-limit",
+      "test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-opening-probe-recovery-budget",
+      "test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "resource-caller-forced-to-release-a",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/operator-caller",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-judge-hash-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/judge-hash",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-caller-judge-source-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/caller-judge-source",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-release-a-unbound",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/release-a",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-release-b-unbound",
+      "evidence": "killed",
+      "test": "TestResourceConfigSourceBinding/release-b",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "pool-caller-forced-to-deployment",
+      "evidence": "killed",
+      "test": "TestPoolRegistrationAndBoundary",
+      "package": "./internal/operatorevidence"
+    },
+    {
+      "id": "pool-registration-source-unchecked",
+      "evidence": "killed",
+      "test": "TestPoolRequiresClocksInventoryAndOnePin",
+      "package": "./internal/operatorevidence"
+    },
+    {
+      "id": "pool-mixed-caller-source-unchecked",
+      "evidence": "killed",
+      "test": "TestPoolRequiresClocksInventoryAndOnePin",
+      "package": "./internal/operatorevidence"
+    },
+    {
+      "id": "resource-inventory-commit-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceInventoryTampering/commit",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-inventory-archive-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceInventoryTampering/archive",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "resource-inventory-manifest-commit-unchecked",
+      "evidence": "killed",
+      "test": "TestResourceInventoryTampering/manifest-commit",
+      "package": "./internal/operatorgates"
+    },
+    {
+      "id": "scenario-release-a-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/release-a",
+      "package": "./pkg/operator"
+    },
+    {
+      "id": "scenario-release-b-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/release-b",
+      "package": "./pkg/operator"
+    },
+    {
+      "id": "scenario-caller-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/caller",
+      "package": "./pkg/operator"
+    },
+    {
+      "id": "scenario-judge-source-tamper",
+      "evidence": "killed",
+      "test": "TestScenarioBindsIndependentCallerAndServerSources/judge",
+      "package": "./pkg/operator"
+    },
+    {
+      "id": "rehearsal-transient-probes-terminal",
+      "test": "TestRehearsalClockSelectionTransientProbesRecover",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-setup-opening-unadjusted",
+      "test": "TestRehearsalClockSelectionSetupOpening",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-hosted-opening-probes-skipped",
+      "test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-convergence-history-discarded",
+      "test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "rehearsal-final-falsification-retried",
+      "test": "TestRehearsalClockSelectionFalsificationPrecedesLaterCause/clock-select-growth",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-script-unknown",
+      "test": "TestRecoveryStatusReportsFailedRead",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-script-unknown-gate",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "control-status-script-failed",
+      "test": "TestControlStatusFailureStaysUnknown",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-failed-unknown",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-status-failed-unknown-step",
+      "test": "TestStatusFailedEnvelopeNeedsRecoveryOptIn/true",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "status-opt-in-every-step",
+      "test": "TestStatusFailedEnvelopeNeedsRecoveryOptIn/false",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "status-opt-in-every-step-gate",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "measure-observe-opts-in",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "recovery-observe-unwired",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-fatal",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-fatal-deadline",
+      "test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-any-read-missing-sample",
+      "test": "TestFailoverRecoveryStatusOutcomesUnchanged/worker-status-failed",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-recovery-plain-observe",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-retained",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-uncounted",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-uncounted-deadline",
+      "test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-result-dropped",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-unpublished",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failed-status-reads-negative-accepted",
+      "test": "TestProcessEvidenceFailedStatusReads",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

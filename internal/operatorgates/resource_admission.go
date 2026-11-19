@@ -13,8 +13,11 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
+// loadAdmissionMaximum keeps load plans independent of Part A gate margins.
+const loadAdmissionMaximum = 20 * time.Minute
+
 // AdmissionPlan retains the campaign's explicit durations and seven-minute
-// combined preparation/stop reserve within the 20m procedure window.
+// combined preparation/stop reserve within the gate window.
 type AdmissionPlan struct {
 	SurvivorSeconds int `json:"survivorSeconds"`
 	BoundarySeconds int `json:"boundarySeconds"`
@@ -24,7 +27,7 @@ func (p AdmissionPlan) minimum() time.Duration {
 	return (time.Duration(p.SurvivorSeconds)+time.Duration(p.BoundarySeconds))*time.Second + 7*time.Minute
 }
 func (p AdmissionPlan) valid() bool {
-	return p.SurvivorSeconds > 0 && p.SurvivorSeconds <= 1200 && p.BoundarySeconds > 0 && p.BoundarySeconds <= 1200 && p.minimum() <= GateMaximum
+	return p.SurvivorSeconds > 0 && p.SurvivorSeconds <= 1200 && p.BoundarySeconds > 0 && p.BoundarySeconds <= 1200 && p.minimum() <= loadAdmissionMaximum
 }
 
 // resourceCallers routes the existing two-phase launcher interface to separate
@@ -67,7 +70,7 @@ func (p resourceCallers) stopAll(ctx context.Context, end time.Time) bool {
 	return stopped
 }
 func (r *ProcessRuntime) measurePorts(caller *CallerRuntime, calls int) MeasurePorts {
-	ports := MeasurePorts{ProcedurePorts: ProcedurePorts{Clock: r.Session.clock, Sleep: resourcePause, Step: r.Step, Inventory: r.Inventory, Broker: caller}, Calls: calls, Store: r.Session.OptionalStore(r.Peer), Observe: r.Observe, BeforeFault: func(ctx context.Context, end time.Duration) error {
+	ports := MeasurePorts{ProcedurePorts: ProcedurePorts{Clock: r.Session.clock, Sleep: resourcePause, Step: r.Step, Inventory: r.Inventory, Broker: caller}, Calls: calls, Store: r.Session.OptionalStore(r.Peer), Observe: r.Observe, ObserveRecovery: r.ObserveRecovery, BeforeFault: func(ctx context.Context, end time.Duration) error {
 		if err := r.Inventory(ctx, "from", end); err != nil {
 			return err
 		}
@@ -127,7 +130,21 @@ func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRunti
 		},
 	}, end)
 	result.Admission = &admitted
-	out := ProcedureResult{Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media}
+	return admissionProcedureResult(admitted, idle)
+}
+
+func admissionProcedureResult(admitted AdmissionResult, idle *WaitDiagnostic) ProcedureResult {
+	out := ProcedureResult{Completed: admitted.Completed, Status: admitted.Status, Reason: admitted.Reason, Media: admitted.Survivor.Media, Process: ProcessEvidence{CompletedSteps: admitted.CompletedSteps}}
+	// Preserve the first measurement error across both populations: survivor
+	// first, then boundary. The gate's operational reason can instead name a
+	// later boundary error; it does not replace this procedure diagnostic.
+	out.ProcedureReason = admitted.Survivor.Measurement.ErrorReason
+	if out.ProcedureReason == "" {
+		out.ProcedureReason = admitted.Boundary.Measurement.ErrorReason
+	}
+	if out.ProcedureReason == "" {
+		out.ProcedureReason = diagnosticCode(admitted.Reason)
+	}
 	// Keep the latest expired wait: boundary, then idle, then survivor.
 	for _, w := range []*WaitDiagnostic{admitted.Boundary.ExpiredWait, idle, admitted.Survivor.ExpiredWait} {
 		if w != nil {

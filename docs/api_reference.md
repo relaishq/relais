@@ -1,7 +1,7 @@
 # Relais API Reference
 
-> This page covers the lower-level media-worker and older echo-demo test APIs,
-> plus the legacy plugin interfaces. To connect an application through the
+> This page covers the lower-level media-worker and older echo-demo test APIs.
+> To connect an application through the
 > authenticated `relais-signal` frontend, use [Connect an app](connect-an-app.md).
 > The production process worker uses a private API; this is not its public contract.
 
@@ -30,7 +30,7 @@ GET /calls/{id}
 The current owner, the move log and the owner's count of the caller's packets it could not decrypt
 ```
 
-The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
+The control plane API (`/api/v1/sessions`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
 ## Planned relay change signaling
 
@@ -419,14 +419,3 @@ or operator fix; replaying the same message does not repair them. `closed` means
 retry on the live route. Unknown/missing codes are uncertain on every status,
 including 409. Only a non-envelope 400 (private JSON decoding failure) becomes
 `control_invalid`; an unfamiliar JSON error envelope remains uncertain.
-
-## Plugin Development
-
-Plugins must implement one of:
-- IngressPlugin
-- EgressPlugin
-- TransformPlugin
-
-See [the interfaces](../pkg/plugins/interface.go) and
-[the legacy pipeline](legacy/plugin-pipeline.md). These plugins are not the
-live audio-agent interface.

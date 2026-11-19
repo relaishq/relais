@@ -1,0 +1,341 @@
+{
+  "schemaVersion": 1,
+  "verdict": "failed",
+  "latched": false,
+  "cleanup": true,
+  "errors": [],
+  "uncertainties": [],
+  "failures": [
+    "pooled-media-not-passed"
+  ],
+  "gates": [
+    {
+      "gate": "rollout",
+      "status": "inconclusive",
+      "callerStopped": true,
+      "procedureCompleted": true,
+      "media": {
+        "status": "inconclusive",
+        "failedMetrics": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0,
+        "includedPhases": 1,
+        "droppedPhases": 0,
+        "expectedCalls": 1,
+        "completedCalls": 1,
+        "qualifiedMoves": 7,
+        "qualifiedTakeovers": 3,
+        "phaseDiagnostics": [
+          {
+            "gate": "rollout",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "gate": "control-restart",
+      "status": "inconclusive",
+      "callerStopped": true,
+      "procedureCompleted": true,
+      "media": {
+        "status": "inconclusive",
+        "failedMetrics": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0,
+        "includedPhases": 2,
+        "droppedPhases": 0,
+        "expectedCalls": 2,
+        "completedCalls": 2,
+        "qualifiedMoves": 14,
+        "qualifiedTakeovers": 7,
+        "phaseDiagnostics": [
+          {
+            "gate": "rollout",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "gate": "control-restart",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "gate": "upgrade-rollback",
+      "status": "inconclusive",
+      "callerStopped": true,
+      "procedureCompleted": true,
+      "media": {
+        "status": "inconclusive",
+        "failedMetrics": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0,
+        "includedPhases": 3,
+        "droppedPhases": 0,
+        "expectedCalls": 3,
+        "completedCalls": 3,
+        "qualifiedMoves": 19,
+        "qualifiedTakeovers": 10,
+        "phaseDiagnostics": [
+          {
+            "gate": "rollout",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "gate": "control-restart",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "gate": "upgrade-rollback",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "gate": "relay-deploy",
+      "status": "inconclusive",
+      "callerStopped": true,
+      "procedureCompleted": true,
+      "media": {
+        "status": "inconclusive",
+        "failedMetrics": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0,
+        "includedPhases": 4,
+        "droppedPhases": 0,
+        "expectedCalls": 4,
+        "completedCalls": 4,
+        "qualifiedMoves": 19,
+        "qualifiedTakeovers": 10,
+        "phaseDiagnostics": [
+          {
+            "gate": "rollout",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "gate": "control-restart",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "gate": "upgrade-rollback",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          },
+          {
+            "gate": "relay-deploy",
+            "included": true,
+            "cause": "",
+            "issue": {
+              "path": "",
+              "reason": ""
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "pooledMedia": {
+    "status": "inconclusive",
+    "failedMetrics": 0,
+    "decryptionFailures": 0,
+    "iceRestarts": 0,
+    "lostCalls": 0,
+    "duplicatePackets": 0,
+    "completeMedia": true,
+    "includedPhases": 4,
+    "droppedPhases": 0,
+    "expectedCalls": 4,
+    "completedCalls": 4,
+    "relayCalls": 1,
+    "qualifiedMoves": 19,
+    "qualifiedTakeovers": 10,
+    "phaseDiagnostics": [
+      {
+        "gate": "rollout",
+        "included": true,
+        "cause": "",
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "gate": "control-restart",
+        "included": true,
+        "cause": "",
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "gate": "upgrade-rollback",
+        "included": true,
+        "cause": "",
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "gate": "relay-deploy",
+        "included": true,
+        "cause": "",
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      }
+    ],
+    "excludedEvents": 0,
+    "saturationOverlaps": 0
+  },
+  "cpu": {
+    "calibration": {
+      "passed": true,
+      "causes": [],
+      "checks": [
+        {
+          "rule": "generator-interval-ns-max",
+          "observed": 1203385503,
+          "limit": 1025000000
+        }
+      ],
+      "decoderDropped": 0,
+      "decoderErrors": 0,
+      "duplicatePackets": 0
+    },
+    "phases": [
+      {
+        "passed": false,
+        "causes": [
+          "generator-event-exclusion",
+          "generator-interval-ns-max"
+        ],
+        "checks": [
+          {
+            "rule": "generator-interval-ns-max",
+            "observed": 1203150568,
+            "limit": 1025000000
+          }
+        ],
+        "decoderDropped": 0,
+        "decoderErrors": 0,
+        "duplicatePackets": 0
+      },
+      {
+        "passed": false,
+        "causes": [
+          "generator-event-exclusion",
+          "generator-interval-ns-max"
+        ],
+        "checks": [
+          {
+            "rule": "generator-interval-ns-max",
+            "observed": 1203270068,
+            "limit": 1025000000
+          }
+        ],
+        "decoderDropped": 0,
+        "decoderErrors": 0,
+        "duplicatePackets": 0
+      },
+      {
+        "passed": false,
+        "causes": [
+          "generator-event-exclusion",
+          "generator-interval-ns-max"
+        ],
+        "checks": [
+          {
+            "rule": "generator-interval-ns-max",
+            "observed": 1203204323,
+            "limit": 1025000000
+          }
+        ],
+        "decoderDropped": 0,
+        "decoderErrors": 0,
+        "duplicatePackets": 0
+      },
+      {
+        "passed": true,
+        "causes": [],
+        "checks": [
+          {
+            "rule": "generator-interval-ns-max",
+            "observed": 1203715034,
+            "limit": 1025000000
+          }
+        ],
+        "decoderDropped": 0,
+        "decoderErrors": 0,
+        "duplicatePackets": 0
+      }
+    ]
+  },
+  "clockSelection": {
+    "cause": ""
+  },
+  "clockCoverage": {
+    "falsified": false,
+    "drainComplete": true
+  },
+  "timingUndecided": [
+    {
+      "causes": [
+        "clock-coverage-missing"
+      ]
+    },
+    {
+      "causes": [
+        "metric-undecided"
+      ]
+    }
+  ]
+}

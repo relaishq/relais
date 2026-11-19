@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "verdict": "failed",
+  "latched": false,
+  "cleanup": true,
+  "errors": [
+    "unclassified",
+    "unclassified"
+  ],
+  "uncertainties": [],
+  "failures": [
+    "unclassified",
+    "unclassified",
+    "calibration-failed",
+    "gate-count-differs",
+    "pooled-media-not-passed"
+  ],
+  "gates": [],
+  "pooledMedia": null,
+  "cpu": {
+    "calibration": {
+      "passed": false,
+      "causes": [
+        "incomplete-calibration-evidence"
+      ],
+      "checks": [],
+      "decoderDropped": 0,
+      "decoderErrors": 0,
+      "duplicatePackets": 0
+    },
+    "phases": []
+  },
+  "clockSelection": {
+    "cause": "clock-select-probes"
+  },
+  "timingUndecided": []
+}

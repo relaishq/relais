@@ -1,6 +1,6 @@
 # Relais Scalable Media Server Architecture Plan
 
-> **Historical document.** This plan describes the retired 2025 architecture: the `relais-core` server, `pkg/server` and the Pion v3 adapter in `pkg/webrtc` no longer exist. Its "current" sections and deployment steps do not match the code. For today's architecture see [docs/architecture.md](architecture.md); for the current prototype spec see [GitHub issue #1](https://github.com/relaishq/relais/issues/1).
+> **Historical document.** This plan describes the retired 2025 architecture: the stored-frame pipeline and its runners, the `relais-core` server, `pkg/server`, and the Pion v3 adapter in `pkg/webrtc` no longer exist. Its "current" sections and deployment steps do not match the code. For today's architecture see [docs/architecture.md](architecture.md); for the current prototype spec see [GitHub issue #1](https://github.com/relaishq/relais/issues/1).
 
 ## Executive Summary
 

@@ -23,8 +23,9 @@ const HeadCallerEvidence = "head-caller-evidence.json"
 // judge copy and evidence file. Report.Evaluate never reads it.
 type HeadCallerReport struct {
 	ClockCoverage *clocks.CoverageEvidence `json:"clockCoverage,omitempty"`
-	// Commit is the tested checkout that built the caller. The scenario's caller
-	// source commit stays the deployed release, as caller plans require.
+	// Commit is the tested checkout that built the diagnostic caller. This
+	// comparison keeps the release caller plan and judge; it does not exercise
+	// a scenario whose caller and judge both use the tested checkout.
 	Commit           string                 `json:"commit"`
 	CallerSHA256     string                 `json:"callerSha256"`
 	ScenarioSHA256   string                 `json:"scenarioSha256"`
@@ -48,7 +49,7 @@ func (r *rehearsal) runHeadCaller(ctx context.Context, scenario operator.Scenari
 		_, _ = fmt.Fprintln(r.diagnostics, "head-caller-phase failed: "+code)
 		return head
 	}
-	if r.session == nil || r.session.Latched() {
+	if r.session == nil || r.session.Latched() || len(r.session.Uncertainties()) != 0 {
 		return fail("prior-gate-stopped")
 	}
 	// make operator-rehearsal-build places it beside this executable.
@@ -154,7 +155,7 @@ func (h HeadCallerReport) sanitized() HeadCallerReport {
 }
 
 func (r *rehearsal) headInit(scenario operator.Scenario) (operator.Init, error) {
-	init := r.boundInit
+	init := r.pinnedInit()
 	var err error
 	init.Scenario, err = operator.BuildScenarioIdentity(scenario, r.boundInit.Scenario.ClockReceiptSHA256)
 	return init, err

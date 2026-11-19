@@ -91,6 +91,9 @@ func TestCalibrationReportKeepsClippedMediaWindow(t *testing.T) {
 			if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
 				t.Fatal(err)
 			}
+			if saved.CPU.PhaseCauseScope != "receipt-free-calibration" {
+				t.Fatal("phase calibration causes lost their receipt-free scope", saved.CPU.PhaseCauseScope)
+			}
 			for _, actual := range []Calibration{saved.CPU.Calibration, saved.CPU.Phases[0]} {
 				w := actual.MediaWindow
 				if !reflect.DeepEqual(w.FlaggedIntervals, row.want.FlaggedIntervals) || w.FirstVideoSendOffsetMS != row.want.FirstVideoSendOffsetMS || w.HangUpOffsetMS != row.want.HangUpOffsetMS || math.Abs(w.ClippedFlaggedMS-row.want.ClippedFlaggedMS) > 1e-9 || math.Abs(w.MediaWindowMS-row.want.MediaWindowMS) > 1e-9 {

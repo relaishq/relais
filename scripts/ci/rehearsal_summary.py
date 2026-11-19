@@ -126,7 +126,13 @@ def clock_lines(status):
         selected = 'none'
     else:
         selected = ', '.join(f'{name} {number(field(bounds, name))}' for name in BOUNDS)
-    return [f'Cause: **{"admitted" if cause == "" else code(cause)}**', '', f'Selected bounds: {selected}']
+    lines = [f'Cause: **{"admitted" if cause == "" else code(cause)}**', '', f'Selected bounds: {selected}']
+    failed = status.get('failedWindows', [])
+    lines += ['', f'Failed windows: {len(failed) if isinstance(failed, list) else "unreadable"}']
+    if isinstance(failed, list) and failed:
+        lines += ['', '| Window | Cause |', '| --- | --- |']
+        lines += [f'| {i} | {code(field(window, "cause"))} |' for i, window in enumerate(failed, 1)]
+    return lines
 
 
 def summary(directory):

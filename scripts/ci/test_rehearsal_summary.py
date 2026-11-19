@@ -120,6 +120,26 @@ class Summary(unittest.TestCase):
         lines = self.render(PASSED, {'selectedBounds': ADMITTED['selectedBounds']}).splitlines()
         self.assertIn('Cause: **missing**', lines)
 
+    def test_failed_windows_survive_admission_without_private_fields(self):
+        status = dict(ADMITTED, failedWindows=[
+            {'cause': 'clock-select-updates', 'updates': {'relay-host-a': 9}},
+            {'cause': 'clock-select-probes', 'diagnostics': 'host-diagnostics'}])
+        text = self.render(PASSED, status)
+        self.assertIn('Failed windows: 2', text.splitlines())
+        self.assertIn('| 1 | clock-select-updates |', text.splitlines())
+        self.assertIn('| 2 | clock-select-probes |', text.splitlines())
+        self.assertPrivate(text)
+
+    def test_failed_windows_absent_empty_or_invalid(self):
+        for value, expected in (([], '0'), (None, 'unreadable'), ({}, 'unreadable')):
+            text = self.render(PASSED, dict(ADMITTED, failedWindows=value))
+            self.assertIn('Failed windows: ' + expected, text.splitlines())
+        self.assertIn('Failed windows: 0', self.render(PASSED, ADMITTED).splitlines())
+        text = self.render(PASSED, dict(ADMITTED, failedWindows=[None, {'cause': '10.0.3.7'}]))
+        self.assertIn('| 1 | missing |', text.splitlines())
+        self.assertIn('| 2 | unreadable |', text.splitlines())
+        self.assertPrivate(text)
+
     def test_missing_report_still_shows_clock_status(self):
         lines = self.render(status=ADMITTED).splitlines()
         self.assertIn('`report.json` missing.', lines)

@@ -100,6 +100,7 @@ func (s *Session) noteClockLoss(e clocks.Evidence) {
 			to = max(to, old.UnixSeconds)
 		}
 		s.clockMissingIntervals[slot] = observe.CoverageBreak{FromUnixSeconds: from, UnixSeconds: to, Kind: "log-loss"}
+		delete(s.clockMissingIntervalStages, slot)
 	}
 }
 
@@ -115,7 +116,11 @@ func (s *Session) coverageSnapshot(_ clocks.Bounds) *clocks.CoverageEvidence {
 	for slot, b := range s.clockMissingIntervals {
 		missing[slot] = b
 	}
-	return &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: s.clockBinding.Binding.Bounds, Attempts: boundCoverageAttempts(s.clockAttempts), DrainAttempts: boundCoverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...), ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, Binding: s.clockBinding}
+	stages := map[string]string{}
+	for slot, stage := range s.clockMissingIntervalStages {
+		stages[slot] = stage
+	}
+	return &clocks.CoverageEvidence{Falsified: s.clockCoverageFalsified, Version: clocks.EvidenceVersion, FrontendSlot: f, ControlSlot: c, Bounds: s.clockBinding.Binding.Bounds, Attempts: boundCoverageAttempts(s.clockAttempts), DrainAttempts: boundCoverageAttempts(s.clockDrainAttempts), OmittedAttempts: s.clockAttemptsOmitted, OmittedDrainAttempts: s.clockDrainAttemptsOmitted, OmittedBrackets: s.clockBracketsOmitted, MissingIntervals: missing, MissingIntervalStages: stages, KillBrackets: append([]observe.CoverageBracket{}, s.clockBrackets...), ClockReceiptSHA256: s.clockBinding.Binding.ReceiptSHA256, Binding: s.clockBinding}
 }
 func (s *Session) retainClockBracket(worker, before, after, midpoint string, diagnostics *observe.SignalDiagnostics) {
 	if midpoint == "" {

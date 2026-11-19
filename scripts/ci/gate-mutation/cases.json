@@ -1289,8 +1289,8 @@
     "GuardFingerprint": "dd15e3ca13740d1fa328ca067e9ff34860001819ef9aa32ff35218cca0a15056",
     "File": "internal/operatorgates/measurement.go",
     "Function": "measureDefinition",
-    "Old": "before.Durability != \"sync\" || ",
-    "New": "",
+    "Old": "case before.Durability != \"sync\":",
+    "New": "case false:",
     "Test": "TestMeasurementDefinitionOracle/d17df4b9dd26c99a.json/0",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -1457,8 +1457,8 @@
     "GuardFingerprint": "e14c8dae914680ead5fe20d30c8efaec0ffb587027af22a5852ef3244d8314ed",
     "File": "internal/operatorgates/runtime.go",
     "Function": "step",
-    "Old": "envelope.Kind == \"failed\" && host.IsPureRead(op)",
-    "New": "false && envelope.Kind == \"failed\" && host.IsPureRead(op)",
+    "Old": "envelope.Kind == \"failed\" && (host.IsPureRead(op) || recoveryStatus)",
+    "New": "false && envelope.Kind == \"failed\" && (host.IsPureRead(op) || recoveryStatus)",
     "Test": "TestRuntimeReadCertainty",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -1468,8 +1468,8 @@
     "GuardFingerprint": "c79042366427826d092694c07d95b8c937a929cecf97095804d40c5e639113a5",
     "File": "internal/operatorgates/runtime.go",
     "Function": "step",
-    "Old": "envelope.Kind == \"failed\" && host.IsPureRead(op)",
-    "New": "envelope.Kind == \"failed\" && (host.IsPureRead(op) || op==\"status\")",
+    "Old": "envelope.Kind == \"failed\" && (host.IsPureRead(op) || recoveryStatus)",
+    "New": "envelope.Kind == \"failed\" && (host.IsPureRead(op) || recoveryStatus || op==\"status\")",
     "Test": "TestRuntimeReadCertainty",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -1555,8 +1555,8 @@
     "ID": "mutating-failure-reported",
     "GuardFingerprint": "27227b430cd12a824aa15cfdd7c2a03a6a2740d40fcc209837b9446f455aaa44",
     "File": "internal/operatorgates/host/assets.go",
-    "Function": "Process",
-    "Old": "if IsPureRead(operation) {",
+    "Function": "process",
+    "Old": "if readFailure {",
     "New": "if true {",
     "Test": "TestMutatingWrapperKeepsUnknownFailure",
     "Marker": "MUTATION:",
@@ -4115,8 +4115,8 @@
     "ID": "clock-admission-window-fixed",
     "File": "internal/operatorrehearsal/clock_selection.go",
     "Function": "collectClockSelection",
-    "Old": "end = started.Add(window)",
-    "New": "end = started.Add(150 * time.Second)",
+    "Old": "end = started.Add(window)\n\t\t\tadmission, admissionDone := p.timeout(admissionParent, window)",
+    "New": "end = started.Add(150 * time.Second)\n\t\t\tadmission, admissionDone := p.timeout(admissionParent, window)",
     "Test": "TestClockAdmissionDerivedWindow/L=2.5s,P=8/phase=7",
     "Marker": "MUTATION: admission-derived-window",
     "Package": "./internal/operatorrehearsal"
@@ -6066,7 +6066,7 @@
     "ID": "rollback-empty-old-accepted",
     "File": "internal/operatorgates/lease_guard.go",
     "Function": "restorationProof",
-    "Old": "if len(old.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "Old": "if len(old.Rows) == 0 {\n\t\t\treturn &restorationError{fault(\"clock-lease-missing\"), \"missing-row\"}\n\t\t}",
     "New": "if len(old.Rows) == 0 { return nil }",
     "Test": "TestRollbackProofBoundaries/empty-old",
     "Marker": "MUTATION: rollback-proof-boundary",
@@ -6076,7 +6076,7 @@
     "ID": "rollback-empty-new-accepted",
     "File": "internal/operatorgates/lease_guard.go",
     "Function": "restorationProof",
-    "Old": "if len(next.Rows) == 0 {\n\t\t\treturn fault(\"clock-lease-missing\")\n\t\t}",
+    "Old": "if len(next.Rows) == 0 {\n\t\t\treturn &restorationError{fault(\"clock-lease-missing\"), \"missing-row\"}\n\t\t}",
     "New": "if len(next.Rows) == 0 { return nil }",
     "Test": "TestRollbackProofBoundaries/empty-new",
     "Marker": "MUTATION: rollback-proof-boundary",
@@ -6342,14 +6342,14 @@
       {
         "File": "internal/operatorgates/lease_quiet.go",
         "Function": "prepareFault",
-        "Old": "err := g.checkAt(ready)",
+        "Old": "err := g.checkAt(ready + faultLeaseSchedulingMargin)",
         "New": "err := g.Check()"
       },
       {
         "File": "internal/operatorgates/lease_quiet.go",
         "Function": "prepareFault",
-        "Old": "if err = g.checkFaultQuiet(gap, timing); err == nil {",
-        "New": "if err = nil; err == nil {"
+        "Old": "if err = g.checkAt(g.clock.Elapsed() + faultLeaseSchedulingMargin); err == nil {\n\t\t\t\terr = g.checkFaultQuiet(gap, timing)\n\t\t\t}",
+        "New": "err = nil"
       }
     ]
   },
@@ -7067,8 +7067,8 @@
     "ID": "collection-sleep-deadline-unrecorded",
     "File": "internal/operatorgates/measurement.go",
     "Function": "RunMeasureGate",
-    "Old": "_ = wait.end(err)\n\t\t\t\tbreak",
-    "New": "break",
+    "Old": "_ = wait.end(err)",
+    "New": "_ = err",
     "Test": "TestMeasurementWaitsNameExpiredWait/collection-complete/sleep-deadline",
     "Marker": "MUTATION: measurement-expired-wait",
     "Package": "./internal/operatorgates"
@@ -7182,5 +7182,941 @@
     "Test": "TestBoundaryMoveSettlesOneLabelOnlyVerdict",
     "Marker": "MUTATION: boundary-move-single-verdict",
     "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "restoration-expiry-retry-skipped",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "if err == nil || err.Error() != \"clock-lease-expired\" {",
+    "New": "if true {",
+    "Test": "TestRestorationExpiredThenFresh",
+    "Marker": "MUTATION: restoration-fresh-retry",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-late-read-covered",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "if g.clock.Elapsed() >= end {",
+    "New": "if false {",
+    "Test": "TestRestorationRetryBudget/read-over-cutoff",
+    "Marker": "MUTATION: restoration-cutoff",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-retry-rows-lost",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "log.Rows = append(previous.TrackingLog.Rows, log.Rows...)",
+    "New": "log.Rows = append([]clocks.TrackingRow{}, log.Rows...)",
+    "Test": "TestRestorationRetryRetainsHistory/bound",
+    "Marker": "MUTATION: restoration-whole-history",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-proof-stage-lost",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Old": "r.Session.clockMissingIntervalStages[front] = failure.stage",
+    "New": "r.Session.clockMissingIntervalStages[front] = \"\"",
+    "Test": "TestRollbackContinuousLeaseCoverage/gap",
+    "Marker": "MUTATION: restoration-stage-recording",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-poll-cap-removed",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "limit := completed + time.Duration(clocks.LeaseValidityPolls)*g.session.timing.poll",
+    "New": "limit := end",
+    "Test": "TestRestorationRetryPollCap/persistent",
+    "Marker": "MUTATION: restoration-poll-cap",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-next-basis-lost",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "g.samples[slot] = sample",
+    "New": "_ = slot; _ = sample",
+    "Test": "TestRestorationEmptyRetryKeepsNextBasis/gap=false",
+    "Marker": "MUTATION: restoration-next-basis",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-stage-snapshot-lost",
+    "File": "internal/operatorgates/clock_coverage.go",
+    "Function": "coverageSnapshot",
+    "Old": "MissingIntervalStages: stages",
+    "New": "MissingIntervalStages: nil",
+    "Test": "TestRestorationStageSnapshot",
+    "Marker": "MUTATION: restoration-stage-snapshot",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-retry-headroom-lost",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "spacing := g.session.timing.poll / 10",
+    "New": "spacing := g.session.timing.poll / 5",
+    "Test": "TestRestorationRetryLeavesProofHeadroom",
+    "Marker": "MUTATION: restoration-retry-headroom",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restoration-lease-window-shortened",
+    "File": "internal/operatorgates/lease_guard.go",
+    "Function": "coverRestoration",
+    "Old": "limit := completed + time.Duration(clocks.LeaseValidityPolls)*g.session.timing.poll",
+    "New": "limit := completed + 2*g.session.timing.poll",
+    "Test": "TestRestorationReferenceFreshAtTwoPointFiveSeconds",
+    "Marker": "MUTATION: restoration-lease-window",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "part-a-media-margin",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "return 1500 * time.Second",
+    "New": "return 1020 * time.Second",
+    "Test": "TestPartATrialMargin",
+    "Marker": "MUTATION: part-a-trial-margin",
+    "Package": "./internal/operatorgates",
+    "Function": "CampaignDuration"
+  },
+  {
+    "ID": "part-a-rollout-trial-margin",
+    "File": "internal/operatorgates/trials.go",
+    "Old": "return TrialTarget{7, 7}",
+    "New": "return TrialTarget{7, 3}",
+    "Test": "TestPartATrialMargin",
+    "Marker": "MUTATION: part-a-trial-margin",
+    "Package": "./internal/operatorgates",
+    "Function": "TrialTargets"
+  },
+  {
+    "ID": "part-a-restart-trial-margin",
+    "File": "internal/operatorgates/trials.go",
+    "Old": "return TrialTarget{7, 6}",
+    "New": "return TrialTarget{7, 4}",
+    "Test": "TestPartATrialMargin",
+    "Marker": "MUTATION: part-a-trial-margin",
+    "Package": "./internal/operatorgates",
+    "Function": "TrialTargets"
+  },
+  {
+    "ID": "part-a-duration-scope",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "return 1020 * time.Second",
+    "New": "return 1500 * time.Second",
+    "Test": "TestCampaignLimitsPreserveOtherGates",
+    "Marker": "MUTATION: campaign-scope",
+    "Package": "./internal/operatorgates",
+    "Function": "CampaignDuration"
+  },
+  {
+    "ID": "gate-maximum-margin",
+    "File": "internal/operatorgates/deadline.go",
+    "Old": "GateMaximum = 31 * time.Minute",
+    "New": "GateMaximum = 20 * time.Minute",
+    "Test": "TestCampaignLimitsPreserveOtherGates",
+    "Marker": "MUTATION: campaign-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-maximum-margin",
+    "File": "internal/operatorcaller/protocol.go",
+    "Old": "CallerMaximum   = 33 * time.Minute",
+    "New": "CallerMaximum   = 22 * time.Minute",
+    "Test": "TestCallerPlanDurationCeiling",
+    "Marker": "MUTATION: caller-plan-ceiling",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-plan-margin",
+    "File": "internal/operatorcaller/protocol.go",
+    "Old": "p.DurationSeconds > 1680",
+    "New": "p.DurationSeconds > 1200",
+    "Test": "TestCallerPlanDurationCeiling",
+    "Marker": "MUTATION: caller-plan-ceiling",
+    "Package": "./internal/operatorcaller",
+    "Function": "Validate",
+    "Receiver": "Plan"
+  },
+  {
+    "ID": "caller-collection-margin",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "callerCollectionReserve = 2 * time.Minute",
+    "New": "callerCollectionReserve = time.Minute",
+    "Test": "TestResourceDeadlineArithmetic/gate-first",
+    "Marker": "MUTATION: resource-deadline-arithmetic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-stop-margin",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Old": "callerStopReserve = 2 * time.Minute",
+    "New": "callerStopReserve = time.Minute",
+    "Test": "TestResourceDeadlineArithmetic/gate-first",
+    "Marker": "MUTATION: resource-deadline-arithmetic",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pinned-init-reuses-setup-window",
+    "File": "internal/operatorrehearsal/resource_server.go",
+    "Function": "pinnedInit",
+    "Old": "return init",
+    "New": "return r.boundInit",
+    "Test": "TestCampaignsFitAfterCalibrationAndCallerPreparation",
+    "Marker": "MUTATION: rehearsal-fresh-arm",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "pinned-sequence-reuses-setup-window",
+    "File": "internal/operatorrehearsal/resource_server.go",
+    "Function": "runPinnedSequence",
+    "Old": "r.pinnedInit()",
+    "New": "r.boundInit",
+    "Test": "TestRehearsalUsesSessionResourceRequests",
+    "Marker": "MUTATION: rehearsal-session-arming",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "load-admission-inherits-part-a-limit",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "valid",
+    "Old": "p.minimum() <= loadAdmissionMaximum",
+    "New": "p.minimum() <= GateMaximum",
+    "Test": "TestLoadAdmissionKeepsTwentyMinuteLimit",
+    "Marker": "MUTATION: load-admission-limit",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rehearsal-helpers-expire-with-setup",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Old": "rehearsalHelperMaximum = 180 * time.Minute",
+    "New": "rehearsalHelperMaximum = 105 * time.Minute",
+    "Test": "TestRehearsalHelpersCoverFreshGateWindow",
+    "Marker": "MUTATION: rehearsal-helper-window",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "head-init-reuses-setup-window",
+    "File": "internal/operatorrehearsal/head_caller.go",
+    "Function": "headInit",
+    "Old": "init := r.pinnedInit()",
+    "New": "init := r.boundInit",
+    "Test": "TestHeadCampaignFitsAfterPinnedSequence",
+    "Marker": "MUTATION: head-fresh-arm",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "helper-rehearsal-lifetime-cap",
+    "File": "internal/operatorgates/host/clock_probe.py",
+    "Old": "args.seconds <= 10800",
+    "New": "args.seconds <= 6300",
+    "Test": "TestRehearsalHelpersCoverFreshGateWindow",
+    "Marker": "MUTATION: rehearsal-helper-cap",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "measurement-conversion-drops-completion",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "measureProcedureResult",
+    "Old": "Completed: m.Completed",
+    "New": "Completed: false",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/failover/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "measurement-conversion-drops-steps",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "measureProcedureResult",
+    "Old": "CompletedSteps: m.CompletedSteps",
+    "New": "CompletedSteps: 0",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/failover/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "admission-conversion-drops-completion",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "Completed: admitted.Completed",
+    "New": "Completed: false",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/load/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "admission-conversion-drops-steps",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "CompletedSteps: admitted.CompletedSteps",
+    "New": "CompletedSteps: 0",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementProcedureAccounting/load/success",
+    "Marker": "MUTATION: measurement-accounting"
+  },
+  {
+    "ID": "measurement-error-reason-discarded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainError",
+    "Old": "m.ErrorReason = diagnosticCode(code(err))",
+    "New": "m.ErrorReason = \"\"",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/observe",
+    "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "measurement-error-first-cause-overwritten",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainError",
+    "Old": "err != nil && m.ErrorReason == \"\"",
+    "New": "err != nil",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/collection-observe",
+    "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "measurement-error-marks-complete",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "definitionCompleted && r.Measurement.ErrorReason == \"\"",
+    "New": "definitionCompleted",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/persist",
+    "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "failover-refusal-wrong-condition",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "fault(\"missing-synchronous-primary:durability\")",
+    "New": "fault(\"missing-synchronous-primary:primary\")",
+    "Package": "./internal/operatorgates",
+    "Test": "TestFailoverPrimaryRefusalReason/durability",
+    "Marker": "MUTATION: failover-primary-refusal"
+  },
+  {
+    "ID": "failover-recovery-error-discarded",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "measurement.retainError(err)\n\t\t\t} else {",
+    "New": "measurement.retainError(nil)\n\t\t\t} else {",
+    "Package": "./internal/operatorgates",
+    "Test": "TestFailoverRecoveryMeasurementError",
+    "Marker": "MUTATION: failover-recovery-error"
+  },
+  {
+    "ID": "admission-only-one-population-completes",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunAdmission",
+    "Old": "r.Survivor.Completed && r.Boundary.Completed",
+    "New": "r.Survivor.Completed || r.Boundary.Completed",
+    "Package": "./internal/operatorgates",
+    "Test": "TestAdmissionPartialAccounting/boundary",
+    "Marker": "MUTATION: admission-partial-accounting"
+  },
+  {
+    "ID": "admission-discards-survivor-diagnostic",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "out.ProcedureReason = admitted.Survivor.Measurement.ErrorReason",
+    "New": "out.ProcedureReason = \"\"",
+    "Package": "./internal/operatorgates",
+    "Test": "TestAdmissionRetainsSurvivorError",
+    "Marker": "MUTATION: admission-survivor-error"
+  },
+  {
+    "ID": "paid-clock-admit-helper-lifetime-unbounded",
+    "File": "cmd/relais-gates/clock_admit.go",
+    "Function": "clockAdmit",
+    "Old": "until <= now().Add(operatorgates.SessionMaximum).UnixMilli()",
+    "New": "until <= now().Add(2*operatorgates.SessionMaximum).UnixMilli()",
+    "Package": "./cmd/relais-gates",
+    "Test": "TestClockAdmitHelperLifetimeBound/1ms",
+    "Marker": "MUTATION: clock-admit-helper-lifetime"
+  },
+  {
+    "ID": "measurement-evidence-error-latches-session",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainEvidenceError",
+    "Old": "err = fault(fallback)",
+    "New": "err = fault(\"command-result-unknown\")",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementErrorRetention/collection-unclassified",
+    "Marker": "MUTATION: measurement-error-retention"
+  },
+  {
+    "ID": "measurement-cutoff-uses-stop-code",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Measurement.retainError(fault(\"measurement-telemetry-cutoff\"))",
+    "New": "r.Measurement.retainError(fault(\"gate-deadline\"))",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+    "Marker": "MUTATION: measurement-collection-reserve"
+  },
+  {
+    "ID": "measurement-observation-stop-code-unmapped",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Measurement.retainEvidenceError(err, \"measurement-observation-failed\")",
+    "New": "r.Measurement.retainError(err)",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementCollectionReserveDoesNotStopSequence/observation-deadline",
+    "Marker": "MUTATION: measurement-collection-reserve"
+  },
+  {
+    "ID": "measurement-diagnostic-promoted-to-stop",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Completed = definitionCompleted && r.Measurement.ErrorReason == \"\" && r.Reason == \"\" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd",
+    "New": "if r.Reason == \"\" { r.Reason = r.Measurement.ErrorReason }\n\tr.Completed = definitionCompleted && r.Measurement.ErrorReason == \"\" && r.Reason == \"\" && !g.unknown && !procedureLate && p.Clock.Elapsed() < collectionEnd",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementCollectionReserveDoesNotStopSequence/telemetry-cutoff",
+    "Marker": "MUTATION: measurement-collection-reserve"
+  },
+  {
+    "ID": "measurement-skipped-collection-unreported",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "else if p.Collect != nil {",
+    "New": "else if false {",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementSkippedCollectionIsIncomplete",
+    "Marker": "MUTATION: measurement-skipped-collection"
+  },
+  {
+    "ID": "measurement-skipped-collection-completes",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "definitionCompleted && r.Measurement.ErrorReason == \"\"",
+    "New": "definitionCompleted",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementSkippedCollectionIsIncomplete",
+    "Marker": "MUTATION: measurement-skipped-collection"
+  },
+  {
+    "ID": "measurement-codes-expand-public-reasons",
+    "File": "internal/operatorgates/replay.go",
+    "Function": "ErrorCategory",
+    "Old": "switch message {",
+    "New": "switch message {\n\t\tcase \"known-call-loss\": return message",
+    "Package": "./internal/operatorgates",
+    "Test": "TestRolloutPublicReasonsKeepLegacyClassification/known-call-loss",
+    "Marker": "MUTATION: legacy-public-reason"
+  },
+  {
+    "ID": "measurement-evidence-deadline-unmapped",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "retainEvidenceError",
+    "Old": "case \"gate-deadline\", \"command-result-unknown\", \"restore-failed\", \"interrupted\":",
+    "New": "case \"command-result-unknown\":",
+    "Package": "./internal/operatorgates",
+    "Test": "TestMeasurementEvidenceStopCodesAreDiagnosticOnly/gate-deadline",
+    "Marker": "MUTATION: measurement-diagnostic-stop-code"
+  },
+  {
+    "ID": "admission-boundary-overwrites-first-diagnostic",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "admissionProcedureResult",
+    "Old": "out.ProcedureReason = admitted.Survivor.Measurement.ErrorReason",
+    "New": "out.ProcedureReason = admitted.Boundary.Measurement.ErrorReason",
+    "Package": "./internal/operatorgates",
+    "Test": "TestAdmissionKeepsFirstDiagnosticAndBoundaryOutcome",
+    "Marker": "MUTATION: admission-first-diagnostic"
+  },
+  {
+    "ID": "prefault-expired-entry-refused",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "prepareFault",
+    "Old": "err != nil && code(err) != \"clock-lease-expired\"",
+    "New": "err != nil",
+    "Test": "TestPreFaultExpiredEntry/fresh",
+    "Marker": "MUTATION: prefault-expired-entry",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "prefault-scheduling-margin-omitted",
+    "Test": "TestPreFaultSchedulingMargin/projected",
+    "Marker": "MUTATION: prefault-scheduling-margin",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "err := g.checkAt(ready + faultLeaseSchedulingMargin)",
+        "New": "err := g.checkAt(ready)"
+      },
+      {
+        "File": "internal/operatorgates/lease_quiet.go",
+        "Function": "prepareFault",
+        "Old": "g.checkAt(g.clock.Elapsed() + faultLeaseSchedulingMargin)",
+        "New": "g.Check()"
+      }
+    ]
+  },
+  {
+    "ID": "prefault-post-wait-headroom-skipped",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "prepareFault",
+    "Old": "if err = g.checkAt(g.clock.Elapsed() + faultLeaseSchedulingMargin); err == nil {",
+    "New": "if err = nil; err == nil {",
+    "Test": "TestPreFaultSchedulingMargin/oversleep",
+    "Marker": "MUTATION: prefault-scheduling-margin",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "prefault-refusal-slot-discarded",
+    "File": "internal/operatorgates/lease_quiet.go",
+    "Function": "recordFaultLease",
+    "Old": "if timing.LimitingSlot == \"\" || v.RemainingNS < timing.RemainingNS {",
+    "New": "if false {",
+    "Test": "TestPreFaultRefusalDiagnostics/headroom",
+    "Marker": "MUTATION: prefault-refusal-diagnostics",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "rehearsal-retry-window-end",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "started = p.now()\n\t\t\t\t\tend = started.Add(window)",
+    "New": "started = p.now()\n\t\t\t\t\tend = started.Add(window - time.Second)",
+    "Test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+    "Marker": "MUTATION: rehearsal-retry-end",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-extra-window-bound",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Old": "clockSelectionExtraWindows = 2",
+    "New": "clockSelectionExtraWindows = 1",
+    "Test": "TestRehearsalClockSelectionThreeUpdateFailures",
+    "Marker": "MUTATION: rehearsal-extra-windows",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-combined-admission-limit",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "p.now().Add(window).After(admissionLimit)",
+    "New": "p.now().Add(window).After(admissionLimit) && false",
+    "Test": "TestRehearsalClockSelectionExactlyOneRetryFits",
+    "Marker": "MUTATION: rehearsal-admission-limit",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-opening-probe-recovery-budget",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Old": "rehearsalClockProbeRecovery = 50 * time.Second",
+    "New": "rehearsalClockProbeRecovery = 0 * time.Second",
+    "Test": "TestRehearsalClockSelectionOpeningRecoveryBudget",
+    "Marker": "MUTATION: opening-recovery-budget",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "resource-caller-forced-to-release-a",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "validate",
+    "Old": "s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit",
+    "New": "s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit || s.scenario.Judge.SourceCommit != c.Pins[0].Commit",
+    "Test": "TestResourceConfigSourceBinding/operator-caller",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-judge-hash-unchecked",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "validate",
+    "Old": "hex.EncodeToString(sum[:]) != s.scenario.Judge.SHA256",
+    "New": "hex.EncodeToString(sum[:]) == \"\"",
+    "Test": "TestResourceConfigSourceBinding/judge-hash",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-caller-judge-source-unchecked",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "validate",
+    "Old": "s.scenario.Judge.SourceCommit != s.scenario.Caller.SourceCommit",
+    "New": "false",
+    "Test": "TestResourceConfigSourceBinding/caller-judge-source",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-release-a-unbound",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "ValidatePins",
+    "Old": "identity.SourceCommit != p.Commit",
+    "New": "false",
+    "Test": "TestResourceConfigSourceBinding/release-a",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-release-b-unbound",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "ValidatePins",
+    "Old": "identity.SourceCommit != p.Commit",
+    "New": "false",
+    "Test": "TestResourceConfigSourceBinding/release-b",
+    "Marker": "MUTATION: resource-source-binding",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pool-caller-forced-to-deployment",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "p.FirstFaultAt.IsZero()",
+    "New": "p.FirstFaultAt.IsZero() || p.DeployedSHA != p.Plan.PublicSHA",
+    "Test": "TestPoolRegistrationAndBoundary",
+    "Marker": "MUTATION: pool-independent-source",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "pool-registration-source-unchecked",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "r.PublicSHA != p.Plan.PublicSHA",
+    "New": "false",
+    "Test": "TestPoolRequiresClocksInventoryAndOnePin",
+    "Marker": "MUTATION: pool-registration-source",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "pool-mixed-caller-source-unchecked",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "sha != \"\" && sha != p.Plan.PublicSHA",
+    "New": "false",
+    "Test": "TestPoolRequiresClocksInventoryAndOnePin",
+    "Marker": "MUTATION: pool-mixed-pin",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "resource-inventory-commit-unchecked",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "Parse",
+    "Old": "pin.Commit == p.Commit",
+    "New": "true",
+    "Test": "TestResourceInventoryTampering/commit",
+    "Marker": "MUTATION: resource-inventory-tamper",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-inventory-archive-unchecked",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "Parse",
+    "Old": "pin.ArchiveSHA256 == p.ArchiveSHA256",
+    "New": "true",
+    "Test": "TestResourceInventoryTampering/archive",
+    "Marker": "MUTATION: resource-inventory-tamper",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-inventory-manifest-commit-unchecked",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "Parse",
+    "Old": "p.Manifest.Commit != pins[pin].Commit",
+    "New": "false",
+    "Test": "TestResourceInventoryTampering/manifest-commit",
+    "Marker": "MUTATION: resource-inventory-tamper",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "scenario-release-a-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/release-a",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-release-b-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/release-b",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-caller-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/caller",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "scenario-judge-source-tamper",
+    "File": "pkg/operator/scenario.go",
+    "Function": "CheckPlan",
+    "Old": "s.Digest != plan",
+    "New": "false",
+    "Test": "TestScenarioBindsIndependentCallerAndServerSources/judge",
+    "Marker": "MUTATION: scenario-source-tamper",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "rehearsal-transient-probes-terminal",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if p.converge && cause == \"clock-select-probes\" {",
+    "New": "if false {",
+    "Test": "TestRehearsalClockSelectionTransientProbesRecover",
+    "Marker": "MUTATION: rehearsal-transient-probes",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-setup-opening-unadjusted",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if now := p.now(); now.After(started) {",
+    "New": "if now := p.now(); false {",
+    "Test": "TestRehearsalClockSelectionSetupOpening",
+    "Marker": "MUTATION: rehearsal-setup-opening",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-hosted-opening-probes-skipped",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "probeFront = front",
+    "New": "probeFront = \"\"",
+    "Test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+    "Marker": "MUTATION: hosted-opening-recovery",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-convergence-history-discarded",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "probes.Collect(batch, \"\", nil)",
+    "New": "",
+    "Test": "TestRehearsalClockSelectionHostedOpeningRecovers/slow=false",
+    "Marker": "MUTATION: hosted-opening-recovery",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "rehearsal-final-falsification-retried",
+    "File": "internal/operatorrehearsal/clock_selection.go",
+    "Function": "collectClockSelection",
+    "Old": "if p.converge && slices.ContainsFunc(records, func(record clocks.ProbeRecord) bool { return record.Status == \"falsified\" }) {",
+    "New": "if false {",
+    "Test": "TestRehearsalClockSelectionFalsificationPrecedesLaterCause/clock-select-growth",
+    "Marker": "MUTATION: rehearsal-final-falsification",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "recovery-status-script-unknown",
+    "File": "internal/operatorgates/host/assets.go",
+    "Function": "RecoveryStatus",
+    "Old": "return process(\"status\", parameters, nil, true)",
+    "New": "return process(\"status\", parameters, nil, false)",
+    "Test": "TestRecoveryStatusReportsFailedRead",
+    "Marker": "MUTATION: recovery-status-failed-read",
+    "Package": "./internal/operatorgates/host"
+  },
+  {
+    "ID": "recovery-status-script-unknown-gate",
+    "File": "internal/operatorgates/host/assets.go",
+    "Function": "RecoveryStatus",
+    "Old": "return process(\"status\", parameters, nil, true)",
+    "New": "return process(\"status\", parameters, nil, false)",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "control-status-script-failed",
+    "File": "internal/operatorgates/host/assets.go",
+    "Function": "Process",
+    "Old": "return process(operation, parameters, stage, IsPureRead(operation))",
+    "New": "return process(operation, parameters, stage, IsPureRead(operation) || operation == \"status\")",
+    "Test": "TestControlStatusFailureStaysUnknown",
+    "Marker": "MUTATION: control-status-unknown",
+    "Package": "./internal/operatorgates/host"
+  },
+  {
+    "ID": "recovery-status-failed-unknown",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Receiver": "ProcessRuntime",
+    "Old": "if envelope.Kind == \"failed\" && (host.IsPureRead(op) || recoveryStatus) &&",
+    "New": "if envelope.Kind == \"failed\" && host.IsPureRead(op) &&",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "recovery-status-failed-unknown-step",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Receiver": "ProcessRuntime",
+    "Old": "if envelope.Kind == \"failed\" && (host.IsPureRead(op) || recoveryStatus) &&",
+    "New": "if envelope.Kind == \"failed\" && host.IsPureRead(op) &&",
+    "Test": "TestStatusFailedEnvelopeNeedsRecoveryOptIn/true",
+    "Marker": "MUTATION: recovery-status-failed-definite",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "status-opt-in-every-step",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Receiver": "ProcessRuntime",
+    "Old": "recoveryStatus := op == \"status\" && extra.RecoveryStatus",
+    "New": "recoveryStatus := op == \"status\"",
+    "Test": "TestStatusFailedEnvelopeNeedsRecoveryOptIn/false",
+    "Marker": "MUTATION: plain-status-failed-latches",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "status-opt-in-every-step-gate",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "step",
+    "Receiver": "ProcessRuntime",
+    "Old": "recoveryStatus := op == \"status\" && extra.RecoveryStatus",
+    "New": "recoveryStatus := op == \"status\"",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-opt-in-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-observe-opts-in",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Observe",
+    "Receiver": "ProcessRuntime",
+    "Old": "return r.observe(ctx, end, ProcessExtra{})",
+    "New": "return r.observe(ctx, end, ProcessExtra{RecoveryStatus: true})",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-opt-in-scope",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "recovery-observe-unwired",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "measurePorts",
+    "Receiver": "ProcessRuntime",
+    "Old": "ObserveRecovery: r.ObserveRecovery, ",
+    "New": "",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-fatal",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "if errors.As(err, new(failedStatusRead)) {",
+    "New": "if errors.As(nil, new(failedStatusRead)) {",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-fatal-deadline",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "if errors.As(err, new(failedStatusRead)) {",
+    "New": "if errors.As(nil, new(failedStatusRead)) {",
+    "Test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+    "Marker": "MUTATION: failover-status-read-deadline",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-any-read-missing-sample",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "if errors.As(err, new(failedStatusRead)) {",
+    "New": "if errors.As(err, new(*ProcedureError)) && code(err) != \"command-result-unknown\" {",
+    "Test": "TestFailoverRecoveryStatusOutcomesUnchanged/worker-status-failed",
+    "Marker": "MUTATION: failover-recovery-worker-status-failure",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-recovery-plain-observe",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "o, err := observeRecovery()",
+    "New": "o, err := observe()",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-retained",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "g.evidence.FailedStatusReads++",
+    "New": "g.evidence.FailedStatusReads++\n\t\t\t\tmeasurement.retainError(err)",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-completes",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-uncounted",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "g.evidence.FailedStatusReads++",
+    "New": "",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-uncounted-deadline",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Receiver": "procedure",
+    "Old": "g.evidence.FailedStatusReads++",
+    "New": "",
+    "Test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+    "Marker": "MUTATION: failover-status-read-deadline",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-result-dropped",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.FailedStatusReads = g.evidence.FailedStatusReads",
+    "New": "",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-missing-sample",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-status-read-unpublished",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "measureProcedureResult",
+    "Old": ", FailedStatusReads: m.FailedStatusReads}}",
+    "New": "}}",
+    "Test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+    "Marker": "MUTATION: failover-status-read-completes",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failed-status-reads-negative-accepted",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "DecodeProcessEvidence",
+    "Old": "e.FailedStatusReads < 0 || ",
+    "New": "",
+    "Test": "TestProcessEvidenceFailedStatusReads",
+    "Marker": "MUTATION: failed-status-reads-negative",
+    "Package": "./internal/operatorgates"
   }
 ]

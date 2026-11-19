@@ -151,7 +151,7 @@ func TestLeaseObservationLimit(t *testing.T) {
 func TestOrdinaryFaultAndRestorationTimingDiagnostics(t *testing.T) {
 	var output bytes.Buffer
 	recorder := TimingRecorder{Writer: &output}
-	recorder.RecordFaultQuiet(FaultQuietTiming{Action: "move", Slot: "shared", LastReadDoneNS: 2000000000, RequiredGapNS: 1250000000, WaitedNS: 1250000000, BeforeSendNS: 3260000000, RemainingNS: 1700000000, Reacquires: 1})
+	recorder.RecordFaultQuiet(FaultQuietTiming{Action: "move", Slot: "shared", LastReadDoneNS: 2000000000, RequiredGapNS: 1250000000, WaitedNS: 1250000000, BeforeSendNS: 3260000000, RemainingNS: 1700000000, LimitingSlot: "w2", Reacquires: 1})
 	recorder.RecordRestorationLeaseRead(LeaseRead{Sent: map[string]time.Duration{"w1": 4 * time.Second, "private-label": time.Second}}, 3900*time.Millisecond, 4500*time.Millisecond)
 	var quiet struct {
 		Type string `json:"type"`
@@ -167,7 +167,7 @@ func TestOrdinaryFaultAndRestorationTimingDiagnostics(t *testing.T) {
 	if decoder.Decode(&quiet) != nil || decoder.Decode(&restoration) != nil || recorder.Err() != nil {
 		t.Fatal("MUTATION: ordinary-fault-diagnostic", recorder.Err())
 	}
-	if quiet.Type != "clock-fault-quiet" || quiet.Action != "move" || quiet.LastReadDoneNS != 2000000000 || quiet.RequiredGapNS != 1250000000 || quiet.WaitedNS != 1250000000 || quiet.BeforeSendNS != 3260000000 || quiet.RemainingNS != 1700000000 || quiet.Reacquires != 1 {
+	if quiet.Type != "clock-fault-quiet" || quiet.Action != "move" || quiet.LastReadDoneNS != 2000000000 || quiet.RequiredGapNS != 1250000000 || quiet.WaitedNS != 1250000000 || quiet.BeforeSendNS != 3260000000 || quiet.RemainingNS != 1700000000 || quiet.LimitingSlot != "w2" || quiet.Reacquires != 1 {
 		t.Fatal("MUTATION: ordinary-fault-diagnostic", quiet)
 	}
 	if restoration.Type != "clock-restoration-lease-read" || restoration.StartedNS != 3900000000 || restoration.CompletedNS != 4500000000 || restoration.SentNS["w1"] != 4000000000 || len(restoration.SentNS) != 1 {

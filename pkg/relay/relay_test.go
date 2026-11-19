@@ -326,13 +326,27 @@ func TestSpoofedRequestForAnotherSessionLeavesTheCallAlone(t *testing.T) {
 // owner in the store mid-call. The relay notices on the caller's next
 // consent check and proposes the new owner as a candidate, but media keeps
 // going to the old owner until the new one authenticates a consent check.
+//
+// The check's background lookup is held until the old owner has the check.
+// Otherwise the lookup can propose the new owner before the caller loop
+// forwards the check, and forward() then sends it to the candidate (#356).
 func TestOwnerChangeMovesTheCallOnlyOnceTheNewOwnerAnswers(t *testing.T) {
-	sys := startTestRelay(t, Config{})
+	release := make(chan struct{})
+	var armed atomic.Bool
+	var once sync.Once
+	sys := startTestRelay(t, Config{beforeApply: func(id string) {
+		if id == sessionA && armed.Load() {
+			<-release
+		}
+	}})
+	// Release before relay cleanup waits for the held lookup.
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
 	oldOwner, newOwner := sys.worker(t, sessionA), sys.worker(t, sessionB)
 	caller := newTestCaller(t)
 	sys.connect(t, caller, oldOwner, sessionA)
 
 	transferTestLease(t, sys.cfg.Owners, sessionA, newOwner.addr())
+	armed.Store(true)
 	consent := bindingRequest(t, sessionA)
 	oldOwner.onReceiveTimeout = func() {
 		t.Logf("owner-change receive timeout: relay stats: %+v", sys.relay.Stats())
@@ -349,6 +363,7 @@ func TestOwnerChangeMovesTheCallOnlyOnceTheNewOwnerAnswers(t *testing.T) {
 	caller.send(t, consent, sys.relay.PublicAddr())
 	oldOwner.expect(t, caller.addr(), consent, "the check that finds the new owner")
 	oldOwner.onReceiveTimeout = nil
+	once.Do(func() { close(release) })
 	require.Eventually(t, func() bool { return sys.relay.Stats().PendingFlows == 1 }, receiveTimeout, time.Millisecond,
 		"new owner proposed")
 

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -26,6 +27,7 @@ func TestOracleCoreProjections(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		applyTrialMarginDeadlineDelta(t, &f)
 		n, err := ReplayCore(f)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -304,5 +306,45 @@ func TestMutationCoverageInventory(t *testing.T) {
 			t.Fatal("killed mutation ownership differs", c.ID)
 		}
 		delete(specs, c.ID)
+	}
+}
+
+// The frozen oracle predates the approved 31-minute gate cap. Check its old
+// value before applying only that policy delta; keep the corpus bytes intact.
+func applyTrialMarginDeadlineDelta(t *testing.T, f *OracleFixture) {
+	t.Helper()
+	now := int64(0)
+	requests := map[int]OracleEvent{}
+	for i, e := range f.Events {
+		if e.Kind == "request" {
+			requests[e.ID] = e
+			continue
+		}
+		if e.Kind != "result" {
+			continue
+		}
+		if strings.HasSuffix(e.Operation, ".now") {
+			if err := json.Unmarshal(e.Value, &now); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if e.Operation != "run.previewGateDeadline" {
+			continue
+		}
+		var armed int64
+		if err := json.Unmarshal(requests[e.ID].Inputs[1], &armed); err != nil {
+			t.Fatal(err)
+		}
+		if now >= armed+105*time.Minute.Milliseconds() {
+			continue
+		}
+		var old int64
+		if err := json.Unmarshal(e.Value, &old); err != nil {
+			t.Fatal(err)
+		}
+		if old != min(now+20*time.Minute.Milliseconds(), armed+105*time.Minute.Milliseconds()) {
+			t.Fatal("frozen gate deadline differs before trial margin delta", old)
+		}
+		f.Events[i].Value, _ = json.Marshal(min(now+31*time.Minute.Milliseconds(), armed+105*time.Minute.Milliseconds()))
 	}
 }
