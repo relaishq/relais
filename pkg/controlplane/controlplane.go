@@ -112,6 +112,9 @@ type call struct {
 	relayEpisodeMu sync.Mutex    // serializes journal access without holding the operation lock
 	relayEpisode   *relayEpisode // guarded by relayEpisodeMu
 
+	relayNotMovableSlot   string // guarded by stateMu; last drain report, local to this control
+	relayNotMovableReason string // guarded by stateMu
+
 	relayTarget    string             // guarded by controlMu
 	relayUnplanned bool               // guarded by controlMu
 	relayCancel    context.CancelFunc // guarded by controlMu; published with c.mu ownership

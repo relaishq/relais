@@ -69,6 +69,63 @@ even after a failed offer. A planned change that cannot switch, or switches
 without confirmation, rolls back to the old slot with a higher generation,
 confirmed under the same mode.
 
+### Planned relay drain (private control API)
+
+`POST /relays/{id}/drain` marks the slot draining, excluding it from new
+placement. At most eight calls change relay at once. After three failed planned
+attempts, the call is reported as not movable. Control picks a target again for
+each retry. A caller without relay-change support or a worker without C is
+reported immediately. Sleeping calls release capacity, so other calls can
+start. Before each retry, control reads the current assignment and recovery
+episode. A call already off the draining slot is reported moved only after
+durable media confirmation and episode settlement. An open recovery episode settles before
+another planned attempt; observing a busy operation does not consume a retry.
+No target, a target lost or draining after selection, and lease loss before the
+pending assignment is saved also retry without consuming that allowance.
+Control re-reads call state and re-picks the target. These waits advance through
+1 s, 2 s and 4 s, then stay at 4 s until the drain deadline. With no intervening
+waits, three failed planned attempts have only the 1 s and 2 s delays. A call that
+never starts an attempt still reports the context error without `not_movable`.
+Only failed planned attempts whose pending assignment was accepted and which
+leave the call on the draining slot count toward exhaustion. Change, rollback and
+episode bounds apply. One two-minute budget covers the whole drain, including
+queued calls, backoff and waits for a target or ownership. An earlier request
+deadline wins. Expiry stops planned attempts and reports `context deadline exceeded`.
+An in-flight change still completes its bounded rollback or recovery before
+returning the report; expiry does not abandon a call between paths.
+
+A completed report returns HTTP `200`, including partial drains and cancellation:
+
+```json
+{"moves":[{"id":"call-a","from":"r1","to":"r2"},{"id":"call-b","from":"r1","not_movable":true,"error":"controlplane: confirmation_unsupported"}],"not_movable":1}
+```
+
+`to` names the successful destination, including a recovery move observed
+between attempts. Per-call `not_movable` is true only for exhausted planned
+attempts or unsupported contracts. The top-level `not_movable` is their count.
+If a confirmed move fails to clean up the old relay, its result includes both
+`to` and `error`; control does not repeat the media move.
+Cancellation and ended/unknown calls instead have `error` without
+`not_movable`, and do not store a status reason. They stop without another
+attempt once observed. For example, cancellation can return:
+
+```json
+{"moves":[{"id":"call-a","from":"r1","error":"context canceled"}],"not_movable":0}
+```
+
+Other pre-attempt read failures report an error without `not_movable`. An empty drain returns `{"moves":[],"not_movable":0}`.
+Request-level failures use the error response: an unknown slot returns `404`, control not ready returns `503`, and
+an assignment read failure before work starts uses its existing error status.
+The in-process `DrainRelay` API still returns the joined per-call errors.
+
+For a call still on its old slot, private `GET /status` adds the optional reason
+string `relay.not_movable`, for example
+`{"slot":"r1","generation":1,"confirmation":"delivery","not_movable":"controlplane: confirmation_unsupported"}`.
+It records the last drain report for that slot in this control process. A new
+drain clears the old report. Any successful `ChangeRelay` also clears it, so
+returning to an old slot does not revive a stale reason. This operator report
+is not persisted across control restarts.
+
 ### Relay change confirmation (ADR 0016 sections 5, 7, 10)
 
 A switch commit alone never completes a relay change. A caller may also send

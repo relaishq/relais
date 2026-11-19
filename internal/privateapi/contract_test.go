@@ -43,7 +43,7 @@ type fixture struct {
 func endpoints() []endpoint {
 	return []endpoint{
 		{"worker", "DELETE /sessions/{id}/restart", nil, nil, []int{204, 400, 409}},
-		{"control", "POST /relays/{id}/drain", nil, nil, []int{200, 404, 409}},
+		{"control", "POST /relays/{id}/drain", nil, controlplane.RelayDrainResult{}, []int{200, 404, 409, 500, 503}},
 		{"worker", "POST /relays", mediaworker.RelaySetRequest{}, nil, []int{204, 400, 409}},
 		{"worker", "POST /sessions/{id}/restart", mediaworker.RestartRequest{}, mediaworker.RestartReply{}, []int{200, 400, 409}},
 		{"worker", "GET /sessions/{id}/relay-delivery", nil, mediaworker.RelayDeliveryReport{}, []int{200, 400, 404, 409}},

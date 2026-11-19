@@ -92,6 +92,8 @@ func relayFailureDetail(rec sessionstore.RelayConfirmation) RelayEvent {
 // CallRelayStatus is a call's relay assignment, accepted confirmation mode and
 // current attempt in private status (ADR 0016 section 7).
 type CallRelayStatus struct {
+	// NotMovable is the last drain failure on the current slot, local to this control.
+	NotMovable   string              `json:"not_movable,omitempty"`
 	Slot         string              `json:"slot"`
 	Pending      string              `json:"pending,omitempty"`
 	Generation   uint64              `json:"generation"`
@@ -133,6 +135,16 @@ func (p *Plane) relayStatus(ctx context.Context, id string) (*CallRelayStatus, e
 		return nil, err
 	}
 	out := &CallRelayStatus{Slot: a.Slot, Pending: a.Pending, Generation: a.Generation, Confirmation: cmp.Or(rec.Mode, sessionstore.RelayConfirmNone)}
+	p.mu.Lock()
+	c := p.calls[id]
+	p.mu.Unlock()
+	if c != nil {
+		c.stateMu.Lock()
+		if c.relayNotMovableSlot == a.Slot {
+			out.NotMovable = c.relayNotMovableReason
+		}
+		c.stateMu.Unlock()
+	}
 	if rec.Attempt != nil {
 		out.Attempt = relayAttemptStatus(rec, a)
 	}
