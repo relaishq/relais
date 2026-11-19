@@ -171,6 +171,9 @@ type ProcessEvidence struct {
 	ExcludedKills             int     `json:"excludedKills,omitempty"`
 	KillReplacements          int     `json:"killReplacements,omitempty"`
 	KillReplacementSkipped    string  `json:"killReplacementSkipped,omitempty"`
+	// FailedStatusReads counts definite failed control status reads in the
+	// failover recovery wait. They are missing samples, not incomplete steps.
+	FailedStatusReads int `json:"failedStatusReads,omitempty"`
 	// ExpiredWait names the polling wait that the gate budget ended, if any.
 	ExpiredWait *WaitDiagnostic `json:"expiredWait,omitempty"`
 }

@@ -770,16 +770,21 @@ unknown result and latches. The one exception is the failover gate's
 `failover-primary-recovered` wait. Only that wait opts in through
 `host.RecoveryStatus`. Its script differs only in the exception branch. That
 branch reports a definite failed read with a fixed code. The wait counts that
-read as a missing sample, retains the error and keeps the 5-second poll until
-the gate deadline. Unknown, malformed and transport results still latch. A
-failed read can still have reconciled a loss that the store already decided.
-The wait counts recovery only after a later successful read. That read exposes
-`lost_count`, and a nonzero count fails the gate as known call loss.
+read as a missing sample and in the process evidence `failedStatusReads`. It
+keeps the 5-second poll until the gate deadline. The failed read alone does not
+make the procedure incomplete: a later successful read that shows a new
+synchronous primary and no call loss completes recovery. A store observation
+error in the same wait still makes the procedure incomplete. Unknown, malformed
+and transport results still latch. A failed read can still have reconciled a
+loss that the store already decided. The wait counts recovery only after a
+later successful read. That read exposes `lost_count`, and a nonzero count
+fails the gate as known call loss. The judge does not read process evidence.
 `TestFailoverRecoveryFailedStatusReadIsMissingSample`,
 `TestFailoverRecoveryFailedStatusReadsUntilDeadline`,
 `TestFailoverRecoveryFailedStatusReadThenLossFails`,
 `TestFailoverRecoveryStatusOutcomesUnchanged`,
 `TestStatusFailedEnvelopeNeedsRecoveryOptIn`,
+`TestProcessEvidenceFailedStatusReads`, `TestFailoverRecoveryMeasurementError`,
 `TestControlStatusFailureStaysUnknown` and `TestRecoveryStatusReportsFailedRead`
 check this rule.
 

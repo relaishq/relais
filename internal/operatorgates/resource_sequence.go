@@ -485,5 +485,5 @@ func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime,
 
 // measureProcedureResult projects measurement outcomes into sequence accounting.
 func measureProcedureResult(m MeasureResult) ProcedureResult {
-	return ProcedureResult{Completed: m.Completed, ProcedureReason: m.Measurement.ErrorReason, Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{CompletedSteps: m.CompletedSteps, ExpiredWait: m.ExpiredWait}}
+	return ProcedureResult{Completed: m.Completed, ProcedureReason: m.Measurement.ErrorReason, Status: m.Status, Reason: m.Reason, Media: m.Media, Process: ProcessEvidence{CompletedSteps: m.CompletedSteps, ExpiredWait: m.ExpiredWait, FailedStatusReads: m.FailedStatusReads}}
 }

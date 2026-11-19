@@ -761,7 +761,12 @@
     "failover-status-read-fatal-deadline",
     "failover-any-read-missing-sample",
     "failover-recovery-plain-observe",
-    "failover-status-read-error-discarded"
+    "failover-status-read-retained",
+    "failover-status-read-uncounted",
+    "failover-status-read-uncounted-deadline",
+    "failover-status-read-result-dropped",
+    "failover-status-read-unpublished",
+    "failed-status-reads-negative-accepted"
   ],
   "killed": [
     {
@@ -6186,8 +6191,38 @@
       "evidence": "killed"
     },
     {
-      "id": "failover-status-read-error-discarded",
+      "id": "failover-status-read-retained",
       "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-uncounted",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-uncounted-deadline",
+      "test": "TestFailoverRecoveryFailedStatusReadsUntilDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-result-dropped",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failover-status-read-unpublished",
+      "test": "TestFailoverRecoveryFailedStatusReadIsMissingSample",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "failed-status-reads-negative-accepted",
+      "test": "TestProcessEvidenceFailedStatusReads",
       "package": "./internal/operatorgates",
       "evidence": "killed"
     }
