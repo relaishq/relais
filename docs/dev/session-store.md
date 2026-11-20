@@ -57,8 +57,11 @@ following `TIME` inside Lua. Integration tests use **Redis 7** for `PEXPIRETIME`
 assertions. Session scripts share a hash tag; worker listing uses a pipeline
 that Redis Cluster routes by node. Cluster MOVED/ASK/TRYAGAIN/CLUSTERDOWN/BUSY
 responses and failed dials (`*net.OpError` with `Op == "dial"`: no connection,
-so no command bytes were sent) are classified as definite-not-run and retried at
-most three times within the two-second command limit; they may still surface as
+so no command bytes were sent) are classified as definite-not-run. Writes retry
+the cluster kinds at most three times. A failed dial instead retries with delays
+of 20, 40, 80, 160 and then 200 ms while the two-second command limit leaves
+time for the next wait, because the slot-map reload it requests runs in the
+background and can outlast three quick refusals. Either may still surface as
 transient if routing remains unavailable. TLS handshake failures and errors on
 an established connection stay uncertain and are not retried by writes. SDK network
 retries stay disabled. Local Redis 7 Cluster tests cover NOSCRIPT reload,
