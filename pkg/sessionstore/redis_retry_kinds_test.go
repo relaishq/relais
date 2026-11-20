@@ -162,3 +162,44 @@ func TestRedisDialWriteRetryTiming(t *testing.T) {
 	require.GreaterOrEqual(t, elapsed, transitionCommandLimit*3/4)
 	require.Less(t, elapsed, transitionCommandLimit)
 }
+
+// sequenceErrorHook fails session script commands with errs in order, then
+// repeats the last one.
+type sequenceErrorHook struct {
+	errs     []error
+	attempts atomic.Int32
+}
+
+func (*sequenceErrorHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h *sequenceErrorHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() != "evalsha" && cmd.Name() != "eval" {
+			return next(ctx, cmd)
+		}
+		n := int(h.attempts.Add(1))
+		err := h.errs[min(n, len(h.errs))-1]
+		cmd.SetErr(err)
+		return err
+	}
+}
+func (*sequenceErrorHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+// After dial retries reach a refreshed node, its definite-not-run errors keep
+// their own three-attempt cap instead of retrying until the command limit.
+func TestRedisMixedDialThenBusyKeepsThreeAttemptCap(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	defer func() { _ = client.Close() }()
+	busy := errors.New("BUSY script")
+	hook := &sequenceErrorHook{errs: []error{refusedDial(), refusedDial(), refusedDial(), refusedDial(), busy}}
+	client.AddHook(hook)
+	r := &Redis{client: client, prefix: "kinds:", retention: time.Minute}
+	start := time.Now()
+	_, err := r.run(context.Background(), "renew", "id", "127.0.0.1:1", "1", time.Minute)
+	elapsed := time.Since(start)
+	require.ErrorIs(t, err, ErrTransient)
+	require.ErrorContains(t, err, "BUSY")
+	require.Equal(t, int32(7), hook.attempts.Load())
+	require.Less(t, elapsed, transitionCommandLimit/2)
+}
