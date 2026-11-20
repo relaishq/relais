@@ -152,6 +152,35 @@ func TestRefreshRedisClusterStateReloadsAfterDialError(t *testing.T) {
 	require.Eventually(t, func() bool { return loads.Load() == 2 }, 5*time.Second, 5*time.Millisecond)
 }
 
+// A node that drops connection attempts fails the dial by timeout; that is
+// still a dial error, so it also requests a reload.
+func TestRefreshRedisClusterStateReloadsAfterDialTimeout(t *testing.T) {
+	var loads atomic.Int32
+	options, err := RedisConfig{Addrs: []string{"localhost:16480"}, Cluster: true}.ConnectionOptions()
+	require.NoError(t, err)
+	options.MaxRetries, options.MaxRedirects = -1, -1
+	var dialer net.Dialer
+	options.Dialer = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		<-ctx.Done() // nothing answers until the dial bound
+		return dialer.DialContext(ctx, network, "127.0.0.1:16480")
+	}
+	cluster := RedisClusterOptions(options)
+	cluster.ClusterStateReloadInterval = time.Hour
+	cluster.ClusterSlots = func(context.Context) ([]redis.ClusterSlot, error) {
+		loads.Add(1)
+		return []redis.ClusterSlot{{Start: 0, End: 16383, Nodes: []redis.ClusterNode{{Addr: "localhost:16480"}}}}, nil
+	}
+	client := redis.NewClusterClient(cluster)
+	t.Cleanup(func() { _ = client.Close() })
+	defer RefreshRedisClusterState(client)()
+	start := time.Now()
+	err = client.Set(context.Background(), "k", "v", 0).Err()
+	require.True(t, IsRedisDialError(err), "%v", err)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "Go reports a dial timeout as a deadline too")
+	require.Less(t, time.Since(start), 2*redisDialTimeout)
+	require.Eventually(t, func() bool { return loads.Load() == 2 }, 5*time.Second, 5*time.Millisecond)
+}
+
 func TestRefreshRedisClusterStateKeepsMapAfterEstablishedConnectionError(t *testing.T) {
 	var sets atomic.Int32
 	addr := fakeNode(t, func(args []string) (string, bool) {
