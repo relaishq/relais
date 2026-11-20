@@ -2,6 +2,7 @@ package mediaworker
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -223,6 +224,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		}
 		id, err := w.ResumeSession(req.State, ResumeOptions{Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin, RelayReplay: req.RelayReplay, RelayInputReplay: req.RelayInputReplay})
 		if err != nil {
+			log.Printf("resume failed kind=%s err=%v", req.Kind, err)
 			workerAPIError(rw, err)
 			return
 		}

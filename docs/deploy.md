@@ -256,14 +256,21 @@ production cluster client therefore also runs an independent 10-second refresh
 timer, stopped when the store closes, so an idle process does not send its
 first write after a primary failover to the dead primary. A failed dial also
 requests a refresh ([#517](https://github.com/relaishq/relais/issues/517)).
+Store clients bound each connection attempt, including the TLS handshake, to
+**500 ms**. go-redis dials in a goroutine detached from the operation, so an
+operation's own deadline ends only its wait, not the dial. With the go-redis
+5-second default, a write routed to an old primary that drops connection
+attempts after a failover waited out the whole two-second command limit and
+ended with only its own deadline: no dial error, so no refresh and no retry.
+The 500 ms bound turns that into a dial error inside the limit.
 Discovery is serial over N candidate sources. Dial-only blackholes can cost
-`N * DialTimeout` (default **5N seconds**). Stalled connections can also spend
+`N * DialTimeout` (store default **0.5N seconds**). Stalled connections can also spend
 read/write budgets in connection setup and `CLUSTER SLOTS`. With DB 0, no client
 name and identity reporting disabled, a conservative socket-budget bound for
 fresh connections is `N * (DialTimeout + 3 * (ReadTimeout + WriteTimeout))`:
-HELLO, optional AUTH fallback, then SLOTS. Store defaults give **23N seconds**;
+HELLO, optional AUTH fallback, then SLOTS. Store defaults give **18.5N seconds**;
 pool waits and host scheduling can add time. A foreground operation's earlier
-context deadline cuts this short. Background topology reloads use their own
+context deadline ends its wait sooner. Background topology reloads use their own
 background context and can consume the full source sweep after the 10-second
 refresh interval. This is a liveness
 tradeoff, not a wider ownership or consent deadline.

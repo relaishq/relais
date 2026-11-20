@@ -49,6 +49,14 @@ func refusedDial() error {
 	return &net.OpError{Op: "dial", Net: "tcp", Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED}}
 }
 
+// goDialTimeout is the error Go returns when a connect attempt runs out of time.
+func goDialTimeout() error {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now())
+	defer cancel()
+	_, err := (&net.Dialer{}).DialContext(ctx, "tcp", "127.0.0.1:1")
+	return err
+}
+
 // Pins which error kinds the session write and read paths retry, which return
 // at once, whether the result is transient, and that every path stays inside
 // the two-second command limit.
@@ -73,6 +81,9 @@ func TestRedisRetryPathByErrorKind(t *testing.T) {
 		{"dial refused", refusedDial(), "dial", 0, 3, true},
 		{"wrapped dial refused", fmt.Errorf("pool: %w", refusedDial()), "dial", 0, 3, true},
 		{"dial timeout", &net.OpError{Op: "dial", Net: "tcp", Err: timeoutError{}}, "dial", 0, 3, true},
+		// Go's own dial timeout also matches context.DeadlineExceeded.
+		{"go dial timeout", goDialTimeout(), "dial", 0, 3, true},
+		{"deadline", context.DeadlineExceeded, "canceled", 1, 1, true},
 		{"tls handshake remote alert", &net.OpError{Op: "remote error", Err: errors.New("tls: handshake failure")}, "net", 1, 3, true},
 		{"tls record header", tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}, "other", 1, 1, false},
 		{"canceled", context.Canceled, "canceled", 1, 1, true},
