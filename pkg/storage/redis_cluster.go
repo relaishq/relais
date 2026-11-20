@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -60,6 +62,66 @@ func redisClusterOptions(options *redis.UniversalOptions, validate func(string) 
 		return client
 	}
 	return cluster
+}
+
+// RefreshRedisClusterState reloads the client's slot map every
+// ClusterStateReloadInterval. go-redis reloads only when a command finds the
+// map stale, and that command still uses the stale map, so an idle client's
+// first write after a primary failover goes to the dead primary. A failed dial
+// also requests a reload, so a caller's bounded retry can reach the new
+// primary. Call stop before closing the client; stop waits for the refresh
+// goroutine to exit and is safe to call more than once.
+func RefreshRedisClusterState(client *redis.ClusterClient) (stop func()) {
+	client.AddHook(redisDialReloadHook{client: client})
+	done, exited := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(exited)
+		ticker := time.NewTicker(client.Options().ClusterStateReloadInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				client.ReloadState(context.Background())
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done); <-exited }) }
+}
+
+// IsRedisDialError reports a failed connection attempt. The driver opens a
+// connection before it writes any command bytes, so the command did not run.
+// TLS handshake failures and errors on an established connection use other
+// operations and do not match.
+func IsRedisDialError(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
+}
+
+type redisDialReloadHook struct{ client *redis.ClusterClient }
+
+func (redisDialReloadHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h redisDialReloadHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		err := next(ctx, cmd)
+		if IsRedisDialError(err) {
+			h.client.ReloadState(ctx)
+		}
+		return err
+	}
+}
+func (h redisDialReloadHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		err := next(ctx, cmds)
+		// A pipeline returns its first error; a dial error to another node can
+		// sit behind an ordinary command error.
+		if IsRedisDialError(err) || slices.ContainsFunc(cmds, func(cmd redis.Cmder) bool { return IsRedisDialError(cmd.Err()) }) {
+			h.client.ReloadState(ctx)
+		}
+		return err
+	}
 }
 
 // An empty reply is a failed discovery source, not a replacement routing map.

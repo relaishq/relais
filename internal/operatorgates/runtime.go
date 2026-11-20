@@ -266,6 +266,8 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			Code      string          `json:"code"`
 			ElapsedMS json.RawMessage `json:"elapsedMs"`
 			Phase     json.RawMessage `json:"phase"`
+			Status    json.RawMessage `json:"httpStatus"`
+			Codes     json.RawMessage `json:"codes"`
 			Started   time.Time       `json:"started"`
 			Ended     time.Time       `json:"ended"`
 			Data      json.RawMessage `json:"data"`
@@ -276,12 +278,20 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		if envelope.Kind == "unknown" {
 			var elapsed *int64
 			var phase string
+			var status int
+			var codes []string
 			// Optional evidence cannot turn an unknown result into a failed read.
 			if json.Unmarshal(envelope.ElapsedMS, &elapsed) != nil {
 				elapsed = nil
 			}
 			_ = json.Unmarshal(envelope.Phase, &phase)
-			r.Session.hostFailureEvidence(reply.ID, envelope.Code, phase, elapsed)
+			if json.Unmarshal(envelope.Status, &status) != nil {
+				status = 0
+			}
+			if json.Unmarshal(envelope.Codes, &codes) != nil {
+				codes = nil
+			}
+			r.Session.hostFailureEvidence(reply.ID, hostFailure{code: envelope.Code, phase: phase, elapsedMS: elapsed, httpStatus: status, codes: codes})
 		}
 		if envelope.Kind == "refused" {
 			operationErr = fault("compatibility-refused")

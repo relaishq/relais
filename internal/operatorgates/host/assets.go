@@ -98,7 +98,7 @@ func process(operation string, parameters any, stage *Stage, readFailure bool) (
         if checked.returncode!=0 or verdict.get('allowed') is not True: raise ValueError('unknown compatibility result')
 `, stage.Version, stage.Version, downloadArch, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ManifestSHA256, stage.Pool, stage.Operation)
 	}
-	failure := "except Exception as error:\n    emit(dict(kind='unknown',code=read_failure(error),elapsedMs=int((time.monotonic()-execution_started)*1000),**evidence))"
+	failure := "except Exception as error:\n    emit(dict(kind='unknown',code=read_failure(error),elapsedMs=int((time.monotonic()-execution_started)*1000),**evidence,**http_failure(error)))"
 	if readFailure {
 		failure = "except Exception as error:\n    emit({'kind':'failed','code':read_failure(error)})"
 	}

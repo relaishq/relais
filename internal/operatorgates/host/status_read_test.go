@@ -69,6 +69,33 @@ with patch.object(urllib.request.OpenerDirector, 'open', side_effect=opened), pa
 	}
 }
 
+// A definite HTTP error reply to an effectful POST stays unknown. Its status
+// and up to four public codes are kept; the error text never leaves the host.
+func TestUnknownHTTPErrorWrapperEvidence(t *testing.T) {
+	// Render the shared wrapper without deployment preflight, then run the
+	// real drain against a fake opener. No socket is touched.
+	script, err := Process("status", map[string]any{"control": "http://192.0.2.1:9", "worker": "w2"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script = strings.Replace(script, `data=execute("status",`, `data=execute("drain",`, 1)
+	mock := `import sys,urllib.request,urllib.error,io,json
+from unittest.mock import patch
+def opened(request, **kwargs):
+ body = json.dumps({'error':'private address and credential text','codes':['transient','Private','a','b','c','d']}).encode()
+ raise urllib.error.HTTPError(request.full_url, 500, 'Internal Server Error', {}, io.BytesIO(body))
+with patch.object(urllib.request.OpenerDirector, 'open', side_effect=opened):
+ exec(compile(sys.stdin.read(), '<generated-drain>', 'exec'))`
+	got := runProcess(t, script, mock)
+	codes, _ := got["codes"].([]any)
+	if len(got) != 5 || got["kind"] != "unknown" || got["code"] != "http-error" || got["httpStatus"] != float64(500) || len(codes) != 4 || codes[0] != "transient" || codes[3] != "c" {
+		t.Fatalf("HTTP error evidence missing or unbounded: %v", got)
+	}
+	if _, ok := got["elapsedMs"].(float64); !ok {
+		t.Fatalf("HTTP error lost elapsed time: %v", got)
+	}
+}
+
 func TestUnknownExceptionIncludesEvidence(t *testing.T) {
 	script, err := Process("status", map[string]string{"control": "http://192.0.2.1:9"}, nil)
 	if err != nil {
@@ -134,7 +161,7 @@ func TestRecoveryStatusReportsFailedRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unknown := strings.Replace(script, "except Exception as error:\n    emit({'kind':'failed','code':read_failure(error)})", "except Exception as error:\n    emit(dict(kind='unknown',code=read_failure(error),elapsedMs=int((time.monotonic()-execution_started)*1000),**evidence))", 1)
+	unknown := strings.Replace(script, "except Exception as error:\n    emit({'kind':'failed','code':read_failure(error)})", "except Exception as error:\n    emit(dict(kind='unknown',code=read_failure(error),elapsedMs=int((time.monotonic()-execution_started)*1000),**evidence,**http_failure(error)))", 1)
 	if unknown != plain {
 		t.Fatal("MUTATION: recovery-status-scope: scripts differ outside the failure branch")
 	}
