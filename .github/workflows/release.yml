@@ -2,7 +2,7 @@ name: Release archives
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v0.3.2', 'v0.3.3']
   workflow_dispatch:
   pull_request:
     paths:
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Require green main CI for the tagged commit
+      - name: Require green release/0.3 CI for the tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

@@ -191,9 +191,11 @@ is saved as `.relais-local/pids.stopped`. If a startup fails, see
 
 ## Checking the build
 
-Tag releases create a draft only after the tagged commit is on `main` and its
-latest `ci.yml` push run on `main` succeeds. The release gate waits up to 90
-minutes for that run. If a main CI job flakes, a maintainer can re-run the failed
+On this maintenance line, only tags `v0.3.2` and `v0.3.3` trigger draft releases.
+The owner approved an exception to the main-only policy: the tagged commit must
+be on `release/0.3` and its latest `ci.yml` push run on `release/0.3` must succeed.
+CI runs for pushes and PRs to that branch. The release gate waits up to 90
+minutes for that run. If a branch CI job flakes, a maintainer can re-run the failed
 CI jobs, then re-run the failed release workflow jobs. The gate reads the latest
 CI attempt, including partial reruns. Manual `workflow_dispatch` runs remain
 artifacts-only and skip this gate.

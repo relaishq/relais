@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Require the tagged commit's latest main push CI attempt to pass.
+# On this maintenance line only, require the tagged commit's latest release/0.3
+# push CI attempt to pass. The filename is retained for the workflow caller.
 # Exit: 0 success; 1 unsuccessful CI; 2 missing run/ancestry or lookup error;
 # 3 timeout. --wait-minutes 0 checks once without waiting.
 set -euo pipefail
+
+branch=release/0.3
 
 usage() {
   echo "usage: $0 <sha> [--wait-minutes N (0-90)]" >&2
@@ -22,16 +25,16 @@ fetch_args=(--no-tags)
 if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
   fetch_args+=(--unshallow)
 fi
-if ! git fetch "${fetch_args[@]}" origin '+refs/heads/main:refs/remotes/origin/main'; then
-  echo 'Cannot fetch origin/main to verify ancestry.' >&2
+if ! git fetch "${fetch_args[@]}" origin "+refs/heads/$branch:refs/remotes/origin/$branch"; then
+  echo "Cannot fetch origin/$branch to verify ancestry." >&2
   exit 2
 fi
 if ! sha=$(git rev-parse --verify "$1^{commit}"); then
   echo "Commit not found: $1" >&2
   exit 2
 fi
-if ! git merge-base --is-ancestor "$sha" origin/main; then
-  echo "Commit $sha is not an ancestor of origin/main." >&2
+if ! git merge-base --is-ancestor "$sha" "origin/$branch"; then
+  echo "Commit $sha is not an ancestor of origin/$branch." >&2
   exit 2
 fi
 
@@ -39,26 +42,26 @@ deadline=$((SECONDS + wait_minutes * 60))
 while :; do
   # gh lists newest runs first. Query again on every poll so reruns use the
   # current attempt and conclusion, including a rerun of only failed jobs.
-  if ! run=$(gh run list --workflow ci.yml --branch main --event push \
+  if ! run=$(gh run list --workflow ci.yml --branch "$branch" --event push \
     --commit "$sha" --limit 1 \
     --json databaseId,status,conclusion,attempt,url --jq '.[0] // empty'); then
-    echo "Cannot query main push CI for $sha." >&2
+    echo "Cannot query $branch push CI for $sha." >&2
     exit 2
   fi
   if [[ -z $run ]]; then
-    echo "No ci.yml push run on main for $sha." >&2
+    echo "No ci.yml push run on $branch for $sha." >&2
     exit 2
   fi
   IFS=$'\t' read -r run_id status conclusion attempt url < <(
     jq -r '[.databaseId, .status, (.conclusion // "" | if . == "" then "pending" else . end), .attempt, .url] | @tsv' <<< "$run"
   )
-  printf '%s main CI: status=%s conclusion=%s attempt=%s %s\n' \
-    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$status" "$conclusion" "$attempt" "$url"
+  printf '%s %s CI: status=%s conclusion=%s attempt=%s %s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$branch" "$status" "$conclusion" "$attempt" "$url"
   if [[ $status == completed ]]; then
     if [[ $conclusion == success ]]; then
       exit 0
     fi
-    echo "Main CI did not succeed: $url" >&2
+    echo "$branch CI did not succeed: $url" >&2
     echo 'Failed/cancelled/skipped jobs:' >&2
     # Do not pin an old attempt: the default includes each job's latest result.
     if ! gh run view "$run_id" --json jobs --jq \
@@ -69,7 +72,7 @@ while :; do
   fi
   remaining=$((deadline - SECONDS))
   if (( remaining <= 0 )); then
-    echo "Timed out after $wait_minutes minute(s) waiting for main CI: $url" >&2
+    echo "Timed out after $wait_minutes minute(s) waiting for $branch CI: $url" >&2
     exit 3
   fi
   delay=60
