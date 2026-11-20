@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"maps"
 	"mime"
 	"net/http"
@@ -128,6 +129,9 @@ func (p *Plane) Handler() http.Handler {
 	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {
 		result, err := p.Move(r.Context(), r.PathValue("id"), r.URL.Query().Get("to"))
 		if err != nil {
+			// The reply's error text stays private to its caller; the journal
+			// keeps the cause next to the store and worker lines of that instant.
+			log.Printf("move failed id=%s from=%s to=%s codes=%v err=%s", privateapi.LogValue(r.PathValue("id")), privateapi.LogValue(result.From), privateapi.LogValue(result.To), privateapi.ErrorCodes(err, RemoteErrors), privateapi.LogValue(err.Error()))
 			if result.ID != "" {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(errorStatus(err))

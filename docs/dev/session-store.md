@@ -57,7 +57,10 @@ following `TIME` inside Lua. Integration tests use **Redis 7** for `PEXPIRETIME`
 assertions. Session scripts share a hash tag; worker listing uses a pipeline
 that Redis Cluster routes by node. Cluster MOVED/ASK/TRYAGAIN/CLUSTERDOWN/BUSY
 responses and failed dials (`*net.OpError` with `Op == "dial"`: no connection,
-so no command bytes were sent) are classified as definite-not-run. Writes retry
+so no command bytes were sent) are classified as definite-not-run. That includes
+a dial that times out, although Go's dial timeout also matches
+`context.DeadlineExceeded`; each dial attempt is bounded at 500 ms, so it fails
+inside the command limit. Writes retry
 the cluster kinds at most three times. A failed dial instead retries with delays
 of 20, 40, 80, 160 and then 200 ms while the two-second command limit leaves
 time for the next wait, because the slot-map reload it requests runs in the

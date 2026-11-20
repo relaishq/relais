@@ -333,12 +333,13 @@ func redisKind(err error) string {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return "eof"
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return "canceled"
-	}
 	// A failed dial, including one that timed out, sent no command bytes.
+	// Check it first: Go's dial timeout also matches context.DeadlineExceeded.
 	if storage.IsRedisDialError(err) {
 		return "dial"
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "canceled"
 	}
 	var ne net.Error
 	if errors.As(err, &ne) {

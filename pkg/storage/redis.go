@@ -549,6 +549,15 @@ type RedisConfig struct {
 	Prefix    string      // Key prefix for namespacing (optional)
 }
 
+// redisDialTimeout bounds each connection attempt, including the TLS
+// handshake. go-redis dials in a goroutine detached from the command, so a node
+// that drops connection attempts (as an old primary can after a failover) would
+// otherwise hold a command for the five-second default and end it with only
+// the command's own deadline. Well under the two-second session store command
+// limit, a dial attempt instead fails as a dial error the caller can retry on a
+// refreshed slot map.
+const redisDialTimeout = 500 * time.Millisecond
+
 // ConnectionOptions is the common transport/auth builder for all Redis stores.
 // Retry and instrumentation policy remain with each caller.
 func (c RedisConfig) ConnectionOptions() (*redis.UniversalOptions, error) {
@@ -577,7 +586,7 @@ func (c RedisConfig) ConnectionOptions() (*redis.UniversalOptions, error) {
 	return &redis.UniversalOptions{
 		Addrs: addrs, Username: c.Username, Password: c.Password, DB: c.DB, TLSConfig: transport,
 		Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1,
-		ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+		DialTimeout: redisDialTimeout, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 		MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeDisabled},
 	}, nil
 }
