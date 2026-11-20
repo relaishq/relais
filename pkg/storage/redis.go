@@ -37,6 +37,7 @@ import (
 // The client connection is safe for concurrent use by multiple goroutines.
 type RedisStorage struct {
 	client           redis.UniversalClient // Redis client connection (single or cluster)
+	stopRefresh      func()                // ends a cluster client's slot-map refresh
 	prefix           string                // Key prefix for namespacing (e.g., "myapp:")
 	sessionMaxFrames int                   // Trim window for session-wide list
 	trackMaxFrames   int                   // Trim window for per-track list
@@ -604,14 +605,18 @@ func NewRedisStorage(config interface{}) (*RedisStorage, error) {
 		return nil, err
 	}
 	var client redis.UniversalClient
+	stopRefresh := func() {}
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
-		client = redis.NewClusterClient(RedisClusterOptions(options))
+		cluster := redis.NewClusterClient(RedisClusterOptions(options))
+		stopRefresh = RefreshRedisClusterState(cluster)
+		client = cluster
 	} else {
 		client = redis.NewClient(options.Simple())
 	}
 
 	// Verify connection
 	if err := client.Ping(context.Background()).Err(); err != nil {
+		stopRefresh()
 		_ = client.Close()
 		return nil, fmt.Errorf("redis connection failed: %v", err)
 	}
@@ -623,6 +628,7 @@ func NewRedisStorage(config interface{}) (*RedisStorage, error) {
 
 	return &RedisStorage{
 		client:           client,
+		stopRefresh:      stopRefresh,
 		prefix:           prefix,
 		sessionMaxFrames: 5000,
 		trackMaxFrames:   5000,
@@ -880,5 +886,6 @@ func (s *RedisStorage) DeleteSession(ctx context.Context, sessionID string) erro
 //
 // Returns an error if the Redis connection cannot be closed cleanly.
 func (s *RedisStorage) Close() error {
+	s.stopRefresh()
 	return s.client.Close()
 }

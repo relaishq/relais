@@ -232,7 +232,7 @@ func TestReportPreservesSafeUnknownContext(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
 		t.Fatal(err)
 	}
-	if len(saved.Uncertainties) != 1 || saved.Uncertainties[0] != r.Uncertainties[0] {
+	if len(saved.Uncertainties) != 1 || !reflect.DeepEqual(saved.Uncertainties[0], r.Uncertainties[0]) {
 		t.Fatal("unknown context lost from report", out.String())
 	}
 	secret := "BEARER-private-value"

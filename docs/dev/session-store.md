@@ -55,9 +55,12 @@ sequence authentication. A failed reservation simply leaves a harmless gap.
 Minimum server version: **Redis 5**, whose effects replication permits writes
 following `TIME` inside Lua. Integration tests use **Redis 7** for `PEXPIRETIME`
 assertions. Session scripts share a hash tag; worker listing uses a pipeline
-that Redis Cluster routes by node. Cluster MOVED/ASK/TRYAGAIN/CLUSTERDOWN
-responses are classified as definite-not-run and retried at most three times;
-they may still surface as transient if routing remains unavailable. SDK network
+that Redis Cluster routes by node. Cluster MOVED/ASK/TRYAGAIN/CLUSTERDOWN/BUSY
+responses and failed dials (`*net.OpError` with `Op == "dial"`: no connection,
+so no command bytes were sent) are classified as definite-not-run and retried at
+most three times within the two-second command limit; they may still surface as
+transient if routing remains unavailable. TLS handshake failures and errors on
+an established connection stay uncertain and are not retried by writes. SDK network
 retries stay disabled. Local Redis 7 Cluster tests cover NOSCRIPT reload,
 legacy slot migration during a component write (liveness only), and process
 SIGKILL takeover. These are not managed-store durability or latency evidence.

@@ -11,6 +11,7 @@ import pathlib
 import socket
 import ssl
 import subprocess
+import urllib.error
 import urllib.request
 
 
@@ -160,6 +161,23 @@ def read_failure(error):
         return READ_FAILURES[str(error)]
     name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "-", type(error).__name__).lower()
     return name if re.fullmatch(r"[a-z][a-z0-9-]{0,39}", name) else "unclassified"
+
+
+def http_failure(error):
+    """Status and up to four public codes of a definite HTTP error reply. Its free text never leaves the host."""
+    if not isinstance(error, urllib.error.HTTPError):
+        return {}
+    evidence = {"httpStatus": error.code}
+    try:
+        body = error.read(16_001)
+        codes = json.loads(body).get("codes") if len(body) <= 16_000 else None
+    except Exception:
+        return evidence
+    if isinstance(codes, list):
+        public = [c for c in codes if isinstance(c, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,39}", c)][:4]
+        if public:
+            evidence["codes"] = public
+    return evidence
 
 
 def service_journals():

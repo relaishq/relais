@@ -29,6 +29,7 @@ import (
 // The caller owns Close. An uncertain append is never retried.
 type Redis struct {
 	client    redis.UniversalClient
+	stop      func() // ends a cluster client's slot-map refresh
 	prefix    string
 	limits    Limits
 	activeKey byte
@@ -87,27 +88,33 @@ func NewRedis(ctx context.Context, cfg storage.RedisConfig, key []byte, limits L
 	// A lost append reply must not duplicate a frame or clear the current group.
 	connection.MaxRetries, connection.MaxRedirects = -1, -1
 	var client redis.UniversalClient
+	stop := func() {}
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
 		cluster := storage.RedisClusterOptions(connection)
 		newNode := cluster.NewClient
 		cluster.NewClient = func(opts *redis.Options) *redis.Client {
 			return metrics.InstrumentRedisClient(newNode(opts), "frame")
 		}
-		client = redis.NewClusterClient(cluster)
+		clusterClient := redis.NewClusterClient(cluster)
+		stop = storage.RefreshRedisClusterState(clusterClient)
+		client = clusterClient
 	} else {
 		client = metrics.RedisClient(connection.Simple(), "frame")
 	}
 	client.AddHook(metrics.StoreHook("frame"))
-	r := &Redis{client: client, prefix: cfg.Prefix, limits: defaultLimits(limits), activeKey: opts.KeyID, keysByID: keys}
+	r := &Redis{client: client, stop: stop, prefix: cfg.Prefix, limits: defaultLimits(limits), activeKey: opts.KeyID, keysByID: keys}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
-		_ = client.Close()
+		_ = r.Close()
 		return nil, err
 	}
 	return r, nil
 }
-func (r *Redis) Close() error { return r.client.Close() }
+func (r *Redis) Close() error {
+	r.stop()
+	return r.client.Close()
+}
 func (r *Redis) key(id string) string {
 	tag := id
 	if strings.ContainsAny(id, "{}") || strings.HasPrefix(id, "~") {

@@ -1143,11 +1143,17 @@ Host exceptions keep their existing certainty. An effectful step still emits
 still emit `kind: failed`. Unknown host envelopes additionally carry `code` from
 `read_failure()` and `elapsedMs` from the host's monotonic clock, measured from
 script start and reset immediately before `execute`. A move includes `phase: status` during its control pre-read or
-`phase: post` during its move POST. No exception message leaves this envelope.
+`phase: post` during its move POST. When the failing request got a definite
+HTTP error reply (urllib `HTTPError`), the envelope also carries `httpStatus` and
+`codes`: up to four entries from the reply body's `codes` list that match
+`^[a-z][a-z0-9-]{0,39}$`; other entries are dropped. The step stays unknown,
+because control may have acted before it replied with an error. No exception
+message or reply text leaves this envelope.
 The existing uncertainty row retains these fields without a second request or
 a second uncertainty. `Public()` admits only codes matching
 `^[a-z][a-z0-9-]{0,39}$`, move phases `status` and `post`, and elapsed milliseconds
-in `[0, stepDeadlineMs]`. `stepDeadlineMs` retains the original request budget
+in `[0, stepDeadlineMs]`, `httpStatus` in `[100, 599]`, and at most four
+`codes` of that same shape. `stepDeadlineMs` retains the original request budget
 so saved reports can check that bound again; `remainingMs` keeps its existing
 meaning at failure. Invalid optional fields are omitted. These additions leave
 protocol and result schema versions unchanged.

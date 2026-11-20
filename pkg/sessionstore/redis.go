@@ -57,6 +57,7 @@ func (e *TransientError) Is(target error) bool { return target == ErrTransient }
 // fenced per-put sequence authenticated with the session ID and header.
 type Redis struct {
 	client           redis.UniversalClient
+	stopRefresh      func()
 	prefix           string
 	retention        time.Duration
 	indexGrace       time.Duration
@@ -149,12 +150,13 @@ func NewRedis(ctx context.Context, cfg storage.RedisConfig, key []byte, options 
 		}
 		keysByID[id] = append([]byte(nil), old...)
 	}
-	client, err := connectRedis(cfg, "session")
+	client, stopRefresh, err := connectRedis(cfg, "session")
 	if err != nil {
 		return nil, err
 	}
-	r := &Redis{client: client, prefix: cfg.Prefix, retention: opts.Retention, indexGrace: opts.IndexGrace, maintenanceSlots: make(chan struct{}, 32), activeKey: opts.KeyID, keysByID: keysByID}
+	r := &Redis{client: client, stopRefresh: stopRefresh, prefix: cfg.Prefix, retention: opts.Retention, indexGrace: opts.IndexGrace, maintenanceSlots: make(chan struct{}, 32), activeKey: opts.KeyID, keysByID: keysByID}
 	if err := r.retryRead(ctx, "session_ping", func() error { return client.Ping(ctx).Err() }); err != nil {
+		stopRefresh()
 		_ = client.Close()
 		return nil, err
 	}
@@ -165,6 +167,7 @@ func (r *Redis) Close() error {
 	r.closed = true
 	r.maintenanceMu.Unlock()
 	r.maintenance.Wait()
+	r.stopRefresh()
 	return r.client.Close()
 }
 
@@ -333,6 +336,10 @@ func redisKind(err error) string {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "canceled"
 	}
+	// A failed dial, including one that timed out, sent no command bytes.
+	if storage.IsRedisDialError(err) {
+		return "dial"
+	}
 	var ne net.Error
 	if errors.As(err, &ne) {
 		if ne.Timeout() {
@@ -349,7 +356,7 @@ func redisKind(err error) string {
 	return "other"
 }
 func definiteNotRun(kind string) bool {
-	return kind == "moved" || kind == "ask" || kind == "tryagain" || kind == "clusterdown" || kind == "busy"
+	return kind == "moved" || kind == "ask" || kind == "tryagain" || kind == "clusterdown" || kind == "busy" || kind == "dial"
 }
 func classify(op string, err error) error {
 	if err == nil || errors.Is(err, redis.Nil) {
@@ -903,25 +910,30 @@ func (r *Redis) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Leas
 	return leases, nil
 }
 
-func connectRedis(cfg storage.RedisConfig, label string) (redis.UniversalClient, error) {
+// connectRedis returns stop, which ends a cluster client's slot-map refresh;
+// it is a no-op for a single-node client.
+func connectRedis(cfg storage.RedisConfig, label string) (redis.UniversalClient, func(), error) {
 	options, err := cfg.ConnectionOptions()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	options.MaxRetries, options.MaxRedirects = -1, -1
 	var client redis.UniversalClient
+	stop := func() {}
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
 		cluster := storage.RedisClusterOptions(options)
 		newNode := cluster.NewClient
 		cluster.NewClient = func(opts *redis.Options) *redis.Client {
 			return metrics.InstrumentRedisClient(newNode(opts), label)
 		}
-		client = redis.NewClusterClient(cluster)
+		clusterClient := redis.NewClusterClient(cluster)
+		stop = storage.RefreshRedisClusterState(clusterClient)
+		client = clusterClient
 	} else {
 		client = metrics.RedisClient(options.Simple(), label)
 	}
 	client.AddHook(metrics.StoreHook(label))
-	return client, nil
+	return client, stop, nil
 }
 
 const storeClockLua = `return redis.call('TIME')`

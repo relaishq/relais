@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 import copy
 import hashlib
+import io
 import json
 import re
 import subprocess
@@ -10,6 +11,7 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 import preview_process as host
 import preview_inventory as inventory
@@ -328,6 +330,19 @@ class InventoryTests(unittest.TestCase):
 
 
 class TrialTests(unittest.TestCase):
+    def test_http_failure_keeps_status_and_public_codes(self):
+        def failure(body, status=500):
+            return urllib.error.HTTPError("http://10.0.0.1:24710/calls/one/move", status, "error", {}, io.BytesIO(body))
+        reply = json.dumps({"error": "private address 10.0.0.9", "codes": ["transient", "Private", 7, "a", "b", "c", "d"]}).encode()
+        self.assertEqual(host.http_failure(failure(reply)), {"httpStatus": 500, "codes": ["transient", "a", "b", "c"]})
+        self.assertEqual(host.http_failure(failure(b'{"codes":["Bad text"]}', 409)), {"httpStatus": 409})
+        self.assertEqual(host.http_failure(failure(b'{"codes":"transient"}')), {"httpStatus": 500})
+        self.assertEqual(host.http_failure(failure(b"not json")), {"httpStatus": 500})
+        self.assertEqual(host.http_failure(failure(b"[]")), {"httpStatus": 500})
+        self.assertEqual(host.http_failure(failure(b'{"codes":["transient"],"pad":"' + b"x" * 16_000 + b'"}')), {"httpStatus": 500})
+        self.assertEqual(host.http_failure(TimeoutError("private")), {})
+        self.assertEqual(host.http_failure(ValueError("trial ownership changed")), {})
+
     def test_unknown_move_records_inflight_phase(self):
         for phase in ("status", "post"):
             evidence, log = {}, []
