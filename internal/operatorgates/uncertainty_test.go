@@ -2,6 +2,7 @@ package operatorgates
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ func TestUnknownCarriesRequestAndRule(t *testing.T) {
 			t.Fatal(err)
 		}
 		rows := s.Uncertainties()
-		if len(rows) != 1 || len(logged) != 1 || rows[0] != logged[0] || rows[0].Kind != "status.read" || rows[0].Target != "shared" || rows[0].RequestID != r.ID || rows[0].Rule != rule || rows[0].RemainingMS != 59000 || rows[0].DeadlineUnixMS != r.DeadlineUnixMS {
+		if len(rows) != 1 || len(logged) != 1 || !reflect.DeepEqual(rows[0], logged[0]) || rows[0].Kind != "status.read" || rows[0].Target != "shared" || rows[0].RequestID != r.ID || rows[0].Rule != rule || rows[0].RemainingMS != 59000 || rows[0].DeadlineUnixMS != r.DeadlineUnixMS {
 			t.Fatal("unknown lacks self-describing certainty boundary", rows, logged)
 		}
 		if len(s.Final(nil).Uncertainties) != 1 {

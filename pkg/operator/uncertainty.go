@@ -19,9 +19,15 @@ type Uncertainty struct {
 	// StepDeadlineMS is the original request budget, not the remaining budget
 	// at failure. Retain it so Public can recheck elapsed time in saved reports.
 	StepDeadlineMS int64 `json:"stepDeadlineMs,omitempty"`
+	// HTTPStatus and Codes describe a definite HTTP error reply to a host
+	// step. The step result stays unknown: the server may have acted first.
+	HTTPStatus int      `json:"httpStatus,omitempty"`
+	Codes      []string `json:"codes,omitempty"`
 }
 
 var publicCode = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+
+const maxPublicCodes = 4
 
 type UncertaintyRecorder interface{ RecordUncertainty(Uncertainty) }
 
@@ -43,6 +49,17 @@ func (u Uncertainty) Public() Uncertainty {
 	if u.Action != "move" || u.Phase != "status" && u.Phase != "post" {
 		u.Phase = ""
 	}
+	if u.HTTPStatus < 100 || u.HTTPStatus > 599 {
+		u.HTTPStatus = 0
+	}
+	// A fresh slice: the result never aliases the caller's codes.
+	var codes []string
+	for _, code := range u.Codes {
+		if len(codes) < maxPublicCodes && publicCode.MatchString(code) {
+			codes = append(codes, code)
+		}
+	}
+	u.Codes = codes
 	switch u.Kind {
 	case "host.lease-read", "host.lease-read-batch", "host.read-batch", "host.execute", "status.read", "caller.ready", "caller.start", "caller.stop", "caller.feed", "mailbox.read", "mailbox.create", "caller.collect", "judge", "store.observe", "store.failover", "session", "gate", "gate.prepare":
 	default:

@@ -45,16 +45,24 @@ func (s *Session) unknownRequest(id, rule string) {
 	if p.operation == operator.HostExecute && p.action == "status" {
 		kind = "status.read"
 	}
-	s.recordUncertainty(operator.Uncertainty{Kind: kind, RequestID: id, Target: p.target, Action: p.action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(p.end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (p.end - s.clock.Elapsed()).Milliseconds(), Rule: rule, Code: p.failureCode, ElapsedMS: p.failureElapsedMS, Phase: p.failurePhase, StepDeadlineMS: p.remainingMS})
+	s.recordUncertainty(operator.Uncertainty{Kind: kind, RequestID: id, Target: p.target, Action: p.action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(p.end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (p.end - s.clock.Elapsed()).Milliseconds(), Rule: rule, Code: p.failure.code, ElapsedMS: p.failure.elapsedMS, Phase: p.failure.phase, StepDeadlineMS: p.remainingMS, HTTPStatus: p.failure.httpStatus, Codes: p.failure.codes})
+}
+
+// hostFailure is the optional evidence of a host step that emitted unknown.
+// Public sanitizes every field when the uncertainty is recorded.
+type hostFailure struct {
+	code, phase string
+	elapsedMS   *int64
+	httpStatus  int
+	codes       []string
 }
 
 // Evidence decorates the existing pending identity before Accept records its
 // uncertainty. It cannot classify the result, clear the latch or submit work.
-func (s *Session) hostFailureEvidence(id, code, phase string, elapsed *int64) {
+func (s *Session) hostFailureEvidence(id string, failure hostFailure) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := s.requests[id]
-	p.failureCode, p.failurePhase, p.failureElapsedMS = code, phase, elapsed
+	s.requests[id].failure = failure
 }
 
 func (s *Session) noteUnknownRequest(id, rule string) {

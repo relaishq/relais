@@ -25,18 +25,16 @@ import (
 const maxRefusalDiagnostics = 64
 
 type pending struct {
-	operation        operator.Operation
-	target, action   string
-	end              time.Duration
-	deadlineUnixMS   string
-	remainingMS      int64
-	effect           bool
-	expired          bool
-	terminal         bool
-	outcome          operator.Certainty
-	failureCode      string
-	failurePhase     string
-	failureElapsedMS *int64
+	operation      operator.Operation
+	target, action string
+	end            time.Duration
+	deadlineUnixMS string
+	remainingMS    int64
+	effect         bool
+	expired        bool
+	terminal       bool
+	outcome        operator.Certainty
+	failure        hostFailure
 }
 type Session struct {
 	omittedRefusals int

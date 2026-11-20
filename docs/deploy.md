@@ -249,9 +249,13 @@ available. Raw announcements are not checked separately, so policy does not
 depend on whether a node client was already cached. Development tools retain
 `ValidateDev`, which refuses port 6379 on every host.
 
-The slot map becomes eligible for background refresh after **10 seconds**,
-preserving v8's cadence instead of v9's 60-second default. The next routing
-operation triggers that refresh; it is not an independent polling timer.
+The slot map refreshes every **10 seconds**, preserving v8's cadence instead of
+v9's 60-second default. go-redis itself reloads only when a routing operation
+finds the map stale, and that operation still uses the old map. Every
+production cluster client therefore also runs an independent 10-second refresh
+timer, stopped when the store closes, so an idle process does not send its
+first write after a primary failover to the dead primary. A failed dial also
+requests a refresh ([#517](https://github.com/relaishq/relais/issues/517)).
 Discovery is serial over N candidate sources. Dial-only blackholes can cost
 `N * DialTimeout` (default **5N seconds**). Stalled connections can also spend
 read/write budgets in connection setup and `CLUSTER SLOTS`. With DB 0, no client
