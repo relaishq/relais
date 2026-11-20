@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -15,25 +17,99 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/relaishq/relais/internal/redistestcluster"
 	"github.com/stretchr/testify/require"
 )
 
-// countedCluster serves a fixed one-node slot map from ClusterSlots and counts
-// each load, so slot-map reloads are visible without a Redis server. Callers
-// pass a "localhost" name: go-redis rewrites a loopback IP announcement to the
-// discovery source's host, which a custom ClusterSlots does not have.
-func countedCluster(t *testing.T, addr string, interval time.Duration) (*redis.ClusterClient, *atomic.Int32) {
+// countedCluster splits the slots evenly over addrs from ClusterSlots and
+// counts each load, so slot-map reloads are visible without a Redis server.
+// Callers pass "localhost" names: go-redis rewrites a loopback IP
+// announcement to the discovery source's host, which ClusterSlots lacks.
+func countedCluster(t *testing.T, interval time.Duration, addrs ...string) (*redis.ClusterClient, *atomic.Int32) {
 	t.Helper()
 	var loads atomic.Int32
-	cluster := RedisClusterOptions(&redis.UniversalOptions{Addrs: []string{addr}, MaxRetries: -1, MaxRedirects: -1, DialerRetries: 1})
+	cluster := RedisClusterOptions(&redis.UniversalOptions{Addrs: addrs[:1], MaxRetries: -1, MaxRedirects: -1, DialerRetries: 1})
 	cluster.ClusterStateReloadInterval = interval
 	cluster.ClusterSlots = func(context.Context) ([]redis.ClusterSlot, error) {
 		loads.Add(1)
-		return []redis.ClusterSlot{{Start: 0, End: 16383, Nodes: []redis.ClusterNode{{Addr: addr}}}}, nil
+		var slots []redis.ClusterSlot
+		for i, addr := range addrs {
+			slots = append(slots, redis.ClusterSlot{Start: i * 16384 / len(addrs), End: (i+1)*16384/len(addrs) - 1, Nodes: []redis.ClusterNode{{Addr: addr}}})
+		}
+		return slots, nil
 	}
 	client := redis.NewClusterClient(cluster)
 	t.Cleanup(func() { _ = client.Close() })
 	return client, &loads
+}
+
+// fakeNode completes connection setup like a RESP2-only server, then passes
+// each application command to handle, which returns the reply or, when hangUp
+// is set, closes the connection without replying.
+func fakeNode(t *testing.T, handle func(args []string) (reply string, hangUp bool)) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				reader := bufio.NewReader(conn)
+				for {
+					args, err := readCommand(reader)
+					if err != nil {
+						return
+					}
+					var reply string
+					switch strings.ToLower(args[0]) {
+					case "hello":
+						reply = "-ERR unknown command 'HELLO'\r\n"
+					case "ping":
+						reply = "+PONG\r\n"
+					case "auth", "select", "client":
+						reply = "+OK\r\n"
+					default:
+						var hangUp bool
+						if reply, hangUp = handle(args); hangUp {
+							return
+						}
+					}
+					if _, err := io.WriteString(conn, reply); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return localhostAddr(listener)
+}
+
+func readCommand(reader *bufio.Reader) ([]string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "*")))
+	if err != nil {
+		return nil, err
+	}
+	args := make([]string, n)
+	for i := range args {
+		if _, err := reader.ReadString('\n'); err != nil {
+			return nil, err
+		}
+		arg, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		args[i] = strings.TrimSuffix(arg, "\r\n")
+	}
+	return args, nil
 }
 
 func localhostAddr(listener net.Listener) string {
@@ -46,7 +122,7 @@ func refreshGoroutines() int {
 }
 
 func TestRefreshRedisClusterStateReloadsIdleClientUntilStopped(t *testing.T) {
-	client, loads := countedCluster(t, "localhost:16480", 20*time.Millisecond)
+	client, loads := countedCluster(t, 20*time.Millisecond, "localhost:16480")
 	before := refreshGoroutines()
 	stop := RefreshRedisClusterState(client)
 	require.Equal(t, before+1, refreshGoroutines())
@@ -68,7 +144,7 @@ func TestRefreshRedisClusterStateReloadsAfterDialError(t *testing.T) {
 	require.NoError(t, err)
 	addr := localhostAddr(listener)
 	require.NoError(t, listener.Close())
-	client, loads := countedCluster(t, addr, time.Hour)
+	client, loads := countedCluster(t, time.Hour, addr)
 	defer RefreshRedisClusterState(client)()
 	err = client.Set(context.Background(), "k", "v", 0).Err()
 	require.True(t, IsRedisDialError(err), "%v", err)
@@ -77,27 +153,51 @@ func TestRefreshRedisClusterStateReloadsAfterDialError(t *testing.T) {
 }
 
 func TestRefreshRedisClusterStateKeepsMapAfterEstablishedConnectionError(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close() // the command was sent; the reply is lost
+	var sets atomic.Int32
+	addr := fakeNode(t, func(args []string) (string, bool) {
+		if strings.EqualFold(args[0], "set") {
+			sets.Add(1)
 		}
-	}()
-	client, loads := countedCluster(t, localhostAddr(listener), time.Hour)
+		return "", true // the command arrived; its reply is lost
+	})
+	client, loads := countedCluster(t, time.Hour, addr)
 	defer RefreshRedisClusterState(client)()
-	err = client.Set(context.Background(), "k", "v", 0).Err()
+	err := client.Set(context.Background(), "k", "v", 0).Err()
 	require.Error(t, err)
-	var opError *net.OpError
-	require.True(t, errors.Is(err, io.EOF) || errors.As(err, &opError) && opError.Op == "read", "%v", err)
 	require.False(t, IsRedisDialError(err), "%v", err)
 	time.Sleep(300 * time.Millisecond)
-	require.Equal(t, int32(1), loads.Load())
+	require.Equal(t, int32(1), sets.Load(), "the SET reached the node once and was not retried")
+	require.Equal(t, int32(1), loads.Load(), "an established-connection error must not reload the map")
+}
+
+// A pipeline reports its first error. A refused dial to another node behind
+// an ordinary command error must still request a reload.
+func TestRefreshRedisClusterStateReloadsAfterPipelineDialError(t *testing.T) {
+	live := fakeNode(t, func([]string) (string, bool) { return "-ERR rejected\r\n", false })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	refused := localhostAddr(listener)
+	require.NoError(t, listener.Close())
+	client, loads := countedCluster(t, time.Hour, live, refused)
+	defer RefreshRedisClusterState(client)()
+	var liveKey, refusedKey string
+	for i := 0; liveKey == "" || refusedKey == ""; i++ {
+		key := fmt.Sprint("k", i)
+		if redistestcluster.Slot(key) < 8192 {
+			liveKey = key
+		} else {
+			refusedKey = key
+		}
+	}
+	cmds, err := client.Pipelined(context.Background(), func(pipe redis.Pipeliner) error {
+		pipe.Set(context.Background(), liveKey, "v", 0)
+		pipe.Set(context.Background(), refusedKey, "v", 0)
+		return nil
+	})
+	require.Error(t, err)
+	require.True(t, IsRedisDialError(cmds[1].Err()), "%v", cmds[1].Err())
+	require.False(t, IsRedisDialError(err), "the first error must hide the dial error: %v", err)
+	require.Eventually(t, func() bool { return loads.Load() == 2 }, 5*time.Second, 5*time.Millisecond)
 }
 
 type tlsAlert struct{}

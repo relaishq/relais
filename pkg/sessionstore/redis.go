@@ -399,6 +399,40 @@ func (r *Redis) retryRead(ctx context.Context, op string, fn func() error) error
 	}
 	return errors.New("sessionstore: unreachable retry")
 }
+
+// retryWrite retries only errors that prove the command never ran. Most such
+// kinds get three attempts. A failed dial keeps retrying with growing delays
+// while the command limit leaves time for the next wait: the slot-map reload
+// it triggers is asynchronous and can take longer than three quick refusals.
+func (r *Redis) retryWrite(ctx context.Context, op string, fn func() error) error {
+	delay := 20 * time.Millisecond
+	for attempt := 0; ; attempt++ {
+		err := r.observe(op, fn)
+		if err == nil {
+			return nil
+		}
+		kind := redisKind(err)
+		if !definiteNotRun(kind) {
+			return err
+		}
+		if kind == "dial" {
+			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= delay {
+				return err
+			}
+		} else if attempt == 2 {
+			return err
+		}
+		metrics.RedisRetries.WithLabelValues(op).Inc()
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		delay = min(2*delay, 200*time.Millisecond)
+	}
+}
 func (r *Redis) observe(op string, fn func() error) error {
 	start := time.Now()
 	err := fn()
@@ -440,21 +474,7 @@ func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.D
 	if op == "get" || op == "state" || op == "inventory" || op == "settle" || op == "indexed" || op == "checkpoint" {
 		err = r.retryRead(ctx, "session_"+op, fn)
 	} else {
-		for attempt := 0; attempt < 3; attempt++ {
-			err = r.observe("session_"+op, fn)
-			if err == nil || !definiteNotRun(redisKind(err)) || attempt == 2 {
-				break
-			}
-			metrics.RedisRetries.WithLabelValues("session_" + op).Inc()
-			timer := time.NewTimer(time.Duration(20<<attempt) * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, classify(op, ctx.Err())
-			case <-timer.C:
-			}
-		}
-		err = classify(op, err)
+		err = classify(op, r.retryWrite(ctx, "session_"+op, fn))
 	}
 	if err != nil {
 		return nil, err

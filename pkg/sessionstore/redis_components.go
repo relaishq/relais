@@ -207,21 +207,7 @@ func (r *Redis) runComponent(ctx context.Context, script *redis.Script, op, id s
 		err := r.retryRead(ctx, op, fn)
 		return componentResult(result, err)
 	}
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		err = r.observe(op, fn)
-		if err == nil || !definiteNotRun(redisKind(err)) || attempt == 2 {
-			break
-		}
-		timer := time.NewTimer(time.Duration(20<<attempt) * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, classify(op, ctx.Err())
-		case <-timer.C:
-		}
-	}
-	return componentResult(result, classify(op, err))
+	return componentResult(result, classify(op, r.retryWrite(ctx, op, fn)))
 }
 func (r *Redis) readComponentRecord(ctx context.Context, id string) (componentRecord, Lease, time.Time, error) {
 	result, err := r.runComponent(ctx, componentReadScript, "component_read", id)

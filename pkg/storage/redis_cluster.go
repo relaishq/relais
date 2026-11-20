@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -114,7 +115,9 @@ func (h redisDialReloadHook) ProcessHook(next redis.ProcessHook) redis.ProcessHo
 func (h redisDialReloadHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
 		err := next(ctx, cmds)
-		if IsRedisDialError(err) {
+		// A pipeline returns its first error; a dial error to another node can
+		// sit behind an ordinary command error.
+		if IsRedisDialError(err) || slices.ContainsFunc(cmds, func(cmd redis.Cmder) bool { return IsRedisDialError(cmd.Err()) }) {
 			h.client.ReloadState(ctx)
 		}
 		return err

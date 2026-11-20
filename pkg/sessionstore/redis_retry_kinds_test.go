@@ -57,7 +57,7 @@ func TestRedisRetryPathByErrorKind(t *testing.T) {
 		name      string
 		err       error
 		kind      string
-		writes    int32 // attempts by the write loop (renew)
+		writes    int32 // attempts by the write loop (renew); 0: until the command limit
 		reads     int32 // attempts by retryRead (get)
 		transient bool
 	}{
@@ -70,9 +70,9 @@ func TestRedisRetryPathByErrorKind(t *testing.T) {
 		{"read reset", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, "net", 1, 3, true},
 		{"write timeout", &net.OpError{Op: "write", Net: "tcp", Err: timeoutError{}}, "timeout", 1, 3, true},
 		{"read timeout", &net.OpError{Op: "read", Net: "tcp", Err: timeoutError{}}, "timeout", 1, 3, true},
-		{"dial refused", refusedDial(), "dial", 3, 3, true},
-		{"wrapped dial refused", fmt.Errorf("pool: %w", refusedDial()), "dial", 3, 3, true},
-		{"dial timeout", &net.OpError{Op: "dial", Net: "tcp", Err: timeoutError{}}, "dial", 3, 3, true},
+		{"dial refused", refusedDial(), "dial", 0, 3, true},
+		{"wrapped dial refused", fmt.Errorf("pool: %w", refusedDial()), "dial", 0, 3, true},
+		{"dial timeout", &net.OpError{Op: "dial", Net: "tcp", Err: timeoutError{}}, "dial", 0, 3, true},
 		{"tls handshake remote alert", &net.OpError{Op: "remote error", Err: errors.New("tls: handshake failure")}, "net", 1, 3, true},
 		{"tls record header", tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}, "other", 1, 1, false},
 		{"canceled", context.Canceled, "canceled", 1, 1, true},
@@ -94,7 +94,12 @@ func TestRedisRetryPathByErrorKind(t *testing.T) {
 				elapsed := time.Since(start)
 				require.NoError(t, client.Close())
 				require.Error(t, err)
-				require.Equal(t, path.want, hook.attempts.Load(), path.op)
+				if path.want == 0 {
+					require.Greater(t, hook.attempts.Load(), int32(3), path.op)
+					require.GreaterOrEqual(t, elapsed, transitionCommandLimit*3/4, path.op)
+				} else {
+					require.Equal(t, path.want, hook.attempts.Load(), path.op)
+				}
 				require.Equal(t, tc.transient, errors.Is(err, ErrTransient), path.op)
 				require.Less(t, elapsed, transitionCommandLimit, path.op)
 			}
@@ -134,6 +139,26 @@ func TestRedisRefusedDialRetryPath(t *testing.T) {
 	require.Error(t, err)
 	require.Less(t, time.Since(start), transitionCommandLimit)
 	require.Equal(t, "dial", redisKind(err))
-	require.Equal(t, int32(3), hook.attempts.Load())
+	require.Greater(t, hook.attempts.Load(), int32(3))
 	require.ErrorIs(t, err, ErrTransient)
+}
+
+// Pins how long the write loop keeps retrying a refused dial and how many
+// attempts it makes inside the two-second command limit.
+func TestRedisDialWriteRetryTiming(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	defer func() { _ = client.Close() }()
+	hook := &injectedErrorHook{err: refusedDial()}
+	client.AddHook(hook)
+	r := &Redis{client: client, prefix: "kinds:", retention: time.Minute}
+	start := time.Now()
+	_, err := r.run(context.Background(), "renew", "id", "127.0.0.1:1", "1", time.Minute)
+	elapsed := time.Since(start)
+	require.ErrorIs(t, err, ErrTransient)
+	require.Equal(t, "dial", redisKind(err))
+	// Delays 20, 40, 80, 160, then 200 ms while the limit leaves time.
+	require.GreaterOrEqual(t, hook.attempts.Load(), int32(6))
+	require.LessOrEqual(t, hook.attempts.Load(), int32(14))
+	require.GreaterOrEqual(t, elapsed, transitionCommandLimit*3/4)
+	require.Less(t, elapsed, transitionCommandLimit)
 }
