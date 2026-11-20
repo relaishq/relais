@@ -406,7 +406,9 @@ func (r *Redis) retryRead(ctx context.Context, op string, fn func() error) error
 // it triggers is asynchronous and can take longer than three quick refusals.
 func (r *Redis) retryWrite(ctx context.Context, op string, fn func() error) error {
 	delay := 20 * time.Millisecond
-	for attempt := 0; ; attempt++ {
+	// Dial retries do not count toward the other kinds' three attempts.
+	others := 0
+	for {
 		err := r.observe(op, fn)
 		if err == nil {
 			return nil
@@ -419,7 +421,7 @@ func (r *Redis) retryWrite(ctx context.Context, op string, fn func() error) erro
 			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= delay {
 				return err
 			}
-		} else if attempt == 2 {
+		} else if others++; others == 3 {
 			return err
 		}
 		metrics.RedisRetries.WithLabelValues(op).Inc()
