@@ -242,6 +242,41 @@ func TestRelayDrainUnconfirmedSwitchKeepsCall(t *testing.T) {
 	})
 }
 
+func TestRelayChangeRollbackKeepsPlannedKind(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, _, _, id := relayFailurePlane(t, sessionstore.NewMemory(), sessionstore.RelayConfirmDecode)
+		stopRelayRecoveries(t, p)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- p.ChangeRelay(ctx, id, "r2") }()
+		commitPending(t, p.store, id) // C arrives; missing A starts rollback at 3 s.
+		lease, rollback := waitRelayPendingAt(t, p.store, id, 1)
+		waitAttempt(t, p.store, id, 2)
+		status := relayStatusOf(t, p, id)
+		require.Equal(t, "r1", status.Pending)
+		require.Equal(t, sessionstore.RelayPhasePending, status.Attempt.Phase)
+		require.Equal(t, "planned", status.Attempt.Kind)
+		_, rec, err := confirmations(p.store).RelayConfirmation(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, "planned", rec.Attempt.Kind, "kind is persisted, not rewritten for status")
+		require.True(t, rec.Episode.Open())
+		require.Equal(t, rec.Episode.Token, rec.Attempt.Episode)
+		require.False(t, rec.Attempt.PlannedDeadline.IsZero())
+		require.Equal(t, rec.Attempt.Outer(), rec.Attempt.PlannedDeadline)
+		require.NoError(t, p.store.(sessionstore.RelayAssignments).CommitRelay(ctx, lease, rollback,
+			sessionstore.RelayAssignment{Slot: "r1", Generation: 2}))
+		req := httptest.NewRequest(http.MethodPost, "/calls/"+id+"/media-progress",
+			bytes.NewBufferString(`{"generation":2,"decoded_mids":["0"]}`))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		p.Handler().ServeHTTP(response, req)
+		require.Equal(t, http.StatusNoContent, response.Code, response.Body.String())
+		require.ErrorIs(t, <-done, ErrRelayRolledBack)
+		require.Equal(t, "planned", relayStatusOf(t, p, id).Attempt.Kind)
+	})
+}
+
 func TestRelayDrainFailedRollbackRecoversOnThirdRelay(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p, w, ids := drainPlane(t, 1)
@@ -273,6 +308,7 @@ func TestRelayDrainFailedRollbackRecoversOnThirdRelay(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, sessionstore.RelayAssignment{Slot: "r3", Generation: 3}, a)
 		require.Equal(t, sessionstore.RelayPhaseConfirmed, rec.Attempt.Phase)
+		require.Equal(t, "recovery", rec.Attempt.Kind)
 		require.ElementsMatch(t, []string{"r1", "r2", "r3"}, rec.Attempt.Tried)
 		require.Equal(t, sessionstore.RelayEpisodeCompleted, rec.Episode.Outcome)
 	})

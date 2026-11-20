@@ -183,10 +183,12 @@ the current `attempt`: `generation`, `slot`, `kind` (`planned` or `recovery`),
 `phase` (`pending`, `switched`, `confirmed`, `expired` or `aborted`),
 `required_mids`, `delivered_mids`, `decoded_mids` and `delivered`. `delivered`
 is true only when C covers every required MID of that generation; it proves
-packet delivery, not decode. A new generation starts undelivered. The phase
-follows the durable completion predicate, so a switch commit that supplies the
-last prerequisite already reads `confirmed`. The sanitized `relais-signal`
-status does not include these fields.
+packet delivery, not decode. Rollback to the original slot remains `planned`,
+including while an episode owns its deadline. Attempts issued by the recovery
+hand-off after rollback fails are `recovery`. A new generation starts
+undelivered. The phase follows the durable completion predicate, so a switch
+commit that supplies the last prerequisite already reads `confirmed`. The
+sanitized `relais-signal` status does not include these fields.
 
 With a configured relay set, private control `/metrics` adds per-slot relay
 change metrics (no call or session labels; `slot` is a configured slot ID):

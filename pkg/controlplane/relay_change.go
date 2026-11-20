@@ -348,7 +348,8 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 		}
 		p.mu.Unlock()
 		proposal := episode.proposal()
-		planned = relayAttemptOptions{kind: "recovery", outer: bound, detected: proposal.Started, episode: proposal.Token}
+		// Rollback remains planned even when the episode owns its bounds.
+		planned = relayAttemptOptions{kind: "planned", outer: bound, detected: proposal.Started, episode: proposal.Token}
 	}
 	settle := func() time.Duration {
 		if episode == nil {
