@@ -13,10 +13,10 @@ func testManifest(t *testing.T, version string) Manifest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.OldestLivePeer = "0.3.0"
-	m.OldestRollback = "0.3.0"
-	m.TestedPeers = []string{"0.3.0", "0.3.1", "0.4.0", version}
-	if version != "0.3.0" {
+	m.OldestLivePeer = "0.3.2"
+	m.OldestRollback = "0.3.2"
+	m.TestedPeers = []string{"0.3.2", "0.3.3", "0.4.0", version}
+	if version != "0.3.2" {
 		m.Commit = strings.Repeat("b", 40)
 	}
 	return m
@@ -42,7 +42,7 @@ func requireRefused(t *testing.T, v Verdict, code string) {
 }
 
 func TestUpgradeAndRollbackPlanEveryParticipant(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	for _, tc := range []struct {
 		operation string
 		from, to  Manifest
@@ -65,12 +65,12 @@ func TestUpgradeAndRollbackPlanEveryParticipant(t *testing.T) {
 	}
 }
 func TestRefusesUnsupportedUpgradeBeforeAnyStep(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	next.TestedPeers = []string{next.Version}
 	requireRefused(t, Preflight(testPool(old), next, "upgrade"), "unsupported_pair")
 }
 func TestRollbackRefusesPersistedV10EvenWithAdmissionOff(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	for _, role := range []string{"worker", "control"} {
 		for profile, p := range old.Roles[role] {
 			f := p.Formats["snapshot"]
@@ -90,7 +90,7 @@ func TestRollbackRefusesPersistedV10EvenWithAdmissionOff(t *testing.T) {
 	requireRefused(t, Preflight(pool, old, "rollback"), "format_incompatible")
 }
 func TestRefusesReaderOnlyBridge(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	p := old.Roles["worker"]["legacy"]
 	f := p.Formats["snapshot"]
 	f.Continues = []int{7, 8, 9}
@@ -99,7 +99,7 @@ func TestRefusesReaderOnlyBridge(t *testing.T) {
 	requireRefused(t, Preflight(testPool(next), old, "rollback"), "format_incompatible")
 }
 func TestEveryIntermediateStateMustReadTargetWireProtocol(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	next.HTTPContract++
 	for role, profiles := range next.Roles {
 		for name, p := range profiles {
@@ -114,7 +114,7 @@ func TestEveryIntermediateStateMustReadTargetWireProtocol(t *testing.T) {
 	}
 }
 func TestCompatibleScriptSHAOptimizationDoesNotBlockRollout(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	s := next.Scripts["componentCommitLua"]
 	s.SHA = strings.Repeat("d", 40)
 	s.UnchangedTuples = "ADR 0012 #238: persisted tuples unchanged"
@@ -127,7 +127,7 @@ func TestCompatibleScriptSHAOptimizationDoesNotBlockRollout(t *testing.T) {
 	}
 }
 func TestAdmissionActivationNeedsAllReadersAndLifecycle(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	pool := testPool(old)
 	pool.TargetWorkerProfile = "split"
 	if v := Preflight(pool, next, "upgrade"); !v.Allowed {
@@ -141,7 +141,7 @@ func TestAdmissionActivationNeedsAllReadersAndLifecycle(t *testing.T) {
 	requireRefused(t, Preflight(pool, next, "upgrade"), "format_incompatible")
 }
 func TestUnknownInventoryAndManifestRefuse(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	cases := []struct {
 		name, code string
 		change     func(*Pool, *Manifest)
@@ -157,10 +157,10 @@ func TestUnknownInventoryAndManifestRefuse(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			pool := testPool(old)
-			target := testManifest(t, "0.3.1")
+			target := testManifest(t, "0.3.3")
 			if c.name == "rollback-floor" {
 				pool = testPool(next)
-				target = testManifest(t, "0.3.0")
+				target = testManifest(t, "0.3.2")
 				for i := range pool.Participants {
 					pool.Participants[i].Manifest.OldestRollback = next.Version
 				}
@@ -173,7 +173,7 @@ func TestUnknownInventoryAndManifestRefuse(t *testing.T) {
 	}
 }
 func TestContractEvolutionRequiresVersionOrUnchangedTupleNote(t *testing.T) {
-	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
 	next.HTTPGolden = strings.Repeat("e", 64)
 	if err := CheckEvolution(old, next); err == nil {
 		t.Fatal("HTTP fixture changed without version bump")
@@ -182,7 +182,7 @@ func TestContractEvolutionRequiresVersionOrUnchangedTupleNote(t *testing.T) {
 	if err := CheckEvolution(old, next); err != nil {
 		t.Fatal(err)
 	}
-	next = testManifest(t, "0.3.1")
+	next = testManifest(t, "0.3.3")
 	s := next.Scripts["sessionLua"]
 	s.SHA = strings.Repeat("f", 40)
 	next.Scripts["sessionLua"] = s
@@ -301,7 +301,7 @@ func TestStoreGoldenRejectsChangedLua(t *testing.T) {
 }
 
 func TestDevelopmentArtifactsCannotAuthorizeLiveRollout(t *testing.T) {
-	old := testManifest(t, "0.3.0")
+	old := testManifest(t, "0.3.2")
 	dev, err := Generate("../..", "0.0.0-dev+abc123", strings.Repeat("a", 40), "linux", "arm64")
 	if err != nil {
 		t.Fatal(err)

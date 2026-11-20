@@ -105,7 +105,7 @@ func TestCheckRejectsFormatMutationWithoutManifestUpdate(t *testing.T) {
 
 func TestPreflightRefusalHasNoFileOrProcessChanges(t *testing.T) {
 	root := t.TempDir()
-	m, err := releasecompat.Generate("../../..", "0.3.0", strings.Repeat("a", 40), "linux", "arm64")
+	m, err := releasecompat.Generate("../../..", "0.3.2", strings.Repeat("a", 40), "linux", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,14 +164,14 @@ func TestMissingAndPreManifestFilesRefuseClearly(t *testing.T) {
 }
 func TestArtifactIdentityMismatchPrecedesBinaryExecution(t *testing.T) {
 	root := t.TempDir()
-	m, err := releasecompat.Generate("../../..", "0.3.0", strings.Repeat("a", 40), "linux", "arm64")
+	m, err := releasecompat.Generate("../../..", "0.3.2", strings.Repeat("a", 40), "linux", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest := filepath.Join(root, "compatibility.json")
 	writeJSON(t, manifest, m)
 	var out bytes.Buffer
-	if run([]string{"artifact", "--manifest", manifest, "--version", "0.3.1", "--os", "linux", "--arch", "arm64", "--binary-dir", root}, &out) == 0 || !strings.Contains(out.String(), "identity_mismatch") {
+	if run([]string{"artifact", "--manifest", manifest, "--version", "0.3.3", "--os", "linux", "--arch", "arm64", "--binary-dir", root}, &out) == 0 || !strings.Contains(out.String(), "identity_mismatch") {
 		t.Fatal(out.String())
 	}
 }
