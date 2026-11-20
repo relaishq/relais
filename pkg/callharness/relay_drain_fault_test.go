@@ -2,9 +2,12 @@ package callharness
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"slices"
 	"strings"
@@ -163,41 +166,78 @@ func TestRelayDrainSurvivesCallerRestartWriteRace(t *testing.T) {
 	})
 }
 
-// TestRelayDrainUnconfirmedCallEvidence records what happens today when one
-// drained call's caller media really is missing on the new relay: the
-// caller's audio never reaches r2. The other call confirms; the drain reports
-// the one per-call delivery_unconfirmed error at the planned limit; control's
-// saved attempt, the worker's per-MID evidence and the caller's report all
-// name audio (MID 0) as the missing track; and the call is not ended.
+// TestRelayDrainUnconfirmedCallEvidence drops one caller's audio on r2.
+// The other call confirms there. Three failed planned attempts each roll
+// back to r1; the drain identifies the one not-movable call. Control's saved
+// attempts, the worker's per-MID evidence and the caller's report name audio
+// (MID 0) as missing on r2. The call stays live with confirmed media on r1.
 func TestRelayDrainUnconfirmedCallEvidence(t *testing.T) {
 	if testing.Short() {
-		t.Skip("waits for the 10 s planned limit")
+		t.Skip("waits for three 10 s planned attempts and confirmed rollbacks")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		p, w, calls, faults := faultTopology(t, ctx, store, 2)
 		watch := watchRelayAttempts(store, calls)
+		defer watch.stop()
 		media, stopMedia := context.WithCancel(ctx)
 		defer stopMedia()
 		sent := make(chan error, len(calls))
 		for _, c := range calls {
-			go func() { sent <- watch.sendMedia(media, c, 13*time.Second) }()
+			go func() { sent <- watch.sendMedia(media, c, 90*time.Second) }()
 		}
 		time.Sleep(time.Second)
 		faults[0].mode.Store(faultDrop)
-		start := time.Now()
-		err := p.DrainRelay(ctx, "r1")
-		elapsed := time.Since(start)
-		confirmations := store.(sessionstore.RelayConfirmations)
 		missing, confirmed := calls[0].SessionID(), calls[1].SessionID()
+		start := time.Now()
+		drained := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			response := httptest.NewRecorder()
+			p.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/relays/r1/drain", nil).WithContext(ctx))
+			drained <- response
+		}()
+		// Capture generation 1 while it is current. Confirmed rollback
+		// supersedes it, and the worker correctly rejects stale reads.
+		var report mediaworker.RelayDeliveryReport
+		require.Eventually(t, func() bool {
+			var e error
+			report, e = w.RelayDelivery(ctx, missing, 1)
+			return e == nil && report.Switched && slices.Equal(report.Delivered, []string{"1"})
+		}, 8*time.Second, 20*time.Millisecond)
+		confirmations := store.(sessionstore.RelayConfirmations)
+		require.Eventually(t, func() bool {
+			a, rec, e := confirmations.RelayConfirmation(ctx, missing)
+			return e == nil && a.Slot == "r2" && a.Generation == 1 && rec.Attempt != nil &&
+				!rec.Attempt.CommitAt.IsZero() && time.Now().After(rec.Attempt.CommitAt.Add(9*time.Second))
+		}, 10*time.Second, 20*time.Millisecond, "capture caller evidence late in generation 1, while still on r2")
+		callerOnR2 := calls[0].rec.report()
+		response := <-drained
+		elapsed := time.Since(start)
 		after, afterRec, afterErr := confirmations.RelayConfirmation(ctx, missing)
 		intents, intentsErr := store.(sessionstore.ControlStore).ControlIntents(ctx)
 		watch.stop()
 		t.Logf("drain evidence:\n%s", watch.evidence(calls, start))
-		require.ErrorContains(t, err, "relay change unconfirmed: delivery_unconfirmed")
-		require.Equal(t, 1, strings.Count(err.Error(), "delivery_unconfirmed"), "one per-call error, for the one call")
-		require.GreaterOrEqual(t, elapsed, 10*time.Second, "the attempt fails at the planned limit (relayPlannedLimit)")
+		require.Equal(t, http.StatusOK, response.Code)
+		var result controlplane.RelayDrainResult
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+		require.Len(t, result.Moves, 2)
+		require.ElementsMatch(t, []string{missing, confirmed}, []string{result.Moves[0].ID, result.Moves[1].ID})
+		require.Equal(t, 1, result.NotMovable)
+		for _, move := range result.Moves {
+			if move.ID == missing {
+				require.True(t, move.NotMovable)
+				require.Empty(t, move.To)
+				require.Contains(t, move.Error, "relay change unconfirmed: delivery_unconfirmed")
+				require.Equal(t, 1, strings.Count(move.Error, "delivery_unconfirmed"))
+			} else {
+				require.Equal(t, confirmed, move.ID)
+				require.Equal(t, "r2", move.To)
+				require.Empty(t, move.Error)
+				require.False(t, move.NotMovable)
+			}
+		}
+		require.GreaterOrEqual(t, elapsed, 33*time.Second, "three planned limits plus the 1 s and 2 s backoff")
 
 		a, rec, e := confirmations.RelayConfirmation(ctx, confirmed)
 		require.NoError(t, e)
@@ -206,34 +246,42 @@ func TestRelayDrainUnconfirmedCallEvidence(t *testing.T) {
 
 		watch.mu.Lock()
 		failed := watch.attempts[missing][1]
+		for _, generation := range []uint64{1, 3, 5} {
+			attempt := watch.attempts[missing][generation]
+			require.Equal(t, "r2", attempt.Slot)
+			require.Equal(t, []string{"0", "1"}, attempt.Required)
+			require.Equal(t, []string{"1"}, attempt.Delivered, "video was delivered; audio has no evidence")
+		}
 		watch.mu.Unlock()
-		require.Equal(t, "r2", failed.Slot)
-		require.Equal(t, []string{"0", "1"}, failed.Required)
-		require.Equal(t, []string{"1"}, failed.Delivered, "video was delivered; audio has no evidence")
 
-		report, e := w.RelayDelivery(ctx, missing, 1)
-		require.NoError(t, e)
 		require.True(t, report.Switched)
 		require.Equal(t, "r2", report.Slot)
 		require.Equal(t, []string{"0", "1"}, report.Required)
 		require.Equal(t, []string{"1"}, report.Delivered)
 
-		for _, track := range calls[0].rec.report().Tracks {
+		require.True(t, slices.ContainsFunc(callerOnR2.Tracks, func(track TrackReport) bool { return track.Kind == kindAudio }))
+		for _, track := range callerOnR2.Tracks {
 			if track.Kind == kindAudio {
 				require.True(t, calls[0].rec.start.Add(track.LastArrival).Before(failed.CommitAt), "the caller really received no audio on r2")
 			}
 		}
-		// The call's relay status right after the error: still on r2 at
-		// generation 1 (a committed generation is never undone), the attempt
-		// expired with only video delivered, and a recovery episode started
-		// (ADR 0016 section 7: switched and unconfirmed at the planned
-		// deadline). The call is not ended.
+		// Every failed move has a higher-generation confirmed rollback.
+		// Recovery is settled and the call is still live on its original slot.
 		require.NoError(t, afterErr)
-		require.Equal(t, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}, after)
-		require.Equal(t, sessionstore.RelayPhaseExpired, afterRec.Attempt.Phase)
-		require.Equal(t, []string{"1"}, afterRec.Attempt.Delivered)
+		require.Equal(t, sessionstore.RelayAssignment{Slot: "r1", Generation: 6}, after)
+		require.Equal(t, sessionstore.RelayPhaseConfirmed, afterRec.Attempt.Phase)
+		require.Equal(t, []string{"0", "1"}, afterRec.Attempt.Delivered)
+		require.False(t, afterRec.Episode.Open())
+		_, e = store.Get(ctx, missing)
+		require.NoError(t, e, "the failed drain must not delete the live session")
 		require.NoError(t, intentsErr)
-		require.True(t, slices.ContainsFunc(intents, func(i sessionstore.ControlIntent) bool { return i.ID == "relay-recovery:"+missing }), "recovery owns the call after the planned limit")
+		require.False(t, slices.ContainsFunc(intents, func(i sessionstore.ControlIntent) bool { return i.ID == "relay-recovery:"+missing }), "confirmed rollback settles recovery")
+		require.Eventually(t, func() bool {
+			now := calls[0].rec.report()
+			return slices.ContainsFunc(now.Tracks, func(track TrackReport) bool {
+				return track.Kind == kindAudio && calls[0].rec.start.Add(track.LastArrival).After(start.Add(elapsed))
+			})
+		}, 2*time.Second, 20*time.Millisecond, "audio resumes after the final rollback")
 		stopMedia()
 		for range calls {
 			<-sent

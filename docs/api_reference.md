@@ -88,7 +88,18 @@ waits, three failed planned attempts have only the 1 s and 2 s delays. A call th
 never starts an attempt still reports the context error without `not_movable`.
 Only failed planned attempts whose pending assignment was accepted and which
 leave the call on the draining slot count toward exhaustion. Change, rollback and
-episode bounds apply. One two-minute budget covers the whole drain, including
+episode bounds apply. A switched call still missing delivery at the 10 s planned
+limit makes one rollback attempt to the original live slot, even while that slot
+is draining. During an episode, rollback uses the remaining episode time unless
+another live, untried, non-draining relay is available. Only then is its window
+clipped to 4 s to leave time for recovery, without passing the episode deadline.
+A-mode confirmation ends at the earlier of commit time + 3 s and the rollback
+window end. If rollback does not confirm, recovery receives both slots as tried
+and can select a third relay.
+This does not extend the 10 s + 15 s bound. Once rollback confirms, the failed
+planned attempt counts toward the three-failure allowance and the call stays
+live on its original slot.
+One two-minute budget covers the whole drain, including
 queued calls, backoff and waits for a target or ownership. An earlier request
 deadline wins. Expiry stops planned attempts and reports `context deadline exceeded`.
 An in-flight change still completes its bounded rollback or recovery before
@@ -172,10 +183,12 @@ the current `attempt`: `generation`, `slot`, `kind` (`planned` or `recovery`),
 `phase` (`pending`, `switched`, `confirmed`, `expired` or `aborted`),
 `required_mids`, `delivered_mids`, `decoded_mids` and `delivered`. `delivered`
 is true only when C covers every required MID of that generation; it proves
-packet delivery, not decode. A new generation starts undelivered. The phase
-follows the durable completion predicate, so a switch commit that supplies the
-last prerequisite already reads `confirmed`. The sanitized `relais-signal`
-status does not include these fields.
+packet delivery, not decode. Rollback to the original slot remains `planned`,
+including while an episode owns its deadline. Attempts issued by the recovery
+hand-off after rollback fails are `recovery`. A new generation starts
+undelivered. The phase follows the durable completion predicate, so a switch
+commit that supplies the last prerequisite already reads `confirmed`. The
+sanitized `relais-signal` status does not include these fields.
 
 With a configured relay set, private control `/metrics` adds per-slot relay
 change metrics (no call or session labels; `slot` is a configured slot ID):

@@ -459,6 +459,15 @@ Once an episode starts, the tried-slot rule also applies to rollback. C-only
 mode has no 3 s A timer. Missing C alone does not trigger that timer or its
 retry rule.
 
+**Planned drain rollback (2026-11-20).** During an episode, control may try the
+original live slot once even while it is draining. Rollback uses the remaining
+episode time unless another live, untried, non-draining relay is available.
+With such a relay, use a 4 s rollback window clipped by the episode deadline
+to leave time for recovery. A-mode confirmation ends at the earlier of commit
+time + 3 s and the rollback window end. Record both the failed planned target
+and the original slot as tried. If rollback does not confirm, recovery selects
+an untried, non-draining slot within the same episode deadline.
+
 During an unconfirmed A-mode attempt only, the caller requests a stall restart
 when a required track has no non-concealed decoded audio or decoded video
 progress for **2 s** while fresh RTP keeps arriving (section 4). The worker

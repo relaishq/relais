@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,9 @@ import (
 )
 
 var ErrRelayRolledBack = errors.New("controlplane: relay_change_rolled_back")
+
+// relayRollbackRecoveryWindow leaves episode time for another eligible relay after rollback.
+const relayRollbackRecoveryWindow = 4 * time.Second
 
 // relayPlannedFailure identifies an attempt whose pending assignment was
 // accepted. Other operations can advance a generation without this attempt
@@ -214,7 +218,7 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 			changeErr = &relayPlannedFailure{changeErr}
 		}
 	}()
-	planned := relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit)}
+	planned := relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit), tried: []string{target}}
 	firstOuter := planned.outer // never extended by a fresh rollback window
 	err = p.waitRelayChange(ctx, c, pending, relayPlannedLimit, planned)
 	cleanup := from.Slot
@@ -266,7 +270,7 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 				// caller that dropped its old pair gets one restart on the old
 				// slot in a fresh planned window (ADR 0016 section 7).
 				current, switched = rolled, false
-				planned = relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit)}
+				planned = relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit), tried: []string{target}}
 			}
 		}
 		if current.Slot != "" {
@@ -296,17 +300,16 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 	return err
 }
 
-// rollbackRelay restarts on the original live slot with higher generations
-// until one is confirmed. switched reports that the call already left its
-// original working path through a committed but unconfirmed attempt. Only
+// rollbackRelay makes one higher-generation attempt on the original live
+// slot, then hands its tried slots to recovery. switched reports that the
+// call left its original working path through an unconfirmed attempt. Only
 // when it did not may a rollback that fails before switching simply keep the
 // caller's old pair. Otherwise, and when the call is still switched and
 // unconfirmed at the planned deadline, it enters a stall episode detected no
 // later than the first planned deadline, so the 10 s + 15 s bound holds.
 func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.Lease, current sessionstore.RelayAssignment, original string, planned relayAttemptOptions, firstOuter time.Time, switched bool) error {
-	var err error
 	var episode *relayEpisode
-	confirmed := false
+	tried := slices.Clone(planned.tried)
 	// arm fixes the hard end as soon as the call has left its original path:
 	// detection is the first planned deadline, so no wait below (settlement,
 	// rollback attempts) can move the end past it + 15 s.
@@ -322,65 +325,85 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 		return nil
 	}
 	if switched {
-		if err = arm(); err != nil {
+		if err := arm(); err != nil {
 			return err
 		}
+		// Reserve time for another relay only when recovery can use one.
+		select {
+		case <-episode.armed:
+		case <-episode.done:
+			return errRelayEpisodeClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		bound := episode.deadline
+		p.mu.Lock()
+		for slot, binding := range p.relaySet {
+			if slot != original && !binding.lost && !binding.draining && !slices.Contains(tried, slot) {
+				if attempt := time.Now().Add(relayRollbackRecoveryWindow); attempt.Before(bound) {
+					bound = attempt
+				}
+				break
+			}
+		}
+		p.mu.Unlock()
+		proposal := episode.proposal()
+		// Rollback remains planned even when the episode owns its bounds.
+		planned = relayAttemptOptions{kind: "planned", outer: bound, detected: proposal.Started, episode: proposal.Token}
 	}
 	settle := func() time.Duration {
 		if episode == nil {
 			return sessionstore.StoreOutageBudget(0)
 		}
-		return min(sessionstore.StoreOutageBudget(0), time.Until(episode.deadline))
+		// Settlement stops at this window; recovery owns any later fenced commit.
+		return min(sessionstore.StoreOutageBudget(0), time.Until(planned.outer))
 	}
-	for time.Now().Before(planned.outer) {
+	var episodeErr error
+	attemptRollback := func() (bool, error) {
+		if !time.Now().Before(planned.outer) {
+			return false, nil
+		}
 		p.mu.Lock()
 		lost := p.relaySet[original].lost
 		p.mu.Unlock()
 		if lost {
-			break
+			return false, nil
 		}
 		next := current
 		next.Pending = original
-		if err = p.setRelay(ctx, lease, current, next); err != nil {
-			err = errors.Join(err, p.cleanupRelayPending(ctx, lease, next))
-			break
+		if err := p.setRelay(ctx, lease, current, next); err != nil {
+			return false, errors.Join(err, p.cleanupRelayPending(ctx, lease, next))
 		}
-		err = p.waitRelayChange(ctx, c, next, time.Until(planned.outer), planned)
+		tried = append(tried, original)
+		planned.tried = tried
+		err := p.waitRelayChange(ctx, c, next, time.Until(planned.outer), planned)
 		if err == nil {
-			confirmed = true
-			break
+			return true, nil
 		}
 		if errors.Is(err, errRelayUnconfirmed) {
-			current, switched = sessionstore.RelayAssignment{Slot: original, Generation: next.Generation + 1}, true
-			if err = arm(); err != nil {
-				return err
-			}
-			continue
+			switched = true
+			episodeErr = arm()
+			return false, nil
 		}
 		if errors.Is(err, ErrConfirmationUnsupported) {
-			err = errors.Join(err, p.cleanupRelayPending(ctx, lease, next))
-			break
+			return false, errors.Join(err, p.cleanupRelayPending(ctx, lease, next))
 		}
 		_, abortErr := p.abortRelayPending(ctx, lease, next)
 		if errors.Is(abortErr, mediaworker.ErrRelaySwitched) {
 			// The worker switched: arm the episode before waiting for its
 			// fenced commit, and never wait past the episode deadline.
 			switched = true
-			if err = arm(); err != nil {
-				return err
+			if episodeErr = arm(); episodeErr != nil {
+				return false, nil
 			}
-			if err = p.waitRelayChange(ctx, c, next, settle(), planned); err == nil {
-				confirmed = true
-				break
-			}
-			if errors.Is(err, errRelayUnconfirmed) {
-				current = sessionstore.RelayAssignment{Slot: original, Generation: next.Generation + 1}
-				continue
-			}
-			break
+			err = p.waitRelayChange(ctx, c, next, settle(), planned)
+			return err == nil, err
 		}
-		err = errors.Join(err, abortErr)
-		break // the rollback failed before switching
+		return false, errors.Join(err, abortErr) // the rollback failed before switching
+	}
+	confirmed, err := attemptRollback()
+	if episodeErr != nil {
+		return episodeErr
 	}
 	if confirmed {
 		if episode != nil {
@@ -397,15 +420,11 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 		}
 		return err // the original working path was kept
 	}
-	seed := current.Slot
-	if _, a, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id); e == nil {
-		seed = a.Slot
-	}
 	detected := time.Now()
 	if firstOuter.Before(detected) {
 		detected = firstOuter
 	}
-	if e := p.startRelayRecoveryFrom(ctx, c, false, detected, []string{seed}); e != nil {
+	if e := p.startRelayRecoveryFrom(ctx, c, false, detected, tried); e != nil {
 		return errors.Join(err, e)
 	}
 	return errors.Join(errRelayUnconfirmed, err)
@@ -952,9 +971,11 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 				}
 				return false, nil
 			}
-			// The episode owns recovery. Busy/conflicting operations did not run a
-			// planned attempt and do not consume the drain's failure allowance.
-			if errors.Is(err, errRelayUnconfirmed) ||
+			// An unconfirmed attempt still owned by recovery does not count.
+			// A confirmed rollback settled it on this slot, so that planned
+			// failure must consume the allowance even with unconfirmed evidence.
+			// Busy/conflicting operations did not run a planned attempt.
+			if errors.Is(err, errRelayUnconfirmed) && !errors.Is(err, ErrRelayRolledBack) ||
 				errors.Is(err, ErrMoveInProgress) || errors.Is(err, sessionstore.ErrRelayConflict) ||
 				errors.Is(err, ErrNoTarget) || errors.Is(err, sessionstore.ErrLeaseLost) {
 				return false, nil
