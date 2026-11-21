@@ -108,7 +108,7 @@ func stageFilesystemFixture(t *testing.T) (*rehearsal, *stageFilesystemRunner, *
 	var diagnostics bytes.Buffer
 	d := &Deployment{Topology: topology, Runner: runner, Diagnostics: &diagnostics, containerIDs: fixtureContainerIDs()}
 	r := &rehearsal{c: RehearseConfig{Assets: assets}, topology: topology, deployment: d, runner: runner, diagnostics: &diagnostics}
-	for _, version := range []string{"0.3.2", "0.3.3"} {
+	for _, version := range []string{"0.3.4", "0.3.5"} {
 		raw := stageArchive(t, version)
 		r.pins = append(r.pins, inventory.Pin{Version: version, ArchiveSHA256: hash(raw)})
 		if err = os.WriteFile(filepath.Join(assets, "relais_"+version+"_linux_amd64.tar.gz"), raw, 0600); err != nil {
@@ -156,7 +156,7 @@ func TestStageReadsArchiveInExecutionFilesystem(t *testing.T) {
 	}
 }
 func TestStageRejectsArchiveDigestMismatch(t *testing.T) {
-	for _, version := range []string{"0.3.2", "0.3.3"} {
+	for _, version := range []string{"0.3.4", "0.3.5"} {
 		t.Run(version, func(t *testing.T) {
 			r, runner, diagnostics := stageFilesystemFixture(t)
 			archive := filepath.Join(r.c.Assets, "relais_"+version+"_linux_amd64.tar.gz")
@@ -182,7 +182,7 @@ func TestStageFailureNamesCopyAndReadPaths(t *testing.T) {
 	if err := r.stage(context.Background()); err == nil {
 		t.Fatal("missing archive installed")
 	}
-	for _, want := range []string{"host_source=", "copy_destination=", "download_source=file://", "/opt/relais/relais-stage-0.3.2.tar.gz", r.c.Assets} {
+	for _, want := range []string{"host_source=", "copy_destination=", "download_source=file://", "/opt/relais/relais-stage-0.3.4.tar.gz", r.c.Assets} {
 		if !strings.Contains(diagnostics.String(), want) {
 			t.Fatalf("missing staging path %q: %s", want, diagnostics.String())
 		}

@@ -858,9 +858,9 @@ or calibration success. `TestRehearseRefusesIncompleteReadiness` pins the refusa
 On a disposable Linux runner with systemd, Docker, ffmpeg, chrony and at least
 four allowed logical CPUs, build with `make operator-rehearsal-build`, then run
 `make operator-rehearsal OPERATOR_REHEARSAL_RUNNER='sudo -n'`. The command uses
-v0.3.2 and v0.3.3 linux_amd64 archives with fixed SHA-256 pins. It reads the
+v0.3.4 and v0.3.5 linux_amd64 archives with fixed SHA-256 pins. It reads the
 current checkout's template, stages both releases before media, builds both
-release-specific judges offline, and uses the v0.3.2 caller binary
+release-specific judges offline, and uses the v0.3.4 caller binary
 from its verified archive for every pinned gate. Cache the release commits' Go
 modules before running.
 
