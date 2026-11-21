@@ -72,7 +72,7 @@ func TestNewerManifestRefusesBeforeUnknownFields(t *testing.T) {
 	}
 }
 func TestManifestScriptCountIsNotAReaderLimit(t *testing.T) {
-	m := testManifest(t, "0.3.2")
+	m := testManifest(t, "0.3.4")
 	m.Scripts["new-script"] = Script{SHA: strings.Repeat("f", 40)}
 	if err := m.Validate(); err != nil {
 		t.Fatalf("additional script broke structural validation: %v", err)
@@ -81,7 +81,7 @@ func TestManifestScriptCountIsNotAReaderLimit(t *testing.T) {
 func TestKeyAndUDPFixtureEvolutionRequiresVersionBump(t *testing.T) {
 	for _, domain := range []string{"keys", "udp"} {
 		t.Run(domain, func(t *testing.T) {
-			old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
+			old, next := testManifest(t, "0.3.4"), testManifest(t, "0.3.5")
 			if domain == "keys" {
 				next.KeyGoldens["framecache"] = strings.Repeat("f", 64)
 			} else {
@@ -102,7 +102,7 @@ func TestKeyAndUDPFixtureEvolutionRequiresVersionBump(t *testing.T) {
 	}
 }
 func TestRollbackRetainsRedisKeyLayout(t *testing.T) {
-	old, next := testManifest(t, "0.3.2"), testManifest(t, "0.3.3")
+	old, next := testManifest(t, "0.3.4"), testManifest(t, "0.3.5")
 	next.KeyContract++
 	for role, profiles := range next.Roles {
 		if role == "signal" {

@@ -261,7 +261,7 @@ masterauth {self.passwords['admin']}
         self.seed = ','.join('127.0.0.1:' + str(p) for p in ports)
 
     def archive(self):
-        directory = self.work / 'relais_0.3.2_linux_arm64'
+        directory = self.work / 'relais_0.3.4_linux_arm64'
         directory.mkdir()
         for name in ('relais-relay', 'relais-worker', 'relais-control', 'relais-signal', 'relais-load', 'relais-demo', 'relais-compat'):
             shutil.copy2(Path(self.args.bin) / name, directory / name)
@@ -272,9 +272,9 @@ masterauth {self.passwords['admin']}
             shutil.copy2(repo / 'deploy/local' / name, directory / name)
         identity = subprocess.check_output([str(directory / 'relais-worker'), '-version'], text=True)
         commit = re.search(r'commit=([0-9a-f]{40})', identity)
-        assert commit, 'boot fixture binaries need -ldflags version=0.3.2 and a full commit SHA'
+        assert commit, 'boot fixture binaries need -ldflags version=0.3.4 and a full commit SHA'
         subprocess.run([str(directory / 'relais-compat'), 'generate', '--root', str(repo),
-                        '--version', '0.3.2', '--commit', commit[1], '--os', 'linux', '--arch', 'arm64',
+                        '--version', '0.3.4', '--commit', commit[1], '--os', 'linux', '--arch', 'arm64',
                         '--output', str(directory / 'compatibility.json')], check=True)
         artifact_dir = self.work / 'artifacts'
         artifact_dir.mkdir(mode=0o700)
@@ -293,7 +293,7 @@ masterauth {self.passwords['admin']}
     def boot(self):
         image = self.work / 'image'
         image.mkdir()
-        config = {'version': '0.3.2', 'architecture': 'arm64', 'sha256': self.archive(), 'ssm': 'false',
+        config = {'version': '0.3.4', 'architecture': 'arm64', 'sha256': self.archive(), 'ssm': 'false',
                   'region': 'offline', 'components': ['relay', 'worker', 'control', 'signal'],
                   'secrets': {r: r for r in ('relay', 'worker', 'control', 'token', 'snapshot')}}
         source = self.work / 'fake-secrets.json'
@@ -340,7 +340,7 @@ masterauth {self.passwords['admin']}
         # sysctl, service stop/start, secret preparation or readiness command.
         original_archive = self.work / 'original.tar.gz'
         shutil.copy2(self.archive_path, original_archive)
-        archive_root = self.work / 'relais_0.3.2_linux_arm64'
+        archive_root = self.work / 'relais_0.3.4_linux_arm64'
         manifest_file = archive_root / 'compatibility.json'
         original_manifest = manifest_file.read_bytes()
         for mutation in ('identity', 'missing-manifest'):
@@ -396,7 +396,7 @@ masterauth {self.passwords['admin']}
             fixture = json.loads(original)
             host = template[name]['Metadata']
             config = json.loads(host['RelaisFiles']['/etc/relais/node.json']['content'])
-            config.update(version='0.3.2', architecture='arm64', sha256=self.archive_digest, ssm='false')
+            config.update(version='0.3.4', architecture='arm64', sha256=self.archive_digest, ssm='false')
             config['secrets'] = {k:k for k in config['secrets']}
             host['RelaisFiles']['/etc/relais/node.json']['content'] = json.dumps(config)
             fixture[name] = host; source.write_text(json.dumps(fixture))
