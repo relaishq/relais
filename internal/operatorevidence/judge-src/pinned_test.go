@@ -90,7 +90,7 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	qualifiedPool(&boundaryMovePool, nil)
 	qualifiedPool(&undecidedMovePool, nil)
 	cases = append(cases, boundaryMovePool, undecidedMovePool)
-	commits := []string{"ae66240481edfd96b099ddb9aca787a59a5dbcac", "9332472e781483cf37c2b51b111dd09ae9b6a92d"}
+	commits := []string{"9243cf5736d81d139da5e4bd4bc828df3fb79c50", "24daff7755299b864bdf8082a9e182749394f5d4"}
 	for _, commit := range commits {
 		if err := pinnedCommit(ctx, root, commit); err != nil {
 			t.Fatal(err)
