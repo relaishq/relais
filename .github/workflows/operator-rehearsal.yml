@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
-          for pin in a0d9744ff1223a8d7978447c907041973e915b08 85e10436eb6adbbf577b6538b0bbb799aab823b2; do
+          for pin in ae66240481edfd96b099ddb9aca787a59a5dbcac 9332472e781483cf37c2b51b111dd09ae9b6a92d; do
             source_dir=$(mktemp -d "$RUNNER_TEMP/relais-judge.XXXXXX")
             git archive "$pin" | tar -x -C "$source_dir"
             (cd "$source_dir" && GOTOOLCHAIN=local go mod download)
