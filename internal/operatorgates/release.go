@@ -178,7 +178,14 @@ func (g *procedure) relay(ctx context.Context, strict bool, original int) error 
 					rejoined = true
 					break
 				}
-			} else if b.Stats.Workers == 2 {
+			} else if b.Stats.SelfFences > 0 {
+				// Self-fencing is terminal even before packet measurements exist.
+				return fault("relay-self-fence")
+			} else if measurable(a) && measurable(b) &&
+				b.Instance != a.Instance && b.Continuity.Epoch > a.Continuity.Epoch &&
+				b.Public == a.Public && b.Private == a.Private &&
+				b.Stats.Workers == 2 && b.Stats.RoutesRestored >= uint64(original) && b.Stats.RoutesRestored > 0 &&
+				a.Stats.WorkerPackets > 0 && b.Stats.WorkerPackets > 0 {
 				rejoined = true
 				break
 			}
