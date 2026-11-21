@@ -18,10 +18,10 @@ import (
 // This profile is deliberately a fixed published pair. A new release needs a
 // reviewed profile and a fresh calibration set; it cannot reuse this evidence.
 const (
-	ReleaseACommit = "ae66240481edfd96b099ddb9aca787a59a5dbcac"
-	ReleaseBCommit = "9332472e781483cf37c2b51b111dd09ae9b6a92d"
-	ReleaseASHA256 = "0bb1f48afdb32d8aa5552d9da3706be8099a1ecf16e06b8a2c1913fed60bb866"
-	ReleaseBSHA256 = "7222731226752ae1761f1b6134cbebf5035a144de9f1e818866511b8105b7a01"
+	ReleaseACommit = "9243cf5736d81d139da5e4bd4bc828df3fb79c50"
+	ReleaseBCommit = "24daff7755299b864bdf8082a9e182749394f5d4"
+	ReleaseASHA256 = "40551e4f1f795878e73d2aaf87b387f544786fe4c7ca9321679e0c5e80e5e3d5"
+	ReleaseBSHA256 = "6adb967415a18255e71bd64b5a184adc0c608ed09a5b507774a98f0f2ef8ad85"
 )
 
 func hash(data []byte) string { s := sha256.Sum256(data); return hex.EncodeToString(s[:]) }
@@ -55,7 +55,7 @@ func (r *archiveReader) Download(ctx context.Context, tag string, asset artifact
 // handling belong to artifacts.PublicReader. No child process receives the token.
 func PrepareReleases(ctx context.Context, directory, token string) error {
 	r := &archiveReader{Reader: artifacts.NewPublicReader(nil, token), archives: map[string][]byte{}}
-	plan, err := artifacts.PlanArtifacts(ctx, r, artifacts.Request{From: artifacts.PinRequest{Version: "0.3.2", ArchiveSHA256: ReleaseASHA256}, To: artifacts.PinRequest{Version: "0.3.3", ArchiveSHA256: ReleaseBSHA256}, Arch: "x86_64"})
+	plan, err := artifacts.PlanArtifacts(ctx, r, artifacts.Request{From: artifacts.PinRequest{Version: "0.3.4", ArchiveSHA256: ReleaseASHA256}, To: artifacts.PinRequest{Version: "0.3.5", ArchiveSHA256: ReleaseBSHA256}, Arch: "x86_64"})
 	if err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ func PrepareReleases(ctx context.Context, directory, token string) error {
 	return os.WriteFile(filepath.Join(directory, "plan.json"), data, 0600)
 }
 func validatePair(p artifacts.Plan) error {
-	if p.Version != 1 || p.Arch != "x86_64" || p.From.Version != "0.3.2" || p.To.Version != "0.3.3" || p.From.Commit != ReleaseACommit || p.To.Commit != ReleaseBCommit || p.From.ArchiveSHA256 != ReleaseASHA256 || p.To.ArchiveSHA256 != ReleaseBSHA256 || p.From.Archive != "relais_0.3.2_linux_amd64.tar.gz" || p.To.Archive != "relais_0.3.3_linux_amd64.tar.gz" {
+	if p.Version != 1 || p.Arch != "x86_64" || p.From.Version != "0.3.4" || p.To.Version != "0.3.5" || p.From.Commit != ReleaseACommit || p.To.Commit != ReleaseBCommit || p.From.ArchiveSHA256 != ReleaseASHA256 || p.To.ArchiveSHA256 != ReleaseBSHA256 || p.From.Archive != "relais_0.3.4_linux_amd64.tar.gz" || p.To.Archive != "relais_0.3.5_linux_amd64.tar.gz" {
 		return &artifacts.Refusal{Code: "release-profile-differs", Detail: "planned release pair differs from the pinned rehearsal pair"}
 	}
 	return nil
@@ -128,7 +128,7 @@ func extractLoad(archive, output string) error {
 		if e != nil {
 			return e
 		}
-		if h.Name != "relais_0.3.2_linux_amd64/relais-load" {
+		if h.Name != "relais_0.3.4_linux_amd64/relais-load" {
 			continue
 		}
 		out, e := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)

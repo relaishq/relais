@@ -73,7 +73,7 @@ func TestCalibrationMatchesGeneratorPolicyAtBothPins(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	for _, commit := range []string{"ae66240481edfd96b099ddb9aca787a59a5dbcac", "9332472e781483cf37c2b51b111dd09ae9b6a92d"} {
+	for _, commit := range []string{"9243cf5736d81d139da5e4bd4bc828df3fb79c50", "24daff7755299b864bdf8082a9e182749394f5d4"} {
 		judge, err := operatorevidence.BuildPinned(ctx, root, commit, compiler, filepath.Join(t.TempDir(), "judge"))
 		if err != nil {
 			t.Fatal(err)
