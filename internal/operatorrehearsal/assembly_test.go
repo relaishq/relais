@@ -37,7 +37,7 @@ func TestStageUsesVerifiedFilesAndTemplateDownloader(t *testing.T) {
 	for _, slot := range Slots {
 		d.containerIDs[slot] = strings.Repeat("a", 64)
 	}
-	r := &rehearsal{c: RehearseConfig{Assets: "/verified"}, deployment: d, topology: topology, runner: run, diagnostics: &bytes.Buffer{}, pins: []inventory.Pin{{Version: "0.3.0", ArchiveSHA256: ReleaseASHA256}, {Version: "0.3.1", ArchiveSHA256: ReleaseBSHA256}}}
+	r := &rehearsal{c: RehearseConfig{Assets: "/verified"}, deployment: d, topology: topology, runner: run, diagnostics: &bytes.Buffer{}, pins: []inventory.Pin{{Version: "0.3.2", ArchiveSHA256: ReleaseASHA256}, {Version: "0.3.3", ArchiveSHA256: ReleaseBSHA256}}}
 	if e := r.stage(context.Background()); e != nil {
 		t.Fatal(e)
 	}
@@ -180,7 +180,7 @@ func TestCallerCleanupConfirmsCollectedUnits(t *testing.T) {
 	}
 }
 func TestAMD64AssemblyUsesDownloadArchitectureAndIsolatedCaller(t *testing.T) {
-	stage := &host.Stage{Version: "0.3.0", Arch: "amd64", ArchiveSHA256: ReleaseASHA256, ManifestSHA256: strings.Repeat("b", 64), Pool: "e30=", Operation: "upgrade"}
+	stage := &host.Stage{Version: "0.3.2", Arch: "amd64", ArchiveSHA256: ReleaseASHA256, ManifestSHA256: strings.Repeat("b", 64), Pool: "e30=", Operation: "upgrade"}
 	script, e := host.Process("freeze", struct{}{}, stage)
 	if e != nil || !strings.Contains(script, "'x86_64'") {
 		t.Fatal(script, e)
