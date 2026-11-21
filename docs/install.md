@@ -191,7 +191,7 @@ is saved as `.relais-local/pids.stopped`. If a startup fails, see
 
 ## Checking the build
 
-On this maintenance line, only tags `v0.3.2` and `v0.3.3` trigger draft releases.
+On this maintenance line, only tags `v0.3.4` and `v0.3.5` trigger draft releases.
 The owner approved an exception to the main-only policy: the tagged commit must
 be on `release/0.3` and its latest `ci.yml` push run on `release/0.3` must succeed.
 CI runs for pushes and PRs to that branch. The release gate waits up to 90
