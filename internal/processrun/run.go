@@ -74,7 +74,9 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sessionstore.NewRedis(ctx, cfg, key, opts)
+	return openStartupStore(ctx, "session", c.Address, func(ctx context.Context) (*sessionstore.Redis, error) {
+		return sessionstore.NewRedis(ctx, cfg, key, opts)
+	})
 }
 
 // OpenFrames shares the snapshot master key, using a separate HKDF domain.
@@ -90,7 +92,9 @@ func (c StoreConfig) OpenFrames(ctx context.Context) (*framecache.Redis, error) 
 	if err != nil {
 		return nil, err
 	}
-	return framecache.NewRedis(ctx, cfg, key, framecache.Limits{})
+	return openStartupStore(ctx, "frames", c.Address, func(ctx context.Context) (*framecache.Redis, error) {
+		return framecache.NewRedis(ctx, cfg, key, framecache.Limits{})
+	})
 }
 
 // SessionStoreKeys shares active/decrypt key parsing with process observers.
@@ -181,7 +185,9 @@ func (c StoreConfig) OpenOwners(ctx context.Context) (*sessionstore.RedisOwners,
 	if err != nil {
 		return nil, err
 	}
-	return sessionstore.NewRedisOwners(ctx, cfg)
+	return openStartupStore(ctx, "owners", c.Address, func(ctx context.Context) (*sessionstore.RedisOwners, error) {
+		return sessionstore.NewRedisOwners(ctx, cfg)
+	})
 }
 
 // redisConfig is shared by every production Redis connection, including the
