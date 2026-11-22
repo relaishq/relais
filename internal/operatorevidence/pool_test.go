@@ -92,13 +92,16 @@ func TestPoolRegistrationAndBoundary(t *testing.T) {
 	if separateErr != nil || separatePool.Missing || len(separatePool.Phases) != 1 || separatePool.SourceCommit != separate.Plan.PublicSHA || separateSHA != separate.Plan.PublicSHA || separate.DeployedSHA == separateSHA {
 		t.Fatal("MUTATION: pool-independent-source", separatePool, separateErr)
 	}
-	for _, missing := range []string{"empty-deployment", "first-participant", "last-participant"} {
+	for _, missing := range []string{"empty-deployment", "empty-deployment-empty-inventory", "first-participant", "last-participant"} {
 		t.Run(missing, func(t *testing.T) {
 			changed := separate
 			changed.Inventory.Participants = append([]releasecompat.Participant{}, separate.Inventory.Participants...)
 			switch missing {
 			case "empty-deployment":
 				changed.DeployedSHA = ""
+			case "empty-deployment-empty-inventory":
+				changed.DeployedSHA = ""
+				changed.Inventory.Participants = []releasecompat.Participant{}
 			case "first-participant":
 				changed.Inventory.Participants[0].Commit = changed.Plan.PublicSHA
 			case "last-participant":

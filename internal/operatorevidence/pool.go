@@ -225,7 +225,11 @@ func ReadPool(run string, phases []Phase, missing bool) (Pool, string, error) {
 			pool.Missing = true
 			continue
 		}
-		if p.Clocks.At.IsZero() || !p.Inventory.Complete || p.DeployedSHA == "" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA }) {
+		serverMismatch := p.DeployedSHA == "" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA })
+		if serverMismatch {
+			pool.Missing = true
+		}
+		if p.Clocks.At.IsZero() || !p.Inventory.Complete {
 			pool.Missing = true
 		}
 		var raw RawMedia

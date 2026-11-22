@@ -7767,6 +7767,16 @@
     "Package": "./internal/operatorgates"
   },
   {
+    "ID": "pool-server-source-unchecked",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "p.DeployedSHA == \"\" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA })",
+    "New": "false && (p.DeployedSHA == \"\" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA }))",
+    "Test": "TestPoolRegistrationAndBoundary",
+    "Marker": "MUTATION: pool-server-source",
+    "Package": "./internal/operatorevidence"
+  },
+  {
     "ID": "pool-caller-forced-to-deployment",
     "File": "internal/operatorevidence/pool.go",
     "Function": "ReadPool",

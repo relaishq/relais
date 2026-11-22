@@ -733,6 +733,7 @@
     "resource-caller-judge-source-unchecked",
     "resource-release-a-unbound",
     "resource-release-b-unbound",
+    "pool-server-source-unchecked",
     "pool-caller-forced-to-deployment",
     "pool-registration-source-unchecked",
     "pool-mixed-caller-source-unchecked",
@@ -6021,6 +6022,12 @@
       "evidence": "killed",
       "test": "TestResourceConfigSourceBinding/release-b",
       "package": "./internal/operatorgates"
+    },
+    {
+      "id": "pool-server-source-unchecked",
+      "evidence": "killed",
+      "test": "TestPoolRegistrationAndBoundary",
+      "package": "./internal/operatorevidence"
     },
     {
       "id": "pool-caller-forced-to-deployment",
