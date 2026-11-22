@@ -8118,5 +8118,101 @@
     "Test": "TestProcessEvidenceFailedStatusReads",
     "Marker": "MUTATION: failed-status-reads-negative",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-stopped-completion-misclassified",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "finished.Stopped || finished.Done && *finished.ExitCode == 0",
+    "New": "!finished.Stopped && finished.Done && *finished.ExitCode == 0",
+    "Test": "TestCallerStoppedReasonsAndReceiptOrder/generator-saturation-hard-ceiling/finished-first",
+    "Marker": "caller outcome or receipts lost",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-reason-unpublished",
+    "File": "internal/operatorcaller/uncertainty.go",
+    "Function": "uncertainty",
+    "Old": "u.Code = string(reason[0].Public())",
+    "New": "u.Code = \"unavailable\"",
+    "Test": "TestCallerStoppedReasonsAndReceiptOrder/generator-saturation-hard-ceiling/finished-first",
+    "Marker": "fixed caller stop reason missing from report context",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-unknown-reason-unsafe",
+    "File": "pkg/operator/uncertainty.go",
+    "Function": "PublicCallerStopReason",
+    "Old": "return \"unavailable\"",
+    "New": "return reason",
+    "Test": "TestCallerStoppedPublicReason",
+    "Marker": "unsafe or missing stop reason",
+    "Package": "./pkg/operator"
+  },
+  {
+    "ID": "caller-stopped-trial-polls-deadline",
+    "File": "internal/operatorgates/trials.go",
+    "Function": "trials",
+    "Receiver": "procedure",
+    "Old": "if purpose == \"trial-ready\" {",
+    "New": "if false && purpose == \"trial-ready\" {",
+    "Test": "TestTrialReadyObservesMailboxStop",
+    "Marker": "mailbox caller stop did not terminate polling",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-stopped-receipt-dropped",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "startCollection",
+    "Receiver": "CallerRuntime",
+    "Old": "CallerCompletion: r.Broker.Completion",
+    "New": "CallerCompletion: nil",
+    "Test": "TestCallerRuntimeRetainsAbortedReceipt/judge-returned",
+    "Marker": "aborted receipt did not reach judge artifacts",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-stopped-late-receipt-not-retained",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "if errors.As(completionErr, &stopped) && finished.RunID == \"\" {",
+    "New": "if false && errors.As(completionErr, &stopped) && finished.RunID == \"\" {",
+    "Test": "TestCallerStoppedReasonsAndReceiptOrder/generator-saturation-hard-ceiling/stop-first",
+    "Marker": "caller outcome or receipts lost",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-collection-qualifies",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "b.collected = completionErr == nil",
+    "New": "b.collected = true",
+    "Test": "TestCallerAbortedCompletionRetainsEvidence/interrupted",
+    "Marker": "aborted completion misclassified",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-rule-missing",
+    "File": "internal/operatorcaller/uncertainty.go",
+    "Function": "uncertaintyRule",
+    "Old": "if errors.As(err, &stopped) {",
+    "New": "if false && errors.As(err, &stopped) {",
+    "Test": "TestCallerStopDoesNotConfirmFeed",
+    "Marker": "caller stop confirmed an unacknowledged feed",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-reason-read-loses-outcome",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "if !errors.As(reasonErr, &observed) {",
+    "New": "if !errors.As(reasonErr, &observed) && reasonErr == nil {",
+    "Test": "TestValidAbortSurvivesReasonReadFailure",
+    "Marker": "valid abort lost its terminal outcome",
+    "Package": "./internal/operatorcaller"
   }
 ]

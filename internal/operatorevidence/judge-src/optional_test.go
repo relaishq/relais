@@ -103,7 +103,18 @@ func optionalDocuments(t *testing.T, input previewPoolInput) []optionalDocument 
 	alias.(map[string]any)["clockCoverage"] = nil
 	alias.(map[string]any)["clockReceiptSha256"] = ""
 	alias.(map[string]any)["preCoverageEvidence"] = true
+	for _, item := range alias.(map[string]any)["phases"].([]any) {
+		phase := item.(map[string]any)
+		phase["callerCompletion"] = map[string]any{"runId": phase["runId"], "job": "caller-1", "done": true, "stopped": false, "exitCode": 0, "sessions": phase["sessions"], "stopReason": ""}
+		phase["callerStop"] = nil
+	}
 	docs = append(docs, optionalDocument{alias, reflect.TypeFor[operatorevidence.Pool](), -1, -1})
+	first := alias.(map[string]any)["phases"].([]any)[0].(map[string]any)
+	raw := map[string]any{}
+	for _, key := range []string{"callerJsonl", "events", "receipts", "callerCompletion", "callerStop"} {
+		raw[key] = first[key]
+	}
+	docs = append(docs, optionalDocument{raw, reflect.TypeFor[operatorevidence.RawMedia](), 0, -1})
 	for i, phase := range input.Phases {
 		for j, line := range strings.Split(strings.TrimSpace(phase.CallerJSONL), "\n") {
 			var object any
@@ -191,6 +202,16 @@ func optionalInput(input previewPoolInput, doc optionalDocument, raw []byte) (pr
 	}
 	changed := input
 	changed.Phases = append([]previewMediaInput{}, input.Phases...)
+	if doc.line < 0 {
+		var phase previewMediaInput
+		if err := json.Unmarshal(raw, &phase); err != nil {
+			return changed, err
+		}
+		changed.Phases[doc.phase].CallerJSONL = phase.CallerJSONL
+		changed.Phases[doc.phase].Events = phase.Events
+		changed.Phases[doc.phase].Receipts = phase.Receipts
+		return changed, nil
+	}
 	lines := strings.Split(strings.TrimSpace(changed.Phases[doc.phase].CallerJSONL), "\n")
 	lines[doc.line] = string(raw)
 	changed.Phases[doc.phase].CallerJSONL = strings.Join(lines, "\n") + "\n"

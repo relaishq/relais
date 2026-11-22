@@ -29,6 +29,7 @@ func unboundClock(object map[string]any) bool {
 }
 
 var evidenceConditionalOptional = map[string]optionalEvidenceRule{
+	"operatorcaller.CompletionReceipt.StopReason":      {"Normal completion has no caller stop reason.", func(object map[string]any) bool { return object["stopped"] != true }},
 	"observe.CoverageQualification.ClockReceiptSHA256": {"Unbound qualification carries no receipt marker.", unboundClock},
 	"observe.CoverageQualification.Binding":            {"Unbound qualification carries no receipt proof; bound validation requires it.", unboundClock},
 	"main.previewPoolInput.ClockReceiptSHA256":         {"Unbound scenarios carry no receipt commitment.", unboundClock},
@@ -60,6 +61,10 @@ func EvidenceOptionalLedger() map[string]string {
 }
 
 var evidenceOptional = map[string]string{
+	"operatorevidence.RawMedia.CallerCompletion":       "Terminal caller receipts are retained diagnostics; absence cannot qualify an aborted collection.",
+	"operatorevidence.RawMedia.CallerStop":             "Only a caller that stopped itself has a stop receipt; absence cannot qualify collection.",
+	"operatorevidence.MediaInput.CallerCompletion":     "Terminal caller receipts are retained diagnostics; absence cannot qualify an aborted collection.",
+	"operatorevidence.MediaInput.CallerStop":           "Only a caller that stopped itself has a stop receipt; absence cannot qualify collection.",
 	"callharness.ClassificationCandidate.StartRange":   "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
 	"callharness.ClassificationCandidate.EndRange":     "Earlier version 1 timing diagnostics omit candidate ranges; absence never changes qualification.",
 	"callharness.TimingEvidence.PlannedSpan":           "Only planned moves apply the shared control-clock span allowance.",

@@ -51,6 +51,7 @@ type Receipt struct {
 type GateBroker interface {
 	RunID() string
 	Registration() *Registration
+	CheckStopped(context.Context) error
 	Arm(context.Context, string, []Identity) error
 	Feed(context.Context, string, []Receipt) error
 	Events() []Receipt

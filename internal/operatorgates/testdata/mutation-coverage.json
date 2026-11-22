@@ -766,7 +766,16 @@
     "failover-status-read-uncounted-deadline",
     "failover-status-read-result-dropped",
     "failover-status-read-unpublished",
-    "failed-status-reads-negative-accepted"
+    "failed-status-reads-negative-accepted",
+    "caller-stopped-completion-misclassified",
+    "caller-stopped-reason-unpublished",
+    "caller-stopped-unknown-reason-unsafe",
+    "caller-stopped-trial-polls-deadline",
+    "caller-stopped-receipt-dropped",
+    "caller-stopped-late-receipt-not-retained",
+    "caller-stopped-collection-qualifies",
+    "caller-stopped-rule-missing",
+    "caller-stopped-reason-read-loses-outcome"
   ],
   "killed": [
     {
@@ -6224,6 +6233,60 @@
       "id": "failed-status-reads-negative-accepted",
       "test": "TestProcessEvidenceFailedStatusReads",
       "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-completion-misclassified",
+      "test": "TestCallerStoppedReasonsAndReceiptOrder/generator-saturation-hard-ceiling/finished-first",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-reason-unpublished",
+      "test": "TestCallerStoppedReasonsAndReceiptOrder/generator-saturation-hard-ceiling/finished-first",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-unknown-reason-unsafe",
+      "test": "TestCallerStoppedPublicReason",
+      "package": "./pkg/operator",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-trial-polls-deadline",
+      "test": "TestTrialReadyObservesMailboxStop",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-receipt-dropped",
+      "test": "TestCallerRuntimeRetainsAbortedReceipt/judge-returned",
+      "package": "./internal/operatorgates",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-late-receipt-not-retained",
+      "test": "TestCallerStoppedReasonsAndReceiptOrder/generator-saturation-hard-ceiling/stop-first",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-collection-qualifies",
+      "test": "TestCallerAbortedCompletionRetainsEvidence/interrupted",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-rule-missing",
+      "test": "TestCallerStopDoesNotConfirmFeed",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-reason-read-loses-outcome",
+      "test": "TestValidAbortSurvivesReasonReadFailure",
+      "package": "./internal/operatorcaller",
       "evidence": "killed"
     }
   ],

@@ -88,6 +88,11 @@ func (g *procedure) trials(ctx context.Context, target TrialTarget, prefix strin
 	wait := func(purpose string, test func(StepResult) bool) (StepResult, error) {
 		w := g.startWait(purpose)
 		for g.p.Clock.Elapsed() < g.end {
+			if purpose == "trial-ready" {
+				if err := g.p.Broker.CheckStopped(ctx); err != nil {
+					return StepResult{}, w.end(err)
+				}
+			}
 			w.poll()
 			r, err := status()
 			if err != nil {

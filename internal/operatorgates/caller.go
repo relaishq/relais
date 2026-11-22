@@ -160,6 +160,9 @@ func (r *CallerRuntime) callerError(err error) error {
 	}
 	return fault("precondition-failed:caller")
 }
+func (r *CallerRuntime) CheckStopped(ctx context.Context) error {
+	return r.callerError(r.Broker.CheckStopped(ctx))
+}
 func (r *CallerRuntime) Arm(ctx context.Context, operation string, ids []Identity) error {
 	if ctx.Err() != nil || r.Clock.Elapsed() >= r.End {
 		return fault("gate-deadline")
@@ -224,13 +227,16 @@ func (r *CallerRuntime) startCollection(ctx context.Context, deadline time.Time)
 			}
 			events, eventErr := receiptEvents(r.Broker.Events)
 			var marshalErr error
-			phase.Raw, marshalErr = json.Marshal(operatorevidence.RawMedia{CallerJSONL: caller, Events: events, Receipts: append([]operatorcaller.Receipt{}, r.Broker.Events...)})
+			phase.Raw, marshalErr = json.Marshal(operatorevidence.RawMedia{CallerJSONL: caller, Events: events, Receipts: append([]operatorcaller.Receipt{}, r.Broker.Events...), CallerCompletion: r.Broker.Completion, CallerStop: r.Broker.Stop})
 			err = errors.Join(err, eventErr, marshalErr)
 			r.Pool.Add(phase, err != nil || r.incomplete)
 			retained, cancel := operatorcaller.EvidenceRetentionContext(ctx)
 			defer cancel()
 			r.summary, r.err = r.Pool.Media(retained)
-			if err != nil && r.err == nil {
+			var stopped *operatorcaller.StoppedError
+			if errors.As(err, &stopped) {
+				r.err = errors.Join(r.callerError(err), r.err)
+			} else if err != nil && r.err == nil {
 				r.err = fault("precondition-failed:caller-evidence")
 			}
 		}()

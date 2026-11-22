@@ -64,6 +64,8 @@ type Broker struct {
 	FirstFaultAt                    *time.Time
 	ReadyObservedAt, MediaStartedAt time.Time
 	Events                          []Receipt
+	Completion                      *CompletionReceipt
+	Stop                            *StopReceipt
 }
 
 func NewBroker(m Manifest, box *Mailbox, c Clock, f Fence) (*Broker, error) {
@@ -101,11 +103,16 @@ func (b *Broker) wait(ctx context.Context, key string, end time.Time, v any, val
 	id := strconv.FormatUint(b.requestID, 10)
 	defer func() {
 		if err != nil {
+			var stopped *StoppedError
+			var reason StopReason
+			if errors.As(err, &stopped) {
+				reason = stopped.Reason
+			}
 			action := path.Base(key)
 			if strings.Contains(key, "/acks/") {
 				action = "ack"
 			}
-			uncertainty(b.Fence, "mailbox.read", id, b.Manifest.CallerID, action, end, b.Clock.Now(), uncertaintyRule(err))
+			uncertainty(b.Fence, "mailbox.read", id, b.Manifest.CallerID, action, end, b.Clock.Now(), uncertaintyRule(err), reason)
 		}
 	}()
 	for b.Clock.Now().Before(end) {
@@ -125,12 +132,8 @@ func (b *Broker) wait(ctx context.Context, key string, end time.Time, v any, val
 			}
 			return nil
 		}
-		stop, err := b.Mailbox.Read(ctx, b.Manifest.Job()+"/stop.json")
-		if err != nil {
+		if err := b.CheckStopped(ctx); err != nil {
 			return err
-		}
-		if stop.Found {
-			return errors.New("caller-stopped")
 		}
 		if err := b.Clock.Sleep(ctx, min(500*time.Millisecond, end.Sub(b.Clock.Now()))); err != nil {
 			return err
@@ -332,31 +335,64 @@ func (b *Broker) Collect(ctx context.Context, end time.Time) (data string, colle
 	defer func() {
 		if collectionError != nil {
 			rule := "incomplete-evidence"
-			if errors.Is(collectionError, context.DeadlineExceeded) || strings.Contains(collectionError.Error(), "caller-deadline") {
+			var stopped *StoppedError
+			var reason StopReason
+			if errors.As(collectionError, &stopped) {
+				rule = "caller-stopped"
+				reason = stopped.Reason
+			} else if errors.Is(collectionError, context.DeadlineExceeded) || strings.Contains(collectionError.Error(), "caller-deadline") {
 				rule = "timeout"
 			}
-			uncertainty(b.Fence, "caller.collect", id, b.Manifest.CallerID, "collect", minTime(end, time.UnixMilli(b.Manifest.Deadline)), b.Clock.Now(), rule)
+			uncertainty(b.Fence, "caller.collect", id, b.Manifest.CallerID, "collect", minTime(end, time.UnixMilli(b.Manifest.Deadline)), b.Clock.Now(), rule, reason)
 		}
 	}()
-	var finished struct {
-		RunID    string   `json:"runId"`
-		Job      string   `json:"job"`
-		Done     bool     `json:"done"`
-		Stopped  bool     `json:"stopped"`
-		ExitCode *int     `json:"exitCode"`
-		Sessions []string `json:"sessions"`
+	var finished CompletionReceipt
+	validCompletion := func() bool {
+		return finished.RunID == b.Manifest.RunID && finished.Job == "caller-1" && finished.ExitCode != nil && (finished.Stopped || finished.Done && *finished.ExitCode == 0)
 	}
-	completionErr := b.wait(ctx, b.Manifest.Job()+"/finished.json", end, &finished, func() bool {
-		return finished.RunID == b.Manifest.RunID && finished.Job == "caller-1" && finished.Done && !finished.Stopped && finished.ExitCode != nil && *finished.ExitCode == 0
-	})
+	completionErr := b.wait(ctx, b.Manifest.Job()+"/finished.json", end, &finished, validCompletion)
+	if completionErr == nil && finished.Stopped {
+		reasonErr := b.CheckStopped(ctx)
+		var observed *StoppedError
+		if !errors.As(reasonErr, &observed) {
+			reasonErr = errors.Join(&StoppedError{Reason: "unavailable"}, reasonErr)
+		}
+		completionErr = reasonErr
+	}
+	retained, cancel := EvidenceRetentionContext(ctx)
+	defer cancel()
+	var stopped *StoppedError
+	if errors.As(completionErr, &stopped) && finished.RunID == "" {
+		// The stop may precede final publication. Retain an already available
+		// completion once, without extending or restarting the collection wait.
+		b.requestID++
+		r, err := b.Mailbox.Read(retained, b.Manifest.Job()+"/finished.json")
+		if err == nil && r.Found && (decode(r.Data, &finished) != nil || !validCompletion()) {
+			err = errors.New("invalid-caller-receipt")
+		}
+		if err != nil {
+			uncertainty(b.Fence, "mailbox.read", strconv.FormatUint(b.requestID, 10), b.Manifest.CallerID, "collect", minTime(end, time.UnixMilli(b.Manifest.Deadline)), b.Clock.Now(), uncertaintyRule(err))
+			completionErr = errors.Join(completionErr, err)
+		}
+	}
+	if finished.RunID == b.Manifest.RunID && finished.Job == "caller-1" && finished.ExitCode != nil {
+		// Retain the decoded receipt even when its terminal outcome cannot
+		// qualify the gate. The raw caller report is retained independently.
+		finished.StopReason = ""
+		if finished.Stopped {
+			finished.StopReason = "unavailable"
+		}
+		if b.Stop != nil {
+			finished.StopReason = b.Stop.Reason
+		}
+		b.Completion = &finished
+	}
 	b.closed = true
 	if b.Registration == nil || !reflect.DeepEqual(finished.Sessions, b.Registration.Sessions) {
 		completionErr = errors.Join(completionErr, errors.New("final-caller-sessions"))
 	}
 	// Read once even after unsuccessful completion. The report may contain
 	// independent failures; completion certainty still controls boundary dialing.
-	retained, cancel := EvidenceRetentionContext(ctx)
-	defer cancel()
 	raw, err := b.Mailbox.Read(retained, b.Manifest.Job()+"/caller.jsonl")
 	completionErr = errors.Join(completionErr, ctx.Err())
 	if !b.Clock.Now().Before(minTime(end, time.UnixMilli(b.Manifest.Deadline))) {

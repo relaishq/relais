@@ -168,9 +168,11 @@ func DecodeSummary(raw []byte) (Summary, error) {
 }
 
 type RawMedia struct {
-	CallerJSONL string                   `json:"callerJsonl"`
-	Events      []loadgen.EventResult    `json:"events"`
-	Receipts    []operatorcaller.Receipt `json:"receipts"`
+	CallerJSONL      string                            `json:"callerJsonl"`
+	Events           []loadgen.EventResult             `json:"events"`
+	Receipts         []operatorcaller.Receipt          `json:"receipts"`
+	CallerCompletion *operatorcaller.CompletionReceipt `json:"callerCompletion,omitempty"`
+	CallerStop       *operatorcaller.StopReceipt       `json:"callerStop,omitempty"`
 }
 type Phase struct {
 	Gate         operator.Gate
