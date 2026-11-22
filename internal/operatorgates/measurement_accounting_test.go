@@ -226,6 +226,16 @@ func TestLoadAdmissionCompletesBothMeasurements(t *testing.T) {
 		var reads []time.Duration
 		p := measureFixture(g, clock, 1, &reads)
 		p.Calls = calls
+		if calls == 2 {
+			raw := admissionCallLine(t, "original", false) + admissionCallLine(t, "boundary", false)
+			p.Collect = func(context.Context, time.Duration) <-chan MeasurementCollection {
+				media, err := admissionMedia(raw, admissionCaller("original", "boundary"))
+				done := make(chan MeasurementCollection, 1)
+				done <- MeasurementCollection{Evidence: MeasurementEvidence{Media: media}, Err: err}
+				close(done)
+				return done
+			}
+		}
 		observe := p.Observe
 		p.Observe = func(ctx context.Context, end time.Duration) (MeasurementObservation, error) {
 			o, err := observe(ctx, end)
@@ -246,7 +256,7 @@ func TestLoadAdmissionCompletesBothMeasurements(t *testing.T) {
 	s.gates = []operator.Gate{operator.Load}
 	seq := s.RunSequence(context.Background(), SequencePorts{Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult { return out }})
 	d := s.Final(seq.Gates).Diagnostics[0]
-	if !r.Completed || !r.Survivor.Completed || !r.Boundary.Completed || r.CompletedSteps != 4 || *r.Survivor.Measurement.AdmittedCalls != 1 || *r.Boundary.Measurement.AdmittedCalls != 2 || !d.Procedure.Completed || d.Procedure.CompletedSteps != 4 || d.Procedure.Reason != "" || d.Reason == "procedure-incomplete" || seq.Gates[0].Status != operator.Inconclusive {
+	if !r.Completed || !r.Survivor.Completed || !r.Boundary.Completed || r.CompletedSteps != 5 || *r.Survivor.Measurement.AdmittedCalls != 1 || *r.Boundary.Measurement.AdmittedCalls != 2 || r.Boundary.Media == nil || r.Boundary.Media.CompletedCalls != 2 || !d.Procedure.Completed || d.Procedure.CompletedSteps != 5 || d.Procedure.Reason != "" || d.Reason == "procedure-incomplete" || seq.Gates[0].Status != operator.Inconclusive {
 		t.Fatalf("MUTATION: load-admission-completion: result=%+v diagnostic=%+v", r, d)
 	}
 }
