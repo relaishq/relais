@@ -6,7 +6,7 @@ echo video visible and the device awake throughout. Use headphones for the tone.
 
 ## Start the local-network demo
 
-Requires Go 1.26+, `redis-server`, and desktop Chrome. Nothing is installed
+Requires Go 1.27+, `redis-server`, and desktop Chrome. Nothing is installed
 machine-wide. The launcher builds and starts its own relay, control plane,
 three workers, and throwaway Redis. It never uses Redis port 6379.
 

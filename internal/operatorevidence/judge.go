@@ -177,7 +177,7 @@ func extract(reader *tar.Reader, root string) error {
 	}
 }
 
-const pinnedGoVersion = "go1.26.9"
+const pinnedGoVersion = "go1.27.4"
 
 func verifyCompiler(ctx context.Context, executable string) error {
 	cmd := exec.CommandContext(ctx, executable, "env", "GOVERSION")

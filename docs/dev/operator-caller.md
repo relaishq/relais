@@ -116,7 +116,7 @@ separate pools and judges.
 `BuildPinned` archives an exact local public commit into an isolated directory, adds
 the embedded judge entry/helpers and the shared P2 strict decoder, then builds with
 offline, readonly module settings. The compiler must report exactly the repository's
-pinned `go1.26.9`. A separate build environment allowlist disables workspaces and
+pinned `go1.27.4`. A separate build environment allowlist disables workspaces and
 persisted Go configuration and fixes proxy/bypass settings. Build before media
 windows. The executable hash is checked before each judgment. The pool retains its
 required source commit outside the judge JSON; a mismatched pinned judge refuses

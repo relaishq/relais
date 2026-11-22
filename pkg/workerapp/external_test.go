@@ -19,7 +19,7 @@ func TestExternalModuleBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	module := "module example.com/external-worker\n\ngo 1.26.0\n\nrequire github.com/relaishq/relais v0.0.0\n\nreplace github.com/relaishq/relais => " + strconv.Quote(root) + "\n"
+	module := "module example.com/external-worker\n\ngo 1.27.0\n\nrequire github.com/relaishq/relais v0.0.0\n\nreplace github.com/relaishq/relais => " + strconv.Quote(root) + "\n"
 	main := `package main
 import (
  "context"

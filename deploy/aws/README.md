@@ -502,7 +502,7 @@ and pushes to `main` touching this directory, its workflow, `cmd/**`, `pkg/**`,
 It has no AWS credentials, SDK credential setup, cloud API calls or cloud spend.
 Actions use immutable commit SHAs. Tools are pinned: Python 3.12.12,
 cfn-lint 1.57.2, ShellCheck 0.11.0,
-Go 1.26.9 and Redis 7.0.11. Downloaded validator/Redis archives have SHA-256
+Go 1.27.4 and Redis 7.0.11. Downloaded validator/Redis archives have SHA-256
 checks; all Python requirements are hash-locked (`pip --require-hashes`). Unit
 verification uses the runner's own `systemd-analyze` and logs its version. Expected total wall time is about 5–8 minutes, not a
 measured hosted result.
