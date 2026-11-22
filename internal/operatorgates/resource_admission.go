@@ -1,7 +1,9 @@
 package operatorgates
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -163,7 +165,7 @@ func admissionMedia(raw string, b *operatorcaller.Broker) (*MediaSummary, error)
 			continue
 		}
 		var m loadgen.Message
-		if e := observe.DecodeEvidenceLimit([]byte(line), &m, operator.MaxBlobBytes); e != nil {
+		if e := decodeAdmissionMessage([]byte(line), &m); e != nil {
 			err = errors.Join(err, e)
 			if !observe.IsIncompleteEvidence(e) {
 				continue
@@ -196,4 +198,36 @@ func admissionMedia(raw string, b *operatorcaller.Broker) (*MediaSummary, error)
 		err = errors.Join(err, fault("precondition-failed:caller-evidence"))
 	}
 	return summary, err
+}
+
+// Normalize only explicit null operation slices so omitted evidence still fails the recursive contract.
+func decodeAdmissionMessage(raw json.RawMessage, m *loadgen.Message) error {
+	decodeErr := observe.DecodeEvidenceLimit(raw, m, operator.MaxBlobBytes)
+	if !observe.IsIncompleteEvidence(decodeErr) {
+		return decodeErr
+	}
+	if m.Type == "call" && m.Call != nil {
+		var message, call, distributed map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &message); err != nil {
+			return decodeErr
+		}
+		if err := json.Unmarshal(message["call"], &call); err != nil {
+			return decodeErr
+		}
+		if bytes.Equal(bytes.TrimSpace(call["Moves"]), []byte("null")) {
+			call["Moves"] = json.RawMessage("[]")
+		}
+		if m.Call.Distributed != nil {
+			if err := json.Unmarshal(call["distributed"], &distributed); err != nil {
+				return decodeErr
+			}
+			if bytes.Equal(bytes.TrimSpace(distributed["armed"]), []byte("null")) {
+				distributed["armed"] = json.RawMessage("[]")
+			}
+			call["distributed"], _ = json.Marshal(distributed)
+		}
+		message["call"], _ = json.Marshal(call)
+		raw, _ = json.Marshal(message)
+	}
+	return observe.DecodeEvidenceLimit(raw, m, operator.MaxBlobBytes)
 }
