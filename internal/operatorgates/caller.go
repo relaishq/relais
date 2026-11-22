@@ -234,8 +234,8 @@ func (r *CallerRuntime) startCollection(ctx context.Context, deadline time.Time)
 			defer cancel()
 			r.summary, r.err = r.Pool.Media(retained)
 			var stopped *operatorcaller.StoppedError
-			if errors.As(err, &stopped) {
-				r.err = errors.Join(r.callerError(err), r.err)
+			if errors.As(err, &stopped) && r.err == nil {
+				r.err = r.callerError(err)
 			} else if err != nil && r.err == nil {
 				r.err = fault("precondition-failed:caller-evidence")
 			}

@@ -2680,8 +2680,8 @@
     "File": "internal/operatorcaller/broker.go",
     "Function": "Collect",
     "Receiver": "Broker",
-    "Old": "raw, err := b.Mailbox.Read(retained, b.Manifest.Job()+\"/caller.jsonl\")",
-    "New": "if completionErr != nil { return \"\", completionErr }; raw, err := b.Mailbox.Read(retained, b.Manifest.Job()+\"/caller.jsonl\")",
+    "Old": "if !raw.Found {\n\t\traw, err = b.Mailbox.Read(retained, b.Manifest.Job()+\"/caller.jsonl\")\n\t}",
+    "New": "if completionErr != nil { return \"\", completionErr }; if !raw.Found {\n\t\traw, err = b.Mailbox.Read(retained, b.Manifest.Job()+\"/caller.jsonl\")\n\t}",
     "Test": "TestComposedProcedureCallerPool/stopped",
     "Marker": "MUTATION: composed-procedure-pool",
     "Package": "./internal/operatorevidence/judge-src"
@@ -8214,5 +8214,60 @@
     "Test": "TestValidAbortSurvivesReasonReadFailure",
     "Marker": "valid abort lost its terminal outcome",
     "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-publication-poll-skipped",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "collectStopped",
+    "Receiver": "Broker",
+    "Old": "for b.Clock.Now().Before(end) {",
+    "New": "for false && b.Clock.Now().Before(end) {",
+    "Test": "TestStoppedCallerWaitsForDelayedPublication",
+    "Marker": "delayed stopped caller evidence lost",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-publication-deadline-extended",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "collectStopped",
+    "Receiver": "Broker",
+    "Old": "end = minTime(end, time.UnixMilli(b.Manifest.Deadline))",
+    "New": "end = minTime(end, time.UnixMilli(b.Manifest.Deadline).Add(time.Second))",
+    "Test": "TestStoppedCallerPublicationWaitUsesExistingEnd/manifest-end",
+    "Marker": "stopped publication wait changed its bound or certainty",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-report-read-skipped",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "collectStopped",
+    "Receiver": "Broker",
+    "Old": "if !raw.Found {",
+    "New": "if false && !raw.Found {",
+    "Test": "TestStoppedCallerReceiptFailureRetainsRawReport",
+    "Marker": "receipt read failure erased raw report",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-known-stop-ignored",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "if b.Stop != nil && !b.closed {",
+    "New": "if false && b.Stop != nil && !b.closed {",
+    "Test": "TestKnownStopReceiptFailureRetainsRawReport",
+    "Marker": "known stop did not protect raw report from receipt failure",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stopped-judge-unknown-upgraded",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "startCollection",
+    "Receiver": "CallerRuntime",
+    "Old": "if errors.As(err, &stopped) && r.err == nil {",
+    "New": "if errors.As(err, &stopped) {",
+    "Test": "TestCallerRuntimeJudgeUncertaintyWins/caller-stopped",
+    "Marker": "judge uncertainty lost precedence or its latch",
+    "Package": "./internal/operatorgates"
   }
 ]

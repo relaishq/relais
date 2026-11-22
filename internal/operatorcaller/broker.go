@@ -329,6 +329,42 @@ func EvidenceRetentionContext(ctx context.Context) (context.Context, context.Can
 	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
+// collectStopped waits for the bridge's final publication inside the original
+// collection cutoff. Save the report first: a failed receipt exchange can make
+// the protocol mailbox unusable, but cannot erase bytes already retained.
+func (b *Broker) collectStopped(ctx context.Context, end time.Time, finished *CompletionReceipt, valid func() bool) (raw ReadResult, err error) {
+	end = minTime(end, time.UnixMilli(b.Manifest.Deadline))
+	for b.Clock.Now().Before(end) {
+		if !raw.Found {
+			r, err := b.Mailbox.Read(ctx, b.Manifest.Job()+"/caller.jsonl")
+			if err != nil {
+				return raw, err
+			}
+			raw = r
+		}
+		if !b.Clock.Now().Before(end) {
+			break
+		}
+		r, err := b.Mailbox.Read(ctx, b.Manifest.Job()+"/finished.json")
+		if err != nil {
+			return raw, err
+		}
+		if !b.Clock.Now().Before(end) {
+			break
+		}
+		if r.Found {
+			if decode(r.Data, finished) != nil || !valid() {
+				return raw, errors.New("invalid-caller-receipt")
+			}
+			return raw, nil
+		}
+		if err := b.Clock.Sleep(ctx, min(500*time.Millisecond, end.Sub(b.Clock.Now()))); err != nil {
+			return raw, err
+		}
+	}
+	return raw, errors.New("caller-deadline")
+}
+
 func (b *Broker) Collect(ctx context.Context, end time.Time) (data string, collectionError error) {
 	b.requestID++
 	id := strconv.FormatUint(b.requestID, 10)
@@ -350,7 +386,12 @@ func (b *Broker) Collect(ctx context.Context, end time.Time) (data string, colle
 	validCompletion := func() bool {
 		return finished.RunID == b.Manifest.RunID && finished.Job == "caller-1" && finished.ExitCode != nil && (finished.Stopped || finished.Done && *finished.ExitCode == 0)
 	}
-	completionErr := b.wait(ctx, b.Manifest.Job()+"/finished.json", end, &finished, validCompletion)
+	var completionErr error
+	if b.Stop != nil && !b.closed {
+		completionErr = &StoppedError{Reason: b.Stop.Reason}
+	} else {
+		completionErr = b.wait(ctx, b.Manifest.Job()+"/finished.json", end, &finished, validCompletion)
+	}
 	if completionErr == nil && finished.Stopped {
 		reasonErr := b.CheckStopped(ctx)
 		var observed *StoppedError
@@ -359,17 +400,12 @@ func (b *Broker) Collect(ctx context.Context, end time.Time) (data string, colle
 		}
 		completionErr = reasonErr
 	}
-	retained, cancel := EvidenceRetentionContext(ctx)
-	defer cancel()
+	var raw ReadResult
 	var stopped *StoppedError
 	if errors.As(completionErr, &stopped) && finished.RunID == "" {
-		// The stop may precede final publication. Retain an already available
-		// completion once, without extending or restarting the collection wait.
 		b.requestID++
-		r, err := b.Mailbox.Read(retained, b.Manifest.Job()+"/finished.json")
-		if err == nil && r.Found && (decode(r.Data, &finished) != nil || !validCompletion()) {
-			err = errors.New("invalid-caller-receipt")
-		}
+		var err error
+		raw, err = b.collectStopped(ctx, end, &finished, validCompletion)
 		if err != nil {
 			uncertainty(b.Fence, "mailbox.read", strconv.FormatUint(b.requestID, 10), b.Manifest.CallerID, "collect", minTime(end, time.UnixMilli(b.Manifest.Deadline)), b.Clock.Now(), uncertaintyRule(err))
 			completionErr = errors.Join(completionErr, err)
@@ -393,7 +429,12 @@ func (b *Broker) Collect(ctx context.Context, end time.Time) (data string, colle
 	}
 	// Read once even after unsuccessful completion. The report may contain
 	// independent failures; completion certainty still controls boundary dialing.
-	raw, err := b.Mailbox.Read(retained, b.Manifest.Job()+"/caller.jsonl")
+	retained, cancel := EvidenceRetentionContext(ctx)
+	defer cancel()
+	var err error
+	if !raw.Found {
+		raw, err = b.Mailbox.Read(retained, b.Manifest.Job()+"/caller.jsonl")
+	}
 	completionErr = errors.Join(completionErr, ctx.Err())
 	if !b.Clock.Now().Before(minTime(end, time.UnixMilli(b.Manifest.Deadline))) {
 		completionErr = errors.Join(completionErr, errors.New("caller-deadline"))

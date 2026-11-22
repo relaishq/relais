@@ -775,7 +775,12 @@
     "caller-stopped-late-receipt-not-retained",
     "caller-stopped-collection-qualifies",
     "caller-stopped-rule-missing",
-    "caller-stopped-reason-read-loses-outcome"
+    "caller-stopped-reason-read-loses-outcome",
+    "caller-stopped-publication-poll-skipped",
+    "caller-stopped-publication-deadline-extended",
+    "caller-stopped-report-read-skipped",
+    "caller-stopped-known-stop-ignored",
+    "caller-stopped-judge-unknown-upgraded"
   ],
   "killed": [
     {
@@ -6287,6 +6292,36 @@
       "id": "caller-stopped-reason-read-loses-outcome",
       "test": "TestValidAbortSurvivesReasonReadFailure",
       "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-publication-poll-skipped",
+      "test": "TestStoppedCallerWaitsForDelayedPublication",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-publication-deadline-extended",
+      "test": "TestStoppedCallerPublicationWaitUsesExistingEnd/manifest-end",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-report-read-skipped",
+      "test": "TestStoppedCallerReceiptFailureRetainsRawReport",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-known-stop-ignored",
+      "test": "TestKnownStopReceiptFailureRetainsRawReport",
+      "package": "./internal/operatorcaller",
+      "evidence": "killed"
+    },
+    {
+      "id": "caller-stopped-judge-unknown-upgraded",
+      "test": "TestCallerRuntimeJudgeUncertaintyWins/caller-stopped",
+      "package": "./internal/operatorgates",
       "evidence": "killed"
     }
   ],

@@ -74,7 +74,11 @@ func TestCallerRuntimeRetainsAbortedReceipt(t *testing.T) {
 			values[job+"/stop.json"] = []byte(`{"runId":"run-stop","job":"caller-1","reason":"Generator saturation hard ceiling"}`)
 			values[job+"/caller.jsonl"] = []byte("raw report")
 			_, err := r.Media(context.Background())
-			if code(err) != "precondition-failed:caller" || !r.Pool.missing || len(r.Pool.phases) != 1 {
+			wantCode := "precondition-failed:caller"
+			if judgeFails {
+				wantCode = "media-unavailable"
+			}
+			if code(err) != wantCode || !r.Pool.missing || len(r.Pool.phases) != 1 {
 				t.Fatalf("aborted evidence qualified or lost cause: err %v missing %t phases %d", err, r.Pool.missing, len(r.Pool.phases))
 			}
 			if !judged.Missing || len(judged.Phases) != 1 || judged.Phases[0].CallerCompletion == nil || judged.Phases[0].CallerCompletion.StopReason != "generator-saturation-hard-ceiling" {
@@ -130,5 +134,36 @@ func TestTrialReadyObservesMailboxStop(t *testing.T) {
 	r.Broker.Fence.Halt("command-result-unknown")
 	if err := r.CheckStopped(context.Background()); code(err) != "command-result-unknown" {
 		t.Fatal("caller stop cleared the uncertainty latch", err)
+	}
+}
+
+func TestCallerRuntimeJudgeUncertaintyWins(t *testing.T) {
+	for _, stopped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "caller-completed", true: "caller-stopped"}[stopped], func(t *testing.T) {
+			g, clock := testProcedure(t)
+			r, values := stoppedCallerRuntime(t, clock)
+			r.Pool.Judge = stopEvidenceJudge{err: errors.New("judge-source-differs")}
+			job := r.Broker.Manifest.Job()
+			finished := map[string]any{"runId": r.RunID(), "job": "caller-1", "done": true, "stopped": stopped, "exitCode": 0, "sessions": []string{"original"}}
+			var err error
+			values[job+"/finished.json"], err = json.Marshal(finished)
+			if err != nil {
+				t.Fatal(err)
+			}
+			values[job+"/caller.jsonl"] = []byte("raw report")
+			if stopped {
+				values[job+"/stop.json"] = []byte(`{"runId":"run-stop","job":"caller-1","reason":"Generator saturation hard ceiling"}`)
+			}
+			var mediaErr error
+			g.p.Media = func(ctx context.Context) (*MediaSummary, error) {
+				media, err := r.Media(ctx)
+				mediaErr = err
+				return media, err
+			}
+			out := g.finish(context.Background(), nil, false)
+			if code(mediaErr) != "command-result-unknown" || !strings.Contains(mediaErr.Error(), "judge-source-differs") || !g.unknown || out.Status == operator.Passed || out.Completed || out.AwaitingPool || out.Reason != "command-result-unknown" {
+				t.Fatalf("judge uncertainty lost precedence or its latch: err %v unknown %t result %+v", mediaErr, g.unknown, out)
+			}
+		})
 	}
 }
