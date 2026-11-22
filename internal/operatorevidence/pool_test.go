@@ -92,6 +92,24 @@ func TestPoolRegistrationAndBoundary(t *testing.T) {
 	if separateErr != nil || separatePool.Missing || len(separatePool.Phases) != 1 || separatePool.SourceCommit != separate.Plan.PublicSHA || separateSHA != separate.Plan.PublicSHA || separate.DeployedSHA == separateSHA {
 		t.Fatal("MUTATION: pool-independent-source", separatePool, separateErr)
 	}
+	for _, missing := range []string{"empty-deployment", "first-participant", "last-participant"} {
+		t.Run(missing, func(t *testing.T) {
+			changed := separate
+			changed.Inventory.Participants = append([]releasecompat.Participant{}, separate.Inventory.Participants...)
+			switch missing {
+			case "empty-deployment":
+				changed.DeployedSHA = ""
+			case "first-participant":
+				changed.Inventory.Participants[0].Commit = changed.Plan.PublicSHA
+			case "last-participant":
+				changed.Inventory.Participants[len(changed.Inventory.Participants)-1].Commit = changed.Plan.PublicSHA
+			}
+			pool, sha, err := ReadPool("run-fixture", []Phase{changed}, false)
+			if err != nil || !pool.Missing || len(pool.Phases) != 1 || pool.SourceCommit != changed.Plan.PublicSHA || sha != changed.Plan.PublicSHA {
+				t.Fatal("MUTATION: pool-server-source", pool, err)
+			}
+		})
+	}
 	phase.FirstFaultAt = at
 	pool, _, err = ReadPool("run-fixture", []Phase{phase}, false)
 	if err != nil || !pool.Missing || len(pool.Phases) != 0 {

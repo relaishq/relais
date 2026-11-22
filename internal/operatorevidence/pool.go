@@ -5,6 +5,7 @@ package operatorevidence
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/relaishq/relais/internal/loadgen"
@@ -178,7 +179,8 @@ type Phase struct {
 	Registration operatorcaller.Registration
 	Raw          []byte
 	FirstFaultAt time.Time
-	// DeployedSHA names the server release, independently verified by FreshInventory.
+	// DeployedSHA names the server release. ReadPool requires it to be nonempty
+	// and to match every participant in the FreshInventory result.
 	DeployedSHA string
 	// Clocks and Inventory are successful results from Session.FreshClocks and
 	// Session.FreshInventory. Their zero values mean evidence is unavailable.
@@ -223,7 +225,7 @@ func ReadPool(run string, phases []Phase, missing bool) (Pool, string, error) {
 			pool.Missing = true
 			continue
 		}
-		if p.Clocks.At.IsZero() || !p.Inventory.Complete {
+		if p.Clocks.At.IsZero() || !p.Inventory.Complete || p.DeployedSHA == "" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA }) {
 			pool.Missing = true
 		}
 		var raw RawMedia
