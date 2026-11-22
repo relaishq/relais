@@ -7772,7 +7772,7 @@
     "Function": "ReadPool",
     "Old": "p.DeployedSHA == \"\" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA })",
     "New": "false && (p.DeployedSHA == \"\" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA }))",
-    "Test": "TestPoolRegistrationAndBoundary",
+    "Test": "TestPoolRegistrationAndBoundary/empty-deployment",
     "Marker": "MUTATION: pool-server-source",
     "Package": "./internal/operatorevidence"
   },

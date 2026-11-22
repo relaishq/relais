@@ -6026,7 +6026,7 @@
     {
       "id": "pool-server-source-unchecked",
       "evidence": "killed",
-      "test": "TestPoolRegistrationAndBoundary",
+      "test": "TestPoolRegistrationAndBoundary/empty-deployment",
       "package": "./internal/operatorevidence"
     },
     {
