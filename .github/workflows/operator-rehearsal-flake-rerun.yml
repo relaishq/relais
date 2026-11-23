@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$SIGNATURE" in
-            lease-expired-flake|generator-saturation-flake) ;;
+            lease-expired-flake|generator-saturation-flake|clock-select-flake) ;;
             *) exit 1 ;;
           esac
           # A queued handler must not rerun an attempt that has since changed.

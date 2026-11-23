@@ -79,7 +79,7 @@ signature, run URL and attempt numbers to the open tracking issue
 automatic reruns". The workflow-level `RERUN_TRACKING_ISSUE` value is the only
 place that names it. The second attempt cannot trigger another automatic retry.
 
-The classifier requires a failed schema-1 report, clean calibration, no latch,
+The two signatures below require a failed schema-1 report, clean calibration, no latch,
 no errors or uncertainties, completed cleanup, four identified gates and no
 unexplained failure code or media failure. `generator-saturation-flake` requires
 only `pooled-media-not-passed`, completed procedures and media, generator event
@@ -98,7 +98,21 @@ media phase inventories. Later gates must complete, rather than report
 `procedure-incomplete`, `media-missing-or-failed`, `procedure-error`, `not-passed`
 and `pooled-media-not-passed`. The missing-media failure is emitted by Go for a
 preparation refusal. A missing lease or incomplete armed inventory alone does
-not prove lease expiry. Missing, malformed or unexplained evidence
+not prove lease expiry.
+
+`clock-select-flake` requires a failed schema-1 report with no latch, completed
+cleanup and no uncertainties or exemptions. Failed windows must be nonempty.
+Clock selection and every failed window must report `clock-select-ceiling`.
+The errors are exactly
+`clock-binding-failed` and `clock-binding-missing`. The failure set adds only
+`calibration-failed`, `gate-count-differs` and `pooled-media-not-passed`.
+No gate, clock, caller timing, undecided timing or CPU phase can be present.
+Pooled media must be null, and caller affinities must be empty. Calibration must
+be unstarted: failed with only `incomplete-calibration-evidence`, no checks,
+zero counters and an empty media window. This signature covers clock selection
+failure before any gate or caller work starts.
+
+Missing, malformed or unexplained evidence
 produces `not-known` and no retry. Classification and a fixed reason appear in
 the job summary. Extracted report fixtures live in
 `scripts/ci/fixtures/rehearsal-flakes/`; they include a log-only lease refusal

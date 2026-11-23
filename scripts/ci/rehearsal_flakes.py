@@ -60,9 +60,53 @@ def clean_media(media, expected_gates):
     return True
 
 
+def classify_clock_select(report):
+    if (report.get('verdict') != 'failed' or report.get('latched') is not False or
+            report.get('cleanup') is not True or report.get('uncertainties') != [] or
+            report.get('errors') != ['clock-binding-failed', 'clock-binding-missing']):
+        return NOT_KNOWN, 'not-a-clock-selection-only-failure'
+    expected = {'clock-binding-failed', 'clock-binding-missing', 'calibration-failed',
+                'gate-count-differs', 'pooled-media-not-passed'}
+    failures = report.get('failures')
+    if (not isinstance(failures, list) or len(failures) != len(expected) or
+            not all(isinstance(f, str) for f in failures) or set(failures) != expected):
+        return NOT_KNOWN, 'unexplained-failure-code'
+    if (any(report.get(k) != [] for k in
+            ('gates', 'clocks', 'callerTiming', 'timingUndecided', 'exemptions')) or
+            'pooledMedia' not in report or report['pooledMedia'] is not None):
+        return NOT_KNOWN, 'work-present-before-clock-selection'
+    clock = report['clockSelection']
+    windows = clock.get('failedWindows')
+    if (not isinstance(windows, list) or not windows or any(
+            not isinstance(w, dict) or w.get('cause') != 'clock-select-ceiling' for w in windows)):
+        return NOT_KNOWN, 'clock-selection-windows-not-ceiling'
+    cpu = report.get('cpu')
+    if (not isinstance(cpu, dict) or cpu.get('callerAffinities') != [] or
+            cpu.get('phases') != []):
+        return NOT_KNOWN, 'cpu-work-present-before-clock-selection'
+    calibration = cpu.get('calibration')
+    if (not isinstance(calibration, dict) or calibration.get('passed') is not False or
+            calibration.get('checks') != [] or
+            calibration.get('causes') != ['incomplete-calibration-evidence'] or any(
+                type(calibration.get(k)) is not int or calibration[k] != 0 for k in
+                ('samples', 'mediaNs', 'flaggedNs', 'flaggedPercent', 'peakP99Ns', 'peakMaxNs',
+                 'peakCpuPerGomaxprocs', 'decoderDropped', 'decoderErrors', 'completedCalls',
+                 'duplicatePackets'))):
+        return NOT_KNOWN, 'calibration-not-unstarted'
+    window = calibration.get('mediaWindow')
+    if (not isinstance(window, dict) or window.get('flaggedIntervals') != [] or any(
+            type(window.get(k)) is not int or window[k] != 0 for k in
+            ('firstVideoSendOffsetMs', 'hangUpOffsetMs', 'clippedFlaggedMs', 'mediaWindowMs'))):
+        return NOT_KNOWN, 'calibration-media-present-before-clock-selection'
+    return 'clock-select-flake', 'clock-select-ceiling-before-any-gate'
+
+
 def classify(report):
     if not isinstance(report, dict) or type(report.get('schemaVersion')) is not int or report['schemaVersion'] != 1:
         return NOT_KNOWN, 'unsupported-report'
+    clock = report.get('clockSelection')
+    if isinstance(clock, dict) and clock.get('cause') == 'clock-select-ceiling':
+        return classify_clock_select(report)
     if (report.get('verdict') != 'failed' or report.get('latched') is not False or
             report.get('cleanup') is not True or report.get('errors') != [] or
             report.get('uncertainties') != []):
