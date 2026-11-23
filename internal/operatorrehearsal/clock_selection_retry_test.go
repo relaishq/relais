@@ -142,31 +142,96 @@ func TestRehearsalClockSelectionThreeUpdateFailures(t *testing.T) {
 	}
 }
 
-func TestRehearsalClockSelectionCeilingFailsFirstWindow(t *testing.T) {
+func TestRehearsalClockSelectionThreeCeilingFailures(t *testing.T) {
 	p := convergenceFixture(t, 0)
 	p.converge = true
 	selections := 0
 	p.selectBounds = func(_ context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
 		selections++
-		for i := range e.Hosts {
-			if e.Hosts[i].Slot == "shared" {
-				for j := range e.Hosts[i].Tracking.Rows {
-					row := &e.Hosts[i].Tracking.Rows[j]
-					row.MaxErrorDecimal, row.MaxErrorSeconds = "1.099e-04", 0.0001099
-				}
-			}
-		}
-		selected, err := clocks.Select(e, policy)
+		selected, err := clocks.Select(ceilingMiss(e), policy)
 		require.EqualError(t, err, "clock-select-ceiling")
 		return selected, err.Error()
 	}
 	r := collectClockSelection(context.Background(), "ceiling-test", "shared", "shared", p)
 	require.Equal(t, "clock-select-ceiling", r.Cause)
 	require.Nil(t, r.Bounds)
-	require.Equal(t, 1, selections)
-	require.Len(t, r.FailedWindows, 1)
-	require.Equal(t, "clock-select-ceiling", r.FailedWindows[0].Cause)
-	require.Equal(t, map[string]int{"relay": 30, "shared": 30, "w1": 30, "w2": 30}, r.FailedWindows[0].Updates)
+	require.Equal(t, 3, selections)
+	require.Len(t, r.FailedWindows, 3)
+	for i, failure := range r.FailedWindows {
+		require.Equal(t, "clock-select-ceiling", failure.Cause)
+		require.Equal(t, map[string]int{"relay": 30, "shared": 30, "w1": 30, "w2": 30}, failure.Updates)
+		if i > 0 {
+			require.Greater(t, failure.StartUnixSeconds, r.FailedWindows[i-1].EndUnixSeconds)
+		}
+	}
+}
+
+func TestRehearsalClockSelectionCeilingRetries(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		causes []string
+		want   string
+	}{
+		{name: "ceiling-then-pass", causes: []string{"clock-select-ceiling"}},
+		{name: "ceiling-updates-then-pass", causes: []string{"clock-select-ceiling", "clock-select-updates"}},
+		{name: "mixed-causes-share-limit", causes: []string{"clock-select-ceiling", "clock-select-updates", "clock-select-ceiling"}, want: "clock-select-ceiling"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := convergenceFixture(t, 0)
+			p.converge = true
+			starts, selections := 0, 0
+			p.start = func(context.Context, time.Time) error { starts++; return nil }
+			var previousEnd int64
+			p.selectBounds = func(_ context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+				require.Equal(t, int64(240), e.EndUnixSeconds-e.StartUnixSeconds)
+				if selections > 0 {
+					require.Greater(t, e.StartUnixSeconds, previousEnd, "collect a full fresh window")
+					for _, h := range e.Hosts {
+						require.LessOrEqual(t, h.Tracking.Rows[0].UnixSeconds, previousEnd, "retain predecessor history")
+					}
+				}
+				previousEnd = e.EndUnixSeconds
+				cause := ""
+				if selections < len(tc.causes) {
+					cause = tc.causes[selections]
+				}
+				selections++
+				switch cause {
+				case "clock-select-ceiling":
+					e = ceilingMiss(e)
+				case "clock-select-updates":
+					e = nineRelayUpdates(e)
+				}
+				selected, err := clocks.Select(e, policy)
+				if cause != "" {
+					require.EqualError(t, err, cause)
+					return selected, err.Error()
+				}
+				require.NoError(t, err)
+				return selected, ""
+			}
+			r := collectClockSelection(context.Background(), "ceiling-retry-test", "shared", "shared", p)
+			require.Equal(t, tc.want, r.Cause)
+			require.Equal(t, 1, starts, "helpers start only once")
+			wantSelections := len(tc.causes)
+			if tc.want == "" {
+				wantSelections++
+				require.NotNil(t, r.Bounds)
+			} else {
+				require.Nil(t, r.Bounds)
+			}
+			require.Equal(t, wantSelections, selections)
+			require.Len(t, r.FailedWindows, len(tc.causes))
+			for i, failure := range r.FailedWindows {
+				require.Equal(t, tc.causes[i], failure.Cause)
+				relayUpdates := 30
+				if failure.Cause == "clock-select-updates" {
+					relayUpdates = 9
+				}
+				require.Equal(t, map[string]int{"relay": relayUpdates, "shared": 30, "w1": 30, "w2": 30}, failure.Updates)
+			}
+		})
+	}
 }
 
 func TestRehearsalClockSelectionOtherCausesFailFirstWindow(t *testing.T) {
@@ -185,6 +250,82 @@ func TestRehearsalClockSelectionOtherCausesFailFirstWindow(t *testing.T) {
 			require.Equal(t, 1, selections)
 			require.Len(t, r.FailedWindows, 1)
 			require.Equal(t, cause, r.FailedWindows[0].Cause)
+		})
+	}
+}
+
+func TestClockSelectionPaidFailuresStayInFirstWindow(t *testing.T) {
+	for _, cause := range []string{
+		"clock-select-updates", "clock-select-ceiling", "clock-select-probes",
+		"clock-select-policy", "clock-select-admission", "clock-select-column14",
+		"clock-select-growth", "clock-select-break", "clock-select-leap",
+		"clock-select-coverage", "clock-select-stale", "clock-select-trailing-window",
+		"clock-lease-missing", "clock-lease-expired",
+	} {
+		t.Run(cause, func(t *testing.T) {
+			p := convergenceFixture(t, 0)
+			p.policy.WindowSeconds = 120
+			base := p.now()
+			var starts []int64
+			p.selectBounds = func(_ context.Context, e clocks.SelectionEvidence, _ clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+				starts = append(starts, e.StartUnixSeconds)
+				return clocks.ClockSelection{}, cause
+			}
+			r := collectClockSelection(context.Background(), "paid-refusal-test", "shared", "shared", p)
+			require.Equal(t, cause, r.Cause)
+			require.Nil(t, r.Bounds)
+			require.Empty(t, r.FailedWindows)
+			require.NotEmpty(t, starts)
+			require.Less(t, starts[len(starts)-1]-starts[0], int64(120), "paid admission must not collect a fresh window")
+			require.Equal(t, 154*time.Second, p.now().Sub(base))
+		})
+	}
+}
+
+func TestRehearsalClockSelectionPendingProbeWindow(t *testing.T) {
+	p := convergenceFixture(t, 0)
+	p.converge = true
+	var starts []int64
+	p.selectBounds = func(_ context.Context, e clocks.SelectionEvidence, policy clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+		starts = append(starts, e.StartUnixSeconds)
+		e.Falsification.Records = nil
+		selected, err := clocks.Select(e, policy)
+		require.EqualError(t, err, "clock-select-probes")
+		return selected, err.Error()
+	}
+	r := collectClockSelection(context.Background(), "pending-probe-test", "shared", "shared", p)
+	require.Equal(t, "clock-select-probes", r.Cause)
+	require.Nil(t, r.Bounds)
+	require.Greater(t, len(starts), 1, "coverage refusal must keep reading the pending window")
+	require.Less(t, starts[len(starts)-1]-starts[0], int64(240))
+	require.Len(t, r.FailedWindows, 1)
+	require.Equal(t, "clock-select-probes", r.FailedWindows[0].Cause)
+	require.Equal(t, starts[len(starts)-1], r.FailedWindows[0].StartUnixSeconds, "archive the last pending read once")
+}
+
+func TestRehearsalClockSelectionCancellationStopsRetries(t *testing.T) {
+	for _, cause := range []string{"clock-select-updates", "clock-select-ceiling", "clock-select-probes"} {
+		t.Run(cause, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			p := convergenceFixture(t, 0)
+			p.converge = true
+			selections := 0
+			var cancelledAt time.Time
+			p.selectBounds = func(context.Context, clocks.SelectionEvidence, clocks.SelectionPolicy) (clocks.ClockSelection, string) {
+				selections++
+				cancelledAt = p.now()
+				cancel()
+				return clocks.ClockSelection{}, cause
+			}
+			r := collectClockSelection(ctx, "cancel-retry-test", "shared", "shared", p)
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			require.Equal(t, cause, r.Cause)
+			require.Nil(t, r.Bounds)
+			require.Equal(t, 1, selections)
+			require.Len(t, r.FailedWindows, 1)
+			require.Equal(t, cause, r.FailedWindows[0].Cause)
+			require.Equal(t, cancelledAt, p.now(), "cancellation must skip retries and the exit wait")
 		})
 	}
 }
@@ -422,6 +563,22 @@ func nineRelayUpdates(e clocks.SelectionEvidence) clocks.SelectionEvidence {
 			kept = append(kept, row)
 		}
 		e.Hosts[i].Tracking.Rows = kept
+	}
+	return e
+}
+
+// Model a larger shared-clock interval without poisoning later clean reads.
+func ceilingMiss(e clocks.SelectionEvidence) clocks.SelectionEvidence {
+	e.Hosts = append([]clocks.SelectionHost(nil), e.Hosts...)
+	for i := range e.Hosts {
+		if e.Hosts[i].Slot != "shared" {
+			continue
+		}
+		rows := append([]clocks.TrackingRow(nil), e.Hosts[i].Tracking.Rows...)
+		for j := range rows {
+			rows[j].MaxErrorDecimal, rows[j].MaxErrorSeconds = "1.099e-04", 0.0001099
+		}
+		e.Hosts[i].Tracking.Rows = rows
 	}
 	return e
 }

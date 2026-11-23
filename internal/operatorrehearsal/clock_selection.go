@@ -103,8 +103,8 @@ type clockAdmissionPorts struct {
 	// latency and poll size helper setup and the admission window.
 	latency, poll time.Duration
 	// Rehearsal waits for restored chrony and rereads transient probe refusals.
-	// Only insufficient updates start fresh windows, at most two extra within
-	// the combined time budget.
+	// Insufficient updates and ceiling misses start fresh windows, sharing at
+	// most two extra windows within the combined time budget.
 	converge bool
 }
 
@@ -386,7 +386,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 				} else if p.converge {
 					pendingProbeWindow = nil
 					result.FailedWindows = append(result.FailedWindows, failedClockWindow(e, result.Cause))
-					if cause != "clock-select-updates" || len(result.FailedWindows) > clockSelectionExtraWindows || p.now().Add(window).After(admissionLimit) || ctx.Err() != nil {
+					if (cause != "clock-select-updates" && cause != "clock-select-ceiling") || len(result.FailedWindows) > clockSelectionExtraWindows || p.now().Add(window).After(admissionLimit) || ctx.Err() != nil {
 						return result
 					}
 					// Keep history for predecessor checks. The started admission
