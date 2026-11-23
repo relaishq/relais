@@ -1482,8 +1482,8 @@ The rehearsal keeps sliding the trailing window until its opening clears this
 prefix and the unchanged selector admits every in-window probe. It retains the
 unchecked warm-up records and all falsifications. The extra 50 s attempt
 allowance funds this recovery; it does not change probe trust or clock ceilings.
-If and only if selection returns `clock-select-updates` or `clock-select-ceiling`,
-rehearsal can collect at most **two extra fresh windows** and select again.
+If and only if selection returns `clock-select-updates` or
+`clock-select-ceiling`, rehearsal can collect at most **two extra fresh windows** and select again.
 Both causes count toward the same two-extra-window limit. Each new window starts
 collection after the failed selection and keeps the full 240 s duration.
 Tracking history and cursors stay intact so the selector checks the real
@@ -1518,8 +1518,8 @@ configuration declares hosts and caller unsmeared.
 At these hosted inputs, seed plus one rehearsal attempt is 330 s. The
 standalone paid launcher keeps its 120 s policy, 123 s first read, 150 s
 attempt and 300 s timing-reference limit. Rehearsal's combined post-seed bound
-is **920 s**. Early update or ceiling failures can fund up to two fresh attempts, but
-three full 320 s attempts cannot extend that bound. A later convergence allows
+is **920 s**. Early update or ceiling failures can fund up to two fresh
+attempts, but three full 320 s attempts cannot extend that bound. A later convergence allows
 fewer retries. Including the ten-second seed and two-second exit guard gives a
 maximum of **15 min 32 s** for this admission phase.
 
@@ -1572,7 +1572,10 @@ refusals that recover within the window do not count as failed windows. The
 run-page summary shows the failed-window count and each window's cause.
 `TestRehearsalClockSelectionRetriesFreshWindow` checks the fresh window, retained
 history, second-window success and retained failure report.
-`TestRehearsalClockSelectionThreeUpdateFailures` and `TestRehearsalClockSelectionCeilingFailsFirstWindow` pin exhaustion and refusal.
+`TestRehearsalClockSelectionThreeUpdateFailures` and
+`TestRehearsalClockSelectionThreeCeilingFailures` pin exhaustion.
+`TestRehearsalClockSelectionCeilingRetries` pins ceiling recovery and the
+shared two-extra-window limit.
 `TestRehearsalClockSelectionExactlyOneRetryFits` checks the retry deadline and
 combined limit; `TestRehearsalClockSelectionTransientProbesRecover` and
 `TestRehearsalClockSelectionFalsificationStaysSticky` check probe recovery and
