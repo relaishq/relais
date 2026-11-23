@@ -1,0 +1,118 @@
+{
+  "clockSelection": {
+    "cause": "clock-select-ceiling",
+    "failedWindows": [
+      {
+        "startUnixSeconds": 1795321187,
+        "endUnixSeconds": 1795321427,
+        "cause": "clock-select-ceiling",
+        "updates": {
+          "relay": 22,
+          "shared": 21,
+          "w1": 20,
+          "w2": 21
+        }
+      }
+    ]
+  },
+  "timingUndecided": [],
+  "uncertainties": [],
+  "schemaVersion": 1,
+  "commit": "f24d3488ec05014c16d395990bd1f8596953da6f",
+  "event": "workflow_dispatch",
+  "scenarioSha256": "62f345b53296f623269f666a7d1fc8901f84108d9bac2d00f7a23cf5aa0d6212",
+  "templateSha256": "d7786eb1f0ec8dcfc68a088f1255c0375567e544af1a69eb18e20b0dfa0207b9",
+  "binarySha256": "1b9ae65ac66865581ffea29337842ffcbf72a1144cb54afd2fb4671fde914425",
+  "callerSha256": "8cd9a08ff96887b88afa338460b621c94a19967e20c2494ddb84c192f10b922a",
+  "judgeSha256": [
+    "edd9594eb489311c537a5f395f7997da2e6c9a8b2d9621166a77bc8823ca6f4f",
+    "edd9594eb489311c537a5f395f7997da2e6c9a8b2d9621166a77bc8823ca6f4f"
+  ],
+  "releaseCommits": [
+    "9243cf5736d81d139da5e4bd4bc828df3fb79c50",
+    "24daff7755299b864bdf8082a9e182749394f5d4"
+  ],
+  "archiveSha256": [
+    "40551e4f1f795878e73d2aaf87b387f544786fe4c7ca9321679e0c5e80e5e3d5",
+    "6adb967415a18255e71bd64b5a184adc0c608ed09a5b507774a98f0f2ef8ad85"
+  ],
+  "bounds": {
+    "frontendControlBoundNs": 0,
+    "frontendWorkerBoundNs": 0,
+    "driftPpm": 0
+  },
+  "cpu": {
+    "layout": {
+      "Allowed": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "Caller": [
+        0,
+        1
+      ],
+      "Services": [
+        2,
+        3
+      ]
+    },
+    "topology": "0,0,0,Y\n1,1,0,Y\n2,0,0,Y\n3,1,0,Y",
+    "driverAffinity": "2,3",
+    "callerAffinities": [],
+    "calibration": {
+      "checks": [],
+      "passed": false,
+      "samples": 0,
+      "mediaNs": 0,
+      "flaggedNs": 0,
+      "flaggedPercent": 0,
+      "peakP99Ns": 0,
+      "peakMaxNs": 0,
+      "peakCpuPerGomaxprocs": 0,
+      "decoderDropped": 0,
+      "decoderErrors": 0,
+      "completedCalls": 0,
+      "duplicatePackets": 0,
+      "causes": [
+        "incomplete-calibration-evidence"
+      ],
+      "mediaWindow": {
+        "firstVideoSendOffsetMs": 0,
+        "hangUpOffsetMs": 0,
+        "flaggedIntervals": [],
+        "clippedFlaggedMs": 0,
+        "mediaWindowMs": 0
+      }
+    },
+    "phases": []
+  },
+  "gates": [],
+  "pooledMedia": null,
+  "clocks": [],
+  "errors": [
+    "clock-binding-failed",
+    "clock-binding-missing"
+  ],
+  "latched": false,
+  "cleanup": true,
+  "verdict": "failed",
+  "failures": [
+    "clock-binding-failed",
+    "clock-binding-missing",
+    "calibration-failed",
+    "gate-count-differs",
+    "pooled-media-not-passed"
+  ],
+  "exemptions": [],
+  "limitations": [
+    "local TLS proxy and time reference; shared runner clock",
+    "linux_amd64 only",
+    "store failover and load admission not covered",
+    "one execution; three fixed complete executions are required for initial calibration",
+    "CPU affinity does not prove physical-core or VM scheduling isolation",
+    "on a shared runner, media timing is judged strictly only in the paid run"
+  ],
+  "callerTiming": []
+}

@@ -25,7 +25,7 @@ def lease_fixture():
 
 
 def clock_select_fixture():
-    # Extracted from operator-rehearsal-44984258994-1/report.json.
+    # Reduced from operator-rehearsal-44984258994-1.json to the fields the classifier reads.
     return {
         'schemaVersion': 1, 'verdict': 'failed', 'latched': False, 'cleanup': True,
         'errors': ['clock-binding-failed', 'clock-binding-missing'],
@@ -72,6 +72,10 @@ class SummaryLoaderCharacterization(unittest.TestCase):
 
 
 class FlakeClassification(unittest.TestCase):
+    def test_real_clock_selection_report(self):
+        self.assertEqual(classify(fixture('44984258994-1')),
+                         ('clock-select-flake', 'clock-select-ceiling-before-any-gate'))
+
     def test_clock_selection_ceiling_before_any_gate(self):
         self.assertEqual(classify(clock_select_fixture()),
                          ('clock-select-flake', 'clock-select-ceiling-before-any-gate'))
