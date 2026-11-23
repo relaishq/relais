@@ -110,7 +110,9 @@ New terms (added to the glossary when this ADR is accepted):
   HTTP address and ADR 0004 lease key. A slot can have a same-host standby, as
   today. A standby takeover keeps the slot. The slot ID is the lease key.
 - **Relay set:** the slots control knows. Control takes `-relay name=URL`,
-  repeated. The old single `-relay URL` form means a set of one.
+  repeated. The shipped control command enables the set with several entries.
+  One entry, including the old `-relay URL` form, keeps legacy behavior without
+  a configured set (configuration amendment 2026-11-23, #536).
 - **Relay assignment:** per call, stored in the call's existing session hash
   (`{sess:ID}`, next to the lease and the ADR 0003 routes): `relay` (slot ID),
   `relay_gen` (a counter that never goes down) and, during a change,

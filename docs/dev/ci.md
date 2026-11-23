@@ -47,6 +47,15 @@ configure matching `-store-outage-budget` on worker and control
 Relay TTL stays 600 ms; reachable staleness observation preserves fast frozen
 relay takeover while failed polls prevent outage-driven takeover
 ([ADR 0004](../adr/0004-standby-relay.md)).
+The `relay-continuity` matrix keeps the relay-restart, same-host standby and
+in-process relay-loss lanes. Its `relay-loss-processes` lane runs the same
+relay-loss machinery with shipped relay, control and worker binaries, including
+control's repeated `-relay name=URL` path. Both loss lanes interleave frozen
+and killed slots, with eight affected calls and a 5 s recovery bound. The
+process lane also checks worker and caller decryption counters and caller
+RTP duplicates. Run a local smoke with
+`make crash-run CRASH_FLAGS="-relay-loss-processes -runs=1 -after=3s"`;
+the CI lane keeps ten trials per mode and 60 s observation.
 To run manually, select **Actions → CI → Run workflow** on the desired branch.
 
 ## Redis in tests

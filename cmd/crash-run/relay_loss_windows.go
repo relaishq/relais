@@ -7,6 +7,6 @@ import (
 	"time"
 )
 
-func runRelayLossTrials(context.Context, *clusterprocess.Manager, string, string, string, string, int, time.Duration) error {
+func runRelayLossTrials(context.Context, *clusterprocess.Manager, string, string, string, string, int, time.Duration, bool) error {
 	return processidentity.ErrUnsupported
 }

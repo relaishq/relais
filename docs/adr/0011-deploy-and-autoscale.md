@@ -8,16 +8,23 @@ ADR 0017 amends the store boundary in §4. The reference deployment keeps the
 full guarantee (ADR 0017 §1). Deployments at ADR 0017's weaker level are outside this ADR's supported safety claims. They do not relax
 the reference deployment's store requirements.
 
+**Amended 2026-11-23 by [ADR 0016](0016-relay-change-ice-restart.md).**
+ADR 0016 selects several relay slots and caller ICE restart for relay-host
+recovery. Section 3 and implementation steps 6 and 11 now use that path.
+The earlier stable-address host-replacement experiment is superseded.
+
 ## Owner summary
 
 - AWS creates Relais in the customer's own account from a public link.
 - The default preview keeps four machines and two database nodes running with no calls. The optional resilience profile uses six machines and two database nodes.
 - Two workers can survive one worker crash at the validated load. After that crash, there is no destination for a further move. A worker rollout has no protection from another worker failure.
 - One machine runs control and the HTTPS front end. They share a failure. Restarted control must manage existing calls before we publish the link.
-- A failed relay machine drops calls in the preview. Test browser recovery early, then choose how relay replacement will work.
+- A single-relay preview loses calls when its relay host fails. Production
+  relay recovery uses several slots and ICE restart, as ADR 0016 specifies.
 - The database must keep every confirmed call-ownership write. The usual setting can lose recent writes and leave two workers thinking they own a call.
 - Ship alerts, an outside test call, a safe support report, upgrade and rollback checks, and clear setup and cleanup limits with the preview.
-- Add automatic scaling only after the fixed preview works for real users and the relay experiment has a result.
+- Add automatic scaling only after the fixed preview works for real users
+  and the ADR 0016 relay recovery gates pass.
 - The preview trusts its private network. Internal servers must prove their identity to each other before general release.
 - The owner approved the direction and order only. Each cloud test needs separate approval and a cost cap.
 
@@ -204,62 +211,30 @@ completion; automation still takes measured time to move calls.
 measured heterogeneous costs invalidate calls as a proxy, startup tails exhaust the burst reserve, or trace replay shows lower-cost
 settings meet the same fault gates.
 
-## 3. Relay availability in explicit phases
+## 3. Relay availability through several slots and ICE restart
 
-**Recommendation:** test fixed Elastic IP plus a movable secondary network interface (ENI) as phase B; choose production phase B or multi-relay from slice 6 before ASG work. Keep private UDP and HTTP
-addresses stable too. EIP is regional/border-group scoped [E9]; an ENI moves only within its AZ and carries its IP attributes [E10].
-This is a bounded first-cloud design, not an AZ-availability solution. Keep worker crypto state and caller's advertised candidate
-unchanged.
+**Chosen path (amendment 2026-11-23):**
+[ADR 0016](0016-relay-change-ice-restart.md) replaces the earlier phase-B
+stable-address host-replacement proposal. Each relay slot keeps its own public
+UDP address, private leg, private HTTP endpoint and relay lease key. A
+same-host standby can still take over that slot under ADR 0004.
 
-| Option | Evidence and consequence |
-| --- | --- |
-| EIP alone | Preserves public candidate, but workers parse and retain a literal private relay address at startup (`pkg/workerapp/app.go`, `pkg/mediaworker/relayleg.go`). A public-IP move cannot repair that path. |
-| EIP + secondary ENI | Preserves both paths within one AZ. Requires exclusive cloud host fencing, attachment sequencing, network configuration and a new cross-host relay recovery authority. Phase-B candidate; production choice follows the early experiment. |
-| EIP + secondary private IP | Lighter same-subnet/AZ alternative: reassign only the private service IP and reconcile its EIP mapping [E25]. Still needs host fencing, source routing, lease transition and both-leg tests. Compare attachment/mapping latency before choosing. |
-| UDP NLB | UDP flow idle expiry is **120 s** [E11], but default unhealthy-target connection termination allows rerouting after health-check detection [E26]; it does not wait for idle expiry. Client IP is preserved [E12]. The successor can still receive RTP before STUN with no restored route. |
-| Global Accelerator | Phase-C candidate, not live-flow failover: UDP idle timeout is **30 s**; established traffic stays on an unhealthy endpoint until idle/new flow [E27]. Continuous RTP can prevent failover. Custom routing has no health failover [E28]; fixed and transfer-premium charges apply [E29]. |
-| Several relay candidates / ICE restart | Potential AZ recovery, but candidates alone do not supply failover: RFC 8445 §8.1.1 requires an ICE restart to nominate another pair after nomination [E39]. Multi-relay needs worker return routing and tested client signaling. |
+Control takes repeated `-relay name=http://address` flags. Each name equals
+that relay's `-relay-slot` and `-relay-lease` key. With several entries, control
+configures the relay set and runs ADR 0016's existing loss rule. One entry
+keeps legacy behavior without a relay set. See [control flags](../deploy.md).
 
-An NLB does not replicate authenticated routes, holds or rings. A relay replacement must restore current-owner routes before serving
-and regain private worker registrations, preserving original consent deadlines (ADR 0003). Missing evidence waits for authenticated
-STUN; ordinary media cannot invent consent. NLB health checks/deregistration do not prove ICE continuity, and node-specific
-front-end addresses complicate the single-candidate contract. Do not call it transparent HA.
+A lost relay host moves its calls to an already-running slot at a different
+address. The caller restarts ICE through signaling. The worker fences the old
+path; DTLS and SRTP state continue. ADR 0016 defines the 2 s reachable lease
+observation, retry and rollback rules, confirmation evidence and the 5 s
+per-call recovery target. A second warm slot and a restart-capable caller are
+required. This is a target, not a new deployment measurement.
 
-**Phase A — template preview and process deploy.** One relay host runs the ADR 0004 active and same-host standby under a supervisor.
-Stage the compatible new binary as standby, stop active, observe changed instance/epoch and restored routes, then replenish standby.
-This replaces a process without waiting for calls to end. Existing single-call loopback standby evidence has gaps below **1 s**
-([guarantees](../guarantees.md#same-host-standby-relay)); loaded AWS process-deploy gap is **NOT-RUN**, not a subsecond promise.
-Ring/hold loss remains. Host failure is an outage with no recovery bound in this phase; do not auto-reuse another host's same-host
-lease.
-
-**Phase B candidate — automated same-AZ host replacement.** If selected by the early experiment, maintain a warm replacement host. Serialize an operation: confirm the old instance
-stopped/terminated through authoritative cloud state, move the dedicated ENI/EIP, configure source routing, authorize the new host
-scope, restore routes and register workers. Verify both media legs. Never copy `-host-id` across machines, erase fencing
-speculatively, or treat an unreachable predecessor as dead. A new cloud-fenced lease transition must preserve epoch history and
-reject stale operations; ADR 0004 deliberately refuses foreign known hosts today. Planned host updates use the same sequence without
-waiting for calls to end. With uncertain fencing or AWS API replies, retain the outage and reconcile; never activate a second
-forwarder.
-
-Expected gap is detection + cloud fencing + detach/attach + socket/route restore + worker registration, with consent recovery added
-for missing routes. It may be seconds or longer; there is **no measured cloud bound** and no assertion that existing ICE consent
-survives. Measure restart, frozen host, lost cloud replies, failback and mixed failures with long-lived browser and driver calls. If
-fencing and attachment cannot finish inside the observed consent tolerance, **stop this path** and return an owner decision between
-an NLB/multi-relay design and an explicit reconnect contract.
-Before ASG work, use free Linux namespace/browser trials to vary relay-move delay and record consent, selected path, decrypted gaps and restart.
-RFC 7675 §5.1 expires consent **30 s** after the last valid response; late responses cannot restore it. New credentials via ICE restart/new
-session are required on that path [E38]. This is a protocol limit, not browser timing evidence. Compare phase B with multi-relay/restart;
-choose production from the results. Local trials cannot measure cloud fencing/ENI tails; needed cloud runs each require approval/cap.
-
-**Phase C — AZ survival, deferred.** ENIs cannot move across AZs. An EIP reassociation plus runtime private-leg rebinding, or
-multiple relays behind tested ingress/candidates, needs a separate decision with phase-B evidence. Include Global Accelerator in
-that comparison without treating health routing as established-flow recovery. No regional/AZ failure claim is included here.
-
-Before README can say “forget the infrastructure,” pass paid, loaded create/update/rollback, worker scaling, controller replacement,
-store failover and relay host-replacement runs with published gap/consent bounds, alerts and cleanup. Qualify the supported failure
-domain as one AZ for the relay. An unqualified AZ-resilient claim also needs phase C. Do not edit README during this ADR. **Main
-tradeoff:** simplest stable-address host experiment, but cloud fencing is slow/uncertain and one AZ remains a failure domain.
-**Change this if:** phase B misses consent or availability objectives, or customers need AZ survival; then fund the
-multi-relay/ingress design before a production claim.
+The single-relay preview still has no relay-host recovery bound. Neither this
+amendment nor local fault drills prove a deployment's failure-domain survival.
+Before a production claim, run ADR 0016's loaded recovery and confirmation
+gates in that deployment and publish the measured gaps and failure scope.
 
 ## 4. One preview control process and a durable managed store
 
@@ -436,11 +411,12 @@ charges. Alerts alone do not cap spend. The template precedes full automation; m
    supported region/version matrix, and teardown instructions listing retained resources and continuing charges.
    If ElastiCache fails, test MemoryDB under another approval/cap. Publish only after these gates pass;
    retain preview limits and collect real-user fixed-pool evidence.
-6. **Early relay replacement feasibility and production choice.** Blockers: 3, 4. **Free first**: bounded
-   Linux namespace/browser trials move relay addresses, vary outage around consent expiry, and record
-   authenticated consent, selected path, decrypted gaps and ICE restart. Compare phase B with multi-relay;
-   choose and record the production approach before ASG work. Cloud fencing/IP movement is not proven
-   by local trials; each needed cloud feasibility run is **paid with separate approval/cap**.
+6. **Relay recovery feasibility on the chosen path.** Blockers: 3, 4.
+   [ADR 0016](0016-relay-change-ice-restart.md) selects several slots and ICE
+   restart. Run its bounded local caller and browser gates first: lose a slot,
+   verify both legs, consent, decoded recovery, zero decryption failures and
+   zero duplicate media. Validate the chosen path before automatic scaling.
+   Deployment-specific feasibility runs need separate approval and a cap.
 7. **Dynamic registration and ASG lifecycle implementation.** Blockers: 5, 6 and fixed-pool preview
    success with real users. Build authenticated registration, ASG template variant, EventBridge/SQS
    hooks, coordinator deployment/IAM and retention simulator. Demo duplicate/lost events and failed
@@ -455,9 +431,11 @@ charges. Alerts alone do not cap spend. The template precedes full automation; m
 10. **Conditional warm passive control.** Blockers: 4, 5 and measured failure of the 5 s restart target.
     Prove authority generations and uncertain-operation handover locally. **Free first; each cloud
     fault/handover run is paid with approval/cap.** Skip if single-instance recovery suffices.
-11. **Production relay resilience.** Blockers: 5, 6 and its recorded production choice. Implement the
-    chosen cloud-fenced same-AZ transition or multi-relay/restart path; verify both legs, consent and lost replies.
-    **Free checks first; cloud acceptance paid with approval/cap per run.** Respect the early experiment's result.
+11. **Production relay resilience.** Blockers: 5, 6. Implement and validate
+    [ADR 0016](0016-relay-change-ice-restart.md)'s chosen several-slot and ICE
+    restart path. Keep a second slot running, and verify both legs, consent,
+    confirmation, retries and lost replies. Run free local checks first;
+    deployment acceptance needs separate approval and a cap per run.
 12. **Release evidence and claim gate.** Blockers: 8, 9, 11; 10 only if selected. Join evidence, monthly
     idle bill, utilisation break-even, dated tariffs and supported failure domains. **Free from artifacts;
     extra cloud/soak runs each need approval/cap.** No infrastructure-free or cheaper-than-hosted claim before its evidence gate passes.

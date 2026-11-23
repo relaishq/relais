@@ -15,6 +15,12 @@ The [install guide](install.md) provides `start.sh` and `stop.sh` for this full
 loopback topology. The manual recipe below is an alternative; do not run both
 at once.
 
+`start.sh` starts two relay slots: r1 uses public UDP 25780, private leg 25781
+and HTTP 25700; r2 uses public UDP 25782, private leg 25783 and HTTP 25703.
+It passes both named relay URLs to control. The manual recipe below keeps one
+relay and legacy control behavior. Each relay always has one public UDP
+address; a caller uses one slot at a time.
+
 This loopback setup is for a trusted development machine. It is not a public
 production deployment. Install Go 1.27+ and `redis-server` on PATH with
 `brew install redis` or `sudo apt install redis-server`, then run `make build`.
@@ -24,7 +30,7 @@ free; choose a different set if needed. Never use Redis port **6379**.
 | Process | Listener | Purpose |
 | --- | --- | --- |
 | Redis | TCP 16380 | Dedicated disposable session and frame store |
-| Relay | UDP 25780 | Caller media; the one public media port in a deployment |
+| Relay | UDP 25780 | Caller media; one public media address per relay |
 | Relay | UDP 25781; HTTP 25700 | Private worker leg and control |
 | Worker w1 | UDP 25711; HTTP 25701 | Private media and coordination |
 | Worker w2 | UDP 25712; HTTP 25702 | Private media and coordination |
@@ -358,14 +364,26 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   handler wait; the placement mark always applies. When set, it must be greater
   than 0 and less than `-drain-timeout`, or startup fails. Use a measured loaded move round plus
   mark time and headroom; see [the measurement procedure](dev/drain-quiescence.md).
-- `relais-control`: `-http`, `-relay` (relay control URL), and a repeated
-  `-worker name=http://worker-address` for each worker. `-worker-call-cap` sets
+- `relais-control`: `-http`, `-relay URL` for one relay, or repeated
+  `-relay name=http://relay-address` for several relay slots. A single entry
+  keeps legacy behavior without a relay set. With several entries, each name
+  must equal its relay's `-relay-slot` and `-relay-lease` key. Each relay has
+  its own public UDP, private UDP leg and private HTTP address. Control
+  discovers those UDP addresses from each relay's private status; all listed
+  relays must be reachable then. It configures workers and monitors slot
+  leases for the [ADR 0016](adr/0016-relay-change-ice-restart.md) loss rule.
+  For example: `-relay r1=http://127.0.0.1:25700` and
+  `-relay r2=http://127.0.0.1:25703`. `RELAIS_RELAY_URL` remains the single URL
+  fallback when no `-relay` flag is supplied; flags replace that fallback.
+  Use repeated `-worker name=http://worker-address` flags for workers.
+  `-worker-call-cap` sets
   one hard budget per worker: live calls plus incoming reservations. Default 0
   preserves unlimited admission. Negative values and malformed/duplicate worker
   entries fail startup. Each process prints one JSON listener-readiness line
   with its PID and bound addresses; ephemeral loopback ports are the defaults.
-  Control listens even if a listed worker or the relay is down. Fixed worker
-  rebuild status requests have a 250 ms deadline and run in parallel, once per
+  With one relay, control listens even if that relay is down. Listed workers
+  may be down in either mode. Fixed worker rebuild status requests have a
+  250 ms deadline and run in parallel, once per
   worker per attempt. A saved worker that misses that deadline has unknown
   liveness (`liveness_unknown: true` in control status), rather than being
   declared dead. Placement stays pending until it heartbeats. The normal

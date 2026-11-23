@@ -45,9 +45,12 @@ echoed video and audio; use headphones for the synthetic tone.
 The Start click also unlocks Chrome's audio autoplay policy. Keep the tab
 visible for presentation-gap measurements. This demo requires no bundler or CDN.
 
-The launcher starts its own throwaway Redis, one relay, one control plane and
+The launcher starts its own throwaway Redis, two relays, one control plane and
 **three workers as separate processes**. By default it binds HTTP and media to loopback
-and refuses Redis port **6379**. `make demo` continues to run the older
+and refuses Redis port **6379**. Each relay has distinct public UDP, private
+leg and HTTP ports. Control receives `-relay r1=URL -relay r2=URL`; each relay
+uses the matching slot and lease key. A caller still uses one public relay
+address at a time. `make demo` continues to run the older
 shared-socket page. The two demos use the same default HTTP port, so run one at
 a time or override the cluster address:
 

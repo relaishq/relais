@@ -122,7 +122,13 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		ready, err := readyChild(startup, child)
 		return child, ready, err
 	}
-	_, relay, err := start(ctx, "relay", processEnv("", addr, prefix, false), append([]string{filepath.Join(bin, "relais-relay")}, relayArgs(cfg)...)...)
+	relayFlags := append(relayArgs(cfg), "-relay-lease", "r1", "-relay-slot", "r1")
+	_, relay, err := start(ctx, "relay", processEnv("", addr, prefix, false), append([]string{filepath.Join(bin, "relais-relay")}, relayFlags...)...)
+	if err != nil {
+		return nil, err
+	}
+	secondFlags := append(relayArgs(cfg), "-relay-lease", "r2", "-relay-slot", "r2")
+	_, secondRelay, err := start(ctx, "relay-r2", processEnv("", addr, prefix, false), append([]string{filepath.Join(bin, "relais-relay")}, secondFlags...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +156,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		}
 		return &workerProcess{child: child, URL: ready.HTTP}, nil
 	}
-	args := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relay.HTTP, "-demo-register"}
+	args := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", "r1=" + relay.HTTP, "-relay", "r2=" + secondRelay.HTTP, "-demo-register"}
 	for i := 0; i < 3; i++ {
 		name := fmt.Sprintf("%d", i)
 		worker, err := d.spawn(ctx, name)

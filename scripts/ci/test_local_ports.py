@@ -12,5 +12,5 @@ class LocalPorts(unittest.TestCase):
         install_base = int(re.search(r"get\('PORT_BASE', '(\d+)'\)", install).group(1))
         self.assertEqual(base, install_base)
         self.assertGreater(base, 1024)
-        self.assertLess(base + 81, 32768)
-        self.assertTrue(set(range(base, base + 82)).isdisjoint({6379, *range(7000, 7006)}))
+        self.assertLess(base + 83, 32768)
+        self.assertTrue(set(range(base, base + 84)).isdisjoint({6379, *range(7000, 7006)}))
