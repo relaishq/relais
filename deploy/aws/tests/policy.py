@@ -79,6 +79,7 @@ def check_restart(role, text):
     if role in ('worker', 'control', 'signal'):
         assert service['Restart'] == 'on-failure', role + ' must restart failures only'
         assert service['RestartSec'] == '5s', role + ' must delay each retry'
+        assert service['RestartPreventExitStatus'] == '243 78', role + ' must stop credential and launcher refusals'
         assert unit['Unit']['StartLimitIntervalSec'] == '0', role + ' must keep retrying'
     else:
         assert service['Restart'] == 'no', role + ' must preserve standby fencing'
@@ -96,7 +97,9 @@ def check(template):
                     'IPAddressDeny=169.254.169.254/32', 'UMask=0077'}
         assert required <= set(fields), role + ' unit weakened'
         check_restart(role, text)
-        for key in ('User', 'Group', 'ExecStart', 'Restart', 'NoNewPrivileges', 'ProtectSystem', 'ProtectHome', 'CapabilityBoundingSet', 'IPAddressDeny', 'UMask'):
+        for key in ('User', 'Group', 'ExecStart', 'Restart', 'RestartPreventExitStatus', 'NoNewPrivileges', 'ProtectSystem', 'ProtectHome', 'CapabilityBoundingSet', 'IPAddressDeny', 'UMask'):
+            if key == 'RestartPreventExitStatus' and role in ('relay', 'relay-standby'):
+                continue
             assert sum(line.startswith(key + '=') for line in fields) == 1, role + ' duplicate ' + key
         expected_files = ['EnvironmentFile=/etc/relais/node.env']
         if role != 'signal':
@@ -360,6 +363,9 @@ def regression_tests(template):
         text = (ROOT / 'units' / ('relais-' + role + '.service')).read_text()
         bad = [text.replace('Restart=on-failure', 'Restart=always'),
                text.replace('RestartSec=5s', 'RestartSec=0'),
+               text.replace('RestartPreventExitStatus=243 78\n', ''),
+               text.replace('RestartPreventExitStatus=243 78', 'RestartPreventExitStatus=242 78'),
+               text.replace('RestartPreventExitStatus=243 78', 'RestartPreventExitStatus=243'),
                text.replace('StartLimitIntervalSec=0', 'StartLimitIntervalSec=60')] if role in ('worker', 'control', 'signal') else [text.replace('Restart=no', 'Restart=on-failure')]
         for changed in bad:
             try:
@@ -367,7 +373,7 @@ def regression_tests(template):
             except (AssertionError, KeyError):
                 continue
             raise AssertionError('restart mutation escaped detection: ' + role)
-    print('PASS: 11 unsafe service restart mutations refused')
+    print('PASS: 20 unsafe service restart mutations refused')
     for token in ('allcommands','allkeys','%RW~*','~relais:*','+flushall'):
         mutations.append(('relay_rejects_' + token, lambda t, token=token: t['Resources']['RelayStoreUser']['Properties'].update(AccessString=t['Resources']['RelayStoreUser']['Properties']['AccessString']+' '+token)))
     for token in ('+@admin','+flushall +config'):

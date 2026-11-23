@@ -314,12 +314,20 @@ The service restart policy is deliberately different by role:
 | Signaling | `Restart=on-failure`, five-second delay | Restore the frontend. Call ownership and recovery remain with control. |
 | Relay and standby | `Restart=no` | Preserve ADR 0004's bounded same-host fencing and takeover model. |
 
-The three restarting units disable the start-rate limit. Every failed attempt
-waits five seconds; a temporary store outage must not exhaust retries and leave
+The three restarting units disable the start-rate limit. Every retry waits
+five seconds; a temporary store outage must not exhaust retries and leave
 the service down. This is a fixed five-second delay with unlimited retries.
 The explicit `ImageId` parameter does not pin a minimum systemd version of 254,
 so the units do not use `RestartSteps` or `RestartMaxDelaySec`. A flapping
 worker is re-admitted each cycle; there is no quarantine.
+`RestartPreventExitStatus=243 78` keeps credential and launcher refusals failed
+for operator repair. Code 243 is the service manager's `EXIT_CREDENTIALS`:
+credential setup failed before the application started. Code 78 (`EX_CONFIG`)
+is the launcher's explicit unknown-component refusal. The launcher uses this
+distinct code because code 2 also covers Go panics and argument errors. Codes
+1 and 2 remain retryable; code 1 includes temporary startup store failures.
+Boot-only download, preparation and readiness scripts have their own failures;
+their exit codes are not application-unit restart exclusions.
 A clean exit or explicit service stop stays stopped. Enabled services start
 again on host boot after credential preparation succeeds.
 
@@ -396,6 +404,15 @@ dial-out `Replace` path.
 retry and clean-stop behavior. The opt-in `TestWorkerRestartProcessDrill` runs
 two real-process cycles with `RELAIS_TEST_WORKER_RESTART=1` and a dedicated
 `RELAIS_TEST_REDIS_ADDR` after building the binaries.
+
+The operator rehearsal's deliberate worker faults test takeover while the
+worker stays down. Before SIGKILL, the driver installs a runtime-only
+`Restart=no` drop-in and verifies the effective policy. It keeps that override
+through takeover and consent checks. Explicit `worker-start` removes only that
+drop-in, verifies `Restart=on-failure`, and starts the worker. An unconfirmed
+fault does not trigger automatic restoration. This preserves the crash signal
+and its timing bracket; it does not turn the fault into a graceful drain. Normal
+service operation and the repeated-crash drill retain automatic restart.
 
 ### Compatibility gate before upgrade or rollback
 

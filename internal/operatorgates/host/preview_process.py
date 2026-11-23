@@ -19,6 +19,23 @@ def command(args):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=30).stdout.strip()
 
 
+WORKER_RESTART_OVERRIDE = pathlib.Path("/run/systemd/system/relais-worker.service.d/90-operator-fault.conf")
+
+
+def worker_restart(enabled):
+    # Keep faulted workers down through takeover/consent; worker-start restores
+    # the product policy. No automatic restoration follows an uncertain fault.
+    if enabled:
+        WORKER_RESTART_OVERRIDE.unlink(missing_ok=True)
+    else:
+        WORKER_RESTART_OVERRIDE.parent.mkdir(parents=True, exist_ok=True)
+        WORKER_RESTART_OVERRIDE.write_text("[Service]\nRestart=no\n")
+    command(["systemctl", "daemon-reload"])
+    expected = "on-failure" if enabled else "no"
+    if command(["systemctl", "show", "--value", "-p", "Restart", "relais-worker.service"]) != expected:
+        raise ValueError("worker restart policy unconfirmed")
+
+
 def http(url, method="GET"):
     # Private literal endpoints are supplied from the captured stack, never URLs
     # from API responses. Do not forward requests through ambient proxies.
@@ -265,6 +282,8 @@ def execute(op, p, evidence=None):
     elif op in ("worker-start", "control-start"):
         role = "worker" if op == "worker-start" else "control"
         configure("relais-" + role + ".service", role, p["targetDir"])
+        if role == "worker":
+            worker_restart(True)
         started = time.monotonic()
         command(["systemctl", "start", "relais-" + role + ".service"])
         if role == "control":
@@ -279,6 +298,8 @@ def execute(op, p, evidence=None):
     elif op in ("control-stop", "worker-down"):
         role = "control" if op == "control-stop" else "worker"
         unit = "relais-" + role + ".service"
+        if op == "worker-down":
+            worker_restart(False)
         old = int(command(["systemctl", "show", "--value", "-p", "MainPID", unit]))
         if old <= 0:
             raise ValueError("missing predecessor")

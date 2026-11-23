@@ -114,6 +114,7 @@ start|restart)
    async) echo failed > "$CONTROL_DIR/state";;
    accepts) echo active > "$CONTROL_DIR/state";;
    unrelated) echo unrelated > "$CONTROL_DIR/state";;
+   restarting) echo activating > "$CONTROL_DIR/state";;
   esac
  fi;;
 reset-failed) :;;
@@ -130,9 +131,9 @@ show)
    case "$1" in
     LoadState) value=$load;;
     ActiveState) if [ "$state" = unrelated ]; then value=failed; else value=$state; fi;;
-    SubState) if [ "$state" = active ]; then value=running; else value=dead; fi;;
+    SubState) if [ "$state" = active ]; then value=running; elif [ "$state" = activating ]; then value=auto-restart; else value=dead; fi;;
     MainPID) if [ "$state" = active ]; then value=42; else value=0; fi;;
-    ExecMainStatus) if [ "$state" = failed ]; then value=243; elif [ "$state" = active ]; then value=0; else value=1; fi;;
+    ExecMainStatus) if [ "$state" = failed ] || [ "$state" = activating ]; then value=243; elif [ "$state" = active ]; then value=0; else value=1; fi;;
     ExecMainCode) value=exited;;
     Result) if [ "$state" = active ]; then value=success; else value=exit-code; fi;;
     *) exit 1;;
@@ -185,6 +186,7 @@ func TestCredentialControlRejectsOtherOutcomesAndRestores(t *testing.T) {
 		{"synchronous", "sync", "", "", ""},
 		{"accepted-missing-credential", "accepts", "", "", "negative-control-refusal-failed"},
 		{"unrelated-exit", "unrelated", "", "", "negative-control-refusal-failed"},
+		{"restart-loop", "restarting", "", "", "negative-control-refusal-failed"},
 		{"missing-input", "async", "", "signal.token", "negative-control-setup-failed"},
 		{"restore-failed", "async", "broken", "", "negative-control-restore-failed"},
 	} {

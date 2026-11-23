@@ -2505,7 +2505,7 @@ Resources:
                   -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-24710}" -advertise-ips "$NODE_PRIVATE" \
                   -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
                 ;;
-              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+              *) echo 'unknown component; start refused' >&2; exit 78 ;;
             esac
           mode: '000755'
         /etc/sysctl.d/60-relais-udp.conf:
@@ -2531,6 +2531,7 @@ Resources:
             EnvironmentFile=/run/relais/control.env
             ExecStart=/opt/relais/boot/run.sh control
             Restart=on-failure
+            RestartPreventExitStatus=243 78
             RestartSec=5s
             TimeoutStopSec=15s
             UMask=0077
@@ -2648,6 +2649,7 @@ Resources:
             LoadCredential=signal.token:/run/relais/signal.token
             ExecStart=/opt/relais/boot/run.sh signal
             Restart=on-failure
+            RestartPreventExitStatus=243 78
             RestartSec=5s
             TimeoutStopSec=15s
             UMask=0077
@@ -2683,6 +2685,7 @@ Resources:
             EnvironmentFile=/run/relais/worker.env
             ExecStart=/opt/relais/boot/run.sh worker
             Restart=on-failure
+            RestartPreventExitStatus=243 78
             RestartSec=5s
             TimeoutStopSec=15s
             UMask=0077

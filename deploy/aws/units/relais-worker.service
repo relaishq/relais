@@ -13,6 +13,7 @@ EnvironmentFile=/etc/relais/node.env
 EnvironmentFile=/run/relais/worker.env
 ExecStart=/opt/relais/boot/run.sh worker
 Restart=on-failure
+RestartPreventExitStatus=243 78
 RestartSec=5s
 TimeoutStopSec=15s
 UMask=0077

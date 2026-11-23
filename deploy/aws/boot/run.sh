@@ -26,5 +26,5 @@ case ${1:-} in
       -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-24710}" -advertise-ips "$NODE_PRIVATE" \
       -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
     ;;
-  *) echo 'unknown component; start refused' >&2; exit 2 ;;
+  *) echo 'unknown component; start refused' >&2; exit 78 ;;
 esac

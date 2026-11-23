@@ -20,6 +20,11 @@ spec.loader.exec_module(boot)
 
 
 class BootContracts(unittest.TestCase):
+    def test_unknown_component_is_a_permanent_launcher_refusal(self):
+        result = subprocess.run(['bash', str(ROOT / 'boot/run.sh'), 'unknown-component'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 78)
+        self.assertIn('unknown component; start refused', result.stderr)
+
     def test_program_access_rejects_owner_only_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
