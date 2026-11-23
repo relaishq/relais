@@ -1230,9 +1230,22 @@ Resources:
       ResourceSignal:
         Count: 1
         Timeout: PT15M
+  WorkerRecoveryTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        MaintenanceOptions:
+          AutoRecovery: default
   WorkerOne:
     Type: AWS::EC2::Instance
     Properties:
+      LaunchTemplate:
+        LaunchTemplateId:
+          Ref: WorkerRecoveryTemplate
+        Version:
+          Fn::GetAtt:
+          - WorkerRecoveryTemplate
+          - LatestVersionNumber
       ImageId:
         Ref: ImageId
       InstanceType:
@@ -1368,6 +1381,13 @@ Resources:
   WorkerTwo:
     Type: AWS::EC2::Instance
     Properties:
+      LaunchTemplate:
+        LaunchTemplateId:
+          Ref: WorkerRecoveryTemplate
+        Version:
+          Fn::GetAtt:
+          - WorkerRecoveryTemplate
+          - LatestVersionNumber
       ImageId:
         Ref: ImageId
       InstanceType:
@@ -1503,6 +1523,13 @@ Resources:
   WorkerThree:
     Type: AWS::EC2::Instance
     Properties:
+      LaunchTemplate:
+        LaunchTemplateId:
+          Ref: WorkerRecoveryTemplate
+        Version:
+          Fn::GetAtt:
+          - WorkerRecoveryTemplate
+          - LatestVersionNumber
       ImageId:
         Ref: ImageId
       InstanceType:
@@ -2494,6 +2521,7 @@ Resources:
             After=network-online.target relais-prepare.service
             Wants=network-online.target
             Requires=relais-prepare.service
+            StartLimitIntervalSec=0
 
             [Service]
             Type=simple
@@ -2502,7 +2530,8 @@ Resources:
             EnvironmentFile=/etc/relais/node.env
             EnvironmentFile=/run/relais/control.env
             ExecStart=/opt/relais/boot/run.sh control
-            Restart=no
+            Restart=on-failure
+            RestartSec=5s
             TimeoutStopSec=15s
             UMask=0077
             NoNewPrivileges=yes
@@ -2609,6 +2638,7 @@ Resources:
             After=network-online.target relais-prepare.service
             Wants=network-online.target
             Requires=relais-prepare.service
+            StartLimitIntervalSec=0
 
             [Service]
             Type=simple
@@ -2617,7 +2647,8 @@ Resources:
             EnvironmentFile=/etc/relais/node.env
             LoadCredential=signal.token:/run/relais/signal.token
             ExecStart=/opt/relais/boot/run.sh signal
-            Restart=no
+            Restart=on-failure
+            RestartSec=5s
             TimeoutStopSec=15s
             UMask=0077
             NoNewPrivileges=yes
@@ -2642,6 +2673,7 @@ Resources:
             After=network-online.target relais-prepare.service
             Wants=network-online.target
             Requires=relais-prepare.service
+            StartLimitIntervalSec=0
 
             [Service]
             Type=simple
@@ -2650,7 +2682,8 @@ Resources:
             EnvironmentFile=/etc/relais/node.env
             EnvironmentFile=/run/relais/worker.env
             ExecStart=/opt/relais/boot/run.sh worker
-            Restart=no
+            Restart=on-failure
+            RestartSec=5s
             TimeoutStopSec=15s
             UMask=0077
             NoNewPrivileges=yes

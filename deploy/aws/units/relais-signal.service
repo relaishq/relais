@@ -3,6 +3,7 @@ Description=Relais preview signal
 After=network-online.target relais-prepare.service
 Wants=network-online.target
 Requires=relais-prepare.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -11,7 +12,8 @@ Group=relais-signal
 EnvironmentFile=/etc/relais/node.env
 LoadCredential=signal.token:/run/relais/signal.token
 ExecStart=/opt/relais/boot/run.sh signal
-Restart=no
+Restart=on-failure
+RestartSec=5s
 TimeoutStopSec=15s
 UMask=0077
 NoNewPrivileges=yes

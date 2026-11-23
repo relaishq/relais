@@ -3,6 +3,7 @@ Description=Relais preview control
 After=network-online.target relais-prepare.service
 Wants=network-online.target
 Requires=relais-prepare.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -11,7 +12,8 @@ Group=relais-control
 EnvironmentFile=/etc/relais/node.env
 EnvironmentFile=/run/relais/control.env
 ExecStart=/opt/relais/boot/run.sh control
-Restart=no
+Restart=on-failure
+RestartSec=5s
 TimeoutStopSec=15s
 UMask=0077
 NoNewPrivileges=yes
