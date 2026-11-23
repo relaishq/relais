@@ -31,8 +31,12 @@ def worker_restart(enabled):
         WORKER_RESTART_OVERRIDE.parent.mkdir(parents=True, exist_ok=True)
         WORKER_RESTART_OVERRIDE.write_text("[Service]\nRestart=no\n")
     command(["systemctl", "daemon-reload"])
-    expected = "on-failure" if enabled else "no"
-    if command(["systemctl", "show", "--value", "-p", "Restart", "relais-worker.service"]) != expected:
+    if enabled:
+        paths = command(["systemctl", "show", "--value", "-p", "DropInPaths", "relais-worker.service"]).split()
+        unconfirmed = str(WORKER_RESTART_OVERRIDE) in paths
+    else:
+        unconfirmed = command(["systemctl", "show", "--value", "-p", "Restart", "relais-worker.service"]) != "no"
+    if unconfirmed:
         raise ValueError("worker restart policy unconfirmed")
 
 

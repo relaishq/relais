@@ -330,6 +330,7 @@ Boot-only download, preparation and readiness scripts have their own failures;
 their exit codes are not application-unit restart exclusions.
 A clean exit or explicit service stop stays stopped. Enabled services start
 again on host boot after credential preparation succeeds.
+During store failover, worker/control exits restart; takeover stays visible.
 
 The waiting relay standby fences and takes over once. An automatic primary
 restart would race that standby; automatically restarting a former standby
@@ -409,8 +410,9 @@ The operator rehearsal's deliberate worker faults test takeover while the
 worker stays down. Before SIGKILL, the driver installs a runtime-only
 `Restart=no` drop-in and verifies the effective policy. It keeps that override
 through takeover and consent checks. Explicit `worker-start` removes only that
-drop-in, verifies `Restart=on-failure`, and starts the worker. An unconfirmed
-fault does not trigger automatic restoration. This preserves the crash signal
+drop-in, verifies its absence from `DropInPaths`, and starts the worker with
+the installed unit's restart policy. An unconfirmed fault does not trigger
+automatic restoration. This preserves the crash signal
 and its timing bracket; it does not turn the fault into a graceful drain. Normal
 service operation and the repeated-crash drill retain automatic restart.
 
