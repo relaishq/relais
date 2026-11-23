@@ -81,10 +81,10 @@ place that names it. The second attempt cannot trigger another automatic retry.
 
 `generator-saturation-flake` and `lease-expired-flake` require a failed schema-1
 report, clean calibration, no latch, no errors or uncertainties, completed
-cleanup, four identified gates and no unexplained failure code or media failure. `generator-saturation-flake` requires
-only `pooled-media-not-passed`, completed procedures and media, generator event
-exclusion with an interval-max violation, at least 10 qualified takeovers and
-fewer than 20 qualified moves. Pooled `excludedEvents` and `saturationOverlaps`
+cleanup, four identified gates and no unexplained failure code or media failure.
+`generator-saturation-flake` requires only `pooled-media-not-passed`, completed
+procedures and media, generator event exclusion with an interval-max violation,
+at least 10 qualified takeovers and fewer than 20 qualified moves. Pooled `excludedEvents` and `saturationOverlaps`
 are not used: both counters are zero in the four historical generator positives,
 whose pooled failure comes from a `clock-coverage-missing` timing row; the rule
 accepts that row only together with generator evidence.
