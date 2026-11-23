@@ -103,9 +103,10 @@ func oracleError(e OracleEvent) error {
 	}
 	return nil
 }
-func (o *procedureOracle) RunID() string               { return o.run }
-func (o *procedureOracle) Registration() *Registration { return o.reg }
-func (o *procedureOracle) Events() []Receipt           { return o.receipts }
+func (o *procedureOracle) RunID() string                      { return o.run }
+func (o *procedureOracle) Registration() *Registration        { return o.reg }
+func (o *procedureOracle) Events() []Receipt                  { return o.receipts }
+func (o *procedureOracle) CheckStopped(context.Context) error { return nil }
 func (o *procedureOracle) Arm(_ context.Context, id string, ids []Identity) error {
 	return oracleError(o.call(".broker.arm", id, ids))
 }

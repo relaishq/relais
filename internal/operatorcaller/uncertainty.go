@@ -9,9 +9,15 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-func uncertainty(f Fence, kind, id, caller, action string, end, now time.Time, rule string) {
+func uncertainty(f Fence, kind, id, caller, action string, end, now time.Time, rule string, reason ...StopReason) {
 	if recorder, ok := f.(operator.UncertaintyRecorder); ok {
 		u := operator.Uncertainty{Kind: kind, RequestID: id, Target: "caller", CallerID: caller, Action: action, Rule: rule}
+		if rule == "caller-stopped" {
+			u.Code = "unavailable"
+			if len(reason) > 0 {
+				u.Code = string(reason[0].Public())
+			}
+		}
 		if !end.IsZero() {
 			u.DeadlineUnixMS = strconv.FormatInt(end.UnixMilli(), 10)
 			u.RemainingMS = end.Sub(now).Milliseconds()
@@ -20,6 +26,10 @@ func uncertainty(f Fence, kind, id, caller, action string, end, now time.Time, r
 	}
 }
 func uncertaintyRule(err error) string {
+	var stopped *StoppedError
+	if errors.As(err, &stopped) {
+		return "caller-stopped"
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"

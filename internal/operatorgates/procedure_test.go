@@ -26,6 +26,7 @@ type testGateBroker struct {
 func (b *testGateBroker) RunID() string                                 { return "test-session" }
 func (b *testGateBroker) Registration() *Registration                   { return &b.reg }
 func (b *testGateBroker) Events() []Receipt                             { return b.events }
+func (b *testGateBroker) CheckStopped(context.Context) error            { return nil }
 func (b *testGateBroker) Arm(context.Context, string, []Identity) error { return nil }
 func (b *testGateBroker) Feed(_ context.Context, _ string, r []Receipt) error {
 	b.events = append(b.events, r...)

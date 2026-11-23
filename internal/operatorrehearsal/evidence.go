@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/callharness"
@@ -230,6 +231,8 @@ func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string
 			if len(lines) > 0 {
 				token = token.(string) + "\n"
 			}
+		} else if evidenceType(typ) == reflect.TypeFor[operatorcaller.StopReason]() {
+			token = string(operatorcaller.StopReason(v).Public())
 		} else if evidenceType(typ) == reflect.TypeFor[time.Time]() {
 			t, e := time.Parse(time.RFC3339Nano, v)
 			if e != nil {

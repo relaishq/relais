@@ -34,6 +34,9 @@ type UncertaintyRecorder interface{ RecordUncertainty(Uncertainty) }
 // Public is also applied when reading a report, so adapter text cannot enter
 // these fields through a manually constructed diagnostic.
 func (u Uncertainty) Public() Uncertainty {
+	if u.Rule == "caller-stopped" && u.Code != "" {
+		u.Code = PublicCallerStopReason(u.Code)
+	}
 	if !publicCode.MatchString(u.Code) {
 		u.Code = ""
 	}
@@ -95,4 +98,13 @@ func (u Uncertainty) Public() Uncertainty {
 		u.Rule = "operation-evidence-unknown"
 	}
 	return u
+}
+
+// PublicCallerStopReason admits only the bridge's fixed caller stop codes.
+func PublicCallerStopReason(reason string) string {
+	switch reason {
+	case "generator-saturation-hard-ceiling", "generator-saturation-sustained", "generator-saturation-budget", "invalid-generator-statistics", "caller-stream-failure", "caller-supervision-failure":
+		return reason
+	}
+	return "unavailable"
 }
