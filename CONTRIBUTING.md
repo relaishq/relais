@@ -4,7 +4,7 @@ Build a focused change, keep error handling and context cancellation explicit,
 and run the checks that exercise it. Concurrent code must be race-free. Add
 integration coverage for new behavior. Open a pull request from your
 feature branch after testing and linting. Contributors can fork and clone
-[relaishq/relais](https://github.com/relaishq/relais); source builds need Go 1.26+.
+[relaishq/relais](https://github.com/relaishq/relais); source builds need Go 1.27+.
 See [CLAUDE.md](CLAUDE.md) for the repository's command contract and
 [CI jobs](docs/dev/ci.md) for the CI contract.
 

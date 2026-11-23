@@ -263,7 +263,6 @@
     "evidence-takeover-recovery-bound",
     "evidence-recursive-duration-contract",
     "evidence-recursive-required-fields",
-    "evidence-required-valid-siblings",
     "evidence-video-object-required",
     "evidence-optional-parent-failure",
     "evidence-custom-decoder-contract",
@@ -2602,14 +2601,6 @@
       "evidence": "killed",
       "test": "TestEveryRequiredEvidenceMember/callharness.Report.Offer/delete",
       "package": "./internal/operatorevidence/judge-src",
-      "guardFingerprint": ""
-    },
-    {
-      "id": "evidence-required-valid-siblings",
-      "owner": "P4",
-      "evidence": "killed",
-      "test": "TestRequiredContractRetainsValidSiblings",
-      "package": "./internal/operatorgates/observe",
       "guardFingerprint": ""
     },
     {

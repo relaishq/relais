@@ -76,7 +76,7 @@ tar -xzf relais_0.3.5_darwin_arm64.tar.gz && cd relais_0.3.5_darwin_arm64
 
 Use `linux` instead of `darwin`, and `amd64` instead of `arm64`, as needed.
 [Installation](docs/install.md) covers checksums and the macOS download
-warning. To build from source instead (Go 1.26+), run
+warning. To build from source instead (Go 1.27+), run
 `git clone https://github.com/relaishq/relais && cd relais && make build`,
 then `./bin/relais-demo -agent=demo`.
 

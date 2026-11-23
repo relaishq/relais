@@ -29,7 +29,7 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 	checkout := flags.String("checkout", ".", "public source checkout")
 	assets := flags.String("assets", "runtime/operator-releases", "verified release directory")
 	output := flags.String("output", "runtime/operator-report", "sanitized output directory")
-	compiler := flags.String("go", "go", "Go 1.26.9 executable")
+	compiler := flags.String("go", "go", "Go 1.27.4 executable")
 	commit := flags.String("commit", "", "full tested commit (PR merge ref when applicable)")
 	head := flags.String("head-commit", "", "PR head commit, separately from tested merge commit")
 	event := flags.String("event", "local", "workflow event")

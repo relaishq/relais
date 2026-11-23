@@ -104,7 +104,7 @@ Relais is a distributed media server. Live WebRTC media runs in the media worker
 
 ## Dependencies
 
-- Go 1.26+ required
+- Go 1.27+ required
 - Uses Pion v4 libraries for real-time communication
 - Redis optional for in-process tests, required for the separate-process topology
 - `make lint` runs the pinned golangci-lint version without installing it

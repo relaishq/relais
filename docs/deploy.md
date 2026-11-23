@@ -16,7 +16,7 @@ loopback topology. The manual recipe below is an alternative; do not run both
 at once.
 
 This loopback setup is for a trusted development machine. It is not a public
-production deployment. Install Go 1.26+ and `redis-server` on PATH with
+production deployment. Install Go 1.27+ and `redis-server` on PATH with
 `brew install redis` or `sudo apt install redis-server`, then run `make build`.
 The commands also use `openssl` and `curl`. Check that the example ports are
 free; choose a different set if needed. Never use Redis port **6379**.
@@ -633,7 +633,7 @@ fenced leases in a shared Redis session store. A fenced lease uses an increasing
 ownership version to reject writes from the old owner. It never requests an ICE restart
 or a second offer/answer exchange.
 
-Prerequisites: Go 1.26+, `redis-server` and `ffmpeg` on PATH. On macOS, Redis
+Prerequisites: Go 1.27+, `redis-server` and `ffmpeg` on PATH. On macOS, Redis
 and ffmpeg can be installed with `brew install redis ffmpeg`. This run is
 part of the full CI matrix (nightly, pushes to `main`, and manual runs). It stays
 out of PR CI.

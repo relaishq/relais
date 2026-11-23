@@ -30,16 +30,10 @@ func DecodeEvidenceLimit(data []byte, value any, limit int) error {
 		return err
 	}
 	contractErr := EvidenceFields(data, reflect.TypeOf(value))
+	// Since Go 1.27, json.Unmarshal decodes later siblings after a field
+	// decoder fails, so readable failure facts survive a malformed member.
+	// TestRequiredContractRetainsValidSiblings pins that behavior.
 	decodeErr := json.Unmarshal(data, value)
-	if decodeErr != nil {
-		// A custom scalar decoder can stop json.Unmarshal before later failure
-		// facts. Decode siblings independently, still using the product types.
-		destination := reflect.ValueOf(value)
-		if destination.Kind() == reflect.Pointer && !destination.IsNil() {
-			destination.Elem().SetZero()
-			decodeEvidenceFacts(data, destination.Elem())
-		}
-	}
 	if contractErr != nil || decodeErr != nil {
 		return &IncompleteEvidence{errors.Join(contractErr, decodeErr)}
 	}
@@ -235,70 +229,4 @@ func EvidenceTypeFields(data json.RawMessage, typ, target reflect.Type) error {
 		return nil
 	}
 	return walk(value, typ)
-}
-
-// Invalid leaves stay zero in this failure-only destination. No partially
-// decoded container is eligible for qualification or relative judgments.
-func decodeEvidenceFacts(raw json.RawMessage, dest reflect.Value) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return
-	}
-	if dest.Kind() == reflect.Pointer {
-		dest.Set(reflect.New(dest.Type().Elem()))
-		decodeEvidenceFacts(raw, dest.Elem())
-		return
-	}
-	if dest.CanAddr() && (dest.Addr().Type().Implements(reflect.TypeFor[json.Unmarshaler]()) || dest.Addr().Type().Implements(reflect.TypeFor[encoding.TextUnmarshaler]())) {
-		copy := reflect.New(dest.Type())
-		if json.Unmarshal(raw, copy.Interface()) == nil {
-			dest.Set(copy.Elem())
-		}
-		return
-	}
-	switch dest.Kind() {
-	case reflect.Struct:
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil {
-			return
-		}
-		for _, member := range evidenceMembers(dest.Type()) {
-			field := dest
-			for _, index := range member.field.Index {
-				if field.Kind() == reflect.Pointer {
-					if field.IsNil() {
-						field.Set(reflect.New(field.Type().Elem()))
-					}
-					field = field.Elem()
-				}
-				field = field.Field(index)
-			}
-			decodeEvidenceFacts(fields[member.name], field)
-		}
-	case reflect.Slice:
-		if dest.Type().Elem().Kind() == reflect.Uint8 {
-			_ = json.Unmarshal(raw, dest.Addr().Interface())
-			return
-		}
-		var values []json.RawMessage
-		if json.Unmarshal(raw, &values) != nil {
-			return
-		}
-		dest.Set(reflect.MakeSlice(dest.Type(), len(values), len(values)))
-		for i, value := range values {
-			decodeEvidenceFacts(value, dest.Index(i))
-		}
-	case reflect.Map:
-		var values map[string]json.RawMessage
-		if json.Unmarshal(raw, &values) != nil || dest.Type().Key().Kind() != reflect.String {
-			return
-		}
-		dest.Set(reflect.MakeMapWithSize(dest.Type(), len(values)))
-		for key, value := range values {
-			entry := reflect.New(dest.Type().Elem()).Elem()
-			decodeEvidenceFacts(value, entry)
-			dest.SetMapIndex(reflect.ValueOf(key).Convert(dest.Type().Key()), entry)
-		}
-	default:
-		_ = json.Unmarshal(raw, dest.Addr().Interface())
-	}
 }

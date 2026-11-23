@@ -2480,16 +2480,6 @@
     "Package": "./internal/operatorevidence/judge-src"
   },
   {
-    "ID": "evidence-required-valid-siblings",
-    "File": "internal/operatorgates/observe/required.go",
-    "Function": "DecodeEvidenceLimit",
-    "Old": "if decodeErr != nil {",
-    "New": "if false && decodeErr != nil {",
-    "Test": "TestRequiredContractRetainsValidSiblings",
-    "Marker": "MUTATION: required-valid-sibling",
-    "Package": "./internal/operatorgates/observe"
-  },
-  {
     "ID": "evidence-video-object-required",
     "Edits": [
       {

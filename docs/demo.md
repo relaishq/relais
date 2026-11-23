@@ -1,6 +1,6 @@
 # Try the browser demos
 
-[Back to Relais](../README.md). Build first with `make build`; install Go 1.26+
+[Back to Relais](../README.md). Build first with `make build`; install Go 1.27+
 and `redis-server` on PATH (`brew install redis` or `sudo apt install redis-server`).
 The multi-process demo needs Redis and never uses port 6379. Current Chrome is
 the tested browser; Safari is untested.
@@ -13,7 +13,7 @@ make demo-agent
 make demo-agent DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201"
 ```
 
-Requires Go 1.26+ and `redis-server`. Open the printed URL in Chrome, click
+Requires Go 1.27+ and `redis-server`. Open the printed URL in Chrome, click
 **Start call**, and keep **Play returned audio** enabled. The worker plays an
 owned ten-note scale: one count per 500 ms of consumed audio. The scale rises
 through counts 1–9; every tenth count plays a two-tone pulse. A high chime
@@ -37,7 +37,7 @@ or tone/count checks; the page marks custom application continuity inconclusive.
 
 ## Browser cluster demo: move, drain and kill
 
-Run `make demo-cluster` with Go 1.26+ and `redis-server` on PATH, then open
+Run `make demo-cluster` with Go 1.27+ and `redis-server` on PATH, then open
 [the demo](http://localhost:9101/?source=test&autostart=0) in current Chrome.
 Click **Start call** to publish a canvas test pattern and synthetic tone, or
 select **Camera with counter and tone (720p)** to publish your camera. The page plays the

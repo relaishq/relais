@@ -64,7 +64,7 @@ func TestPublicImportsAndExternalBuild(t *testing.T) {
 		return os.WriteFile(filepath.Join(dir, path), data, 0600)
 	})
 	require.NoError(t, err)
-	module := "module example.com/voice\n\ngo 1.26.0\n\nrequire github.com/relaishq/relais v0.0.0\n\nreplace github.com/relaishq/relais => " + strconv.Quote(root) + "\n"
+	module := "module example.com/voice\n\ngo 1.27.0\n\nrequire github.com/relaishq/relais v0.0.0\n\nreplace github.com/relaishq/relais => " + strconv.Quote(root) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0600))
 	binary := filepath.Join(dir, "voice-agent")
 	command = exec.CommandContext(ctx, "go", "build", "-mod=mod", "-o", binary, ".")
