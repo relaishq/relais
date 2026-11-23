@@ -46,3 +46,24 @@ func TestWorkerStatusInventoryIsBounded(t *testing.T) {
 	require.True(t, truncated)
 	require.Len(t, inventory, SessionInventoryLimit)
 }
+
+func TestWorkerStatusInstanceChangesAtSameAddress(t *testing.T) {
+	first, err := New(Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = first.Close() })
+	before := first.StatusSnapshot()
+	require.NotEmpty(t, before.Instance)
+	require.Equal(t, before.Instance, first.StatusSnapshot().Instance)
+	require.NoError(t, first.Close())
+	second, err := New(Config{ListenAddr: before.Address.String()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = second.Close() })
+	response := httptest.NewRecorder()
+	second.PrivateHandler().ServeHTTP(response, httptest.NewRequest("GET", "/status", nil))
+	var after WorkerStatus
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &after))
+	require.Equal(t, before.Address, after.Address)
+	require.NotEmpty(t, after.Instance)
+	require.NotEqual(t, before.Instance, after.Instance)
+	require.Equal(t, second.StatusSnapshot().Instance, after.Instance)
+}

@@ -208,7 +208,7 @@ func (p *Plane) controlRecord(ctx context.Context, key string, value any) error 
 	}
 	return p.restart.store.PutControlRecord(ctx, lease, key, data)
 }
-func (p *Plane) saveRegistration(ctx context.Context, name string, addr netip.AddrPort, worker Worker) error {
+func (p *Plane) saveRegistration(ctx context.Context, name string, addr netip.AddrPort, worker Worker, instances ...string) error {
 	if p.restart == nil {
 		return nil
 	}
@@ -224,7 +224,15 @@ func (p *Plane) saveRegistration(ctx context.Context, name string, addr netip.Ad
 		saved.Name, saved.URL, saved.Address = name, "dial-out", addr
 		return p.controlRecord(ctx, "worker:"+name, saved)
 	}
-	return p.controlRecord(ctx, "worker:"+name, FixedWorker{Name: name, URL: remote.URL, Address: addr})
+	saved, err := p.linkRecord(ctx, name)
+	if err != nil {
+		return err
+	}
+	saved.Name, saved.URL, saved.Address = name, remote.URL, addr
+	if len(instances) != 0 && instances[0] != "" {
+		saved.Instance = instances[0]
+	}
+	return p.controlRecord(ctx, "worker:"+name, saved)
 }
 
 // AuthorityChanges wakes relay registration when a lease becomes usable.
@@ -557,6 +565,11 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	old := p.workers[fixed.Name]
 	p.mu.Unlock()
 	if old != nil {
+		if err == nil && fixed.URL != "dial-out" && status.Address == old.addr {
+			if e := p.observeHTTPInstance(ctx, fixed.Name, status.Address, status.Instance, ""); e != nil {
+				return e
+			}
+		}
 		if err == nil && status.Address != old.addr {
 			// A changed private leg is a replacement, never proof its old calls ended.
 			p.mu.Lock()
@@ -584,12 +597,29 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 		address = saved.Address
 		down = true
 	}
-	if err := p.Register(fixed.Name, address, worker); err != nil {
+	instance := status.Instance
+	if saved != nil {
+		instance = saved.Instance
+	}
+	// Older HTTP records have no instance. An empty upgraded process cannot
+	// account for that predecessor's leases, so recover them before rejoining.
+	missingInstanceCalls := false
+	if !down && fixed.URL != "dial-out" && saved != nil && saved.Instance == "" && status.Instance != "" && len(status.Inventory) == 0 {
+		leases, err := p.store.ListByWorker(ctx, address)
+		if err != nil {
+			return err
+		}
+		missingInstanceCalls = len(leases) != 0
+	}
+	if err := p.register(fixed.Name, address, worker, instance); err != nil {
 		return err
 	}
 	log.Printf("worker bootstrap name=%s attempt=1 result=registered", fixed.Name)
 	p.mu.Lock()
 	registration := p.workers[fixed.Name]
+	if missingInstanceCalls {
+		p.workerInstanceDiedLocked(registration)
+	}
 	if registration.observation.observeStatus(status, down, true) {
 		p.loadVersion++
 	}
@@ -606,6 +636,9 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 		}
 	}
 	p.mu.Unlock()
+	if !down && fixed.URL != "dial-out" {
+		return p.observeHTTPInstance(ctx, fixed.Name, address, status.Instance, "")
+	}
 	return nil
 }
 

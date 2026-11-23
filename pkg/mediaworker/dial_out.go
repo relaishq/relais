@@ -107,7 +107,7 @@ func (w *Worker) LinkHandler(handler http.Handler) http.Handler {
 
 // StatusSnapshot carries the same complete inventory as the private status API.
 func (w *Worker) StatusSnapshot() WorkerStatus {
-	status := WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats(), InventoryKnown: true}
+	status := WorkerStatus{Instance: w.instance, Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats(), InventoryKnown: true}
 	status.Draining, status.Inventory, status.Truncated = w.installedSessions()
 	return status
 }

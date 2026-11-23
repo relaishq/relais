@@ -89,6 +89,7 @@ type InstalledSession struct {
 }
 
 type WorkerStatus struct {
+	Instance       string              `json:"instance,omitempty"`
 	Draining       bool                `json:"draining"`
 	Inventory      []InstalledSession  `json:"inventory"`
 	Truncated      bool                `json:"truncated"`
@@ -231,7 +232,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		privateapi.Write(rw, ResumeReply{ID: id})
 	})
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
-		status := WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()}
+		status := WorkerStatus{Instance: w.instance, Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()}
 		status.Draining, status.Inventory, status.Truncated = w.installedSessions()
 		status.InventoryKnown = true
 		if id := r.URL.Query().Get("agent-session"); id != "" {

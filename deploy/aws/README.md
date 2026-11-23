@@ -316,7 +316,10 @@ The service restart policy is deliberately different by role:
 
 The three restarting units disable the start-rate limit. Every failed attempt
 waits five seconds; a temporary store outage must not exhaust retries and leave
-the service down. This is a fixed, bounded retry interval, with no attempt cap.
+the service down. This is a fixed five-second delay with unlimited retries.
+The explicit `ImageId` parameter does not pin a minimum systemd version of 254,
+so the units do not use `RestartSteps` or `RestartMaxDelaySec`. A flapping
+worker is re-admitted each cycle; there is no quarantine.
 A clean exit or explicit service stop stays stopped. Enabled services start
 again on host boot after credential preparation succeeds.
 
@@ -330,16 +333,22 @@ Worker recovery does not wait for a restarted worker: calls on the dead worker
 follow the existing crash takeover path. After that recovery settles, a fresh
 worker at the same name and address rejoins automatically and receives new
 calls. The existing rejoin challenge fences any stale installed sessions.
+HTTP status and heartbeats identify each worker process. A changed instance
+starts crash takeover even if control missed the outage. The new process stays
+ineligible until recovery and the existing rejoin acknowledgement finish.
 
-All worker machines reference `WorkerRecoveryTemplate`, which explicitly sets
-`MaintenanceOptions.AutoRecovery=default`. On supported instance types, this
-enables the platform's automatic recovery after an underlying machine/system
-failure. Recovery keeps the instance identity, private addresses and any
-assigned public addresses. Preview workers have private addresses only;
+Automatic machine recovery is the platform default for all hosts on supported
+instance types. All worker machines reference `WorkerRecoveryTemplate`, which
+makes `MaintenanceOptions.AutoRecovery=default` explicit for workers. It
+recovers an underlying machine/system failure. Recovery keeps the instance
+identity, private addresses and any assigned public addresses. Preview workers
+have private addresses only;
 recovery does not add public addresses. The original enabled services start
 on the recovered machine. Recovery is subject to platform detection, supported
 failure conditions and available capacity; it has no fixed completion bound.
 Custom instance types must support this recovery mode.
+Changing a worker's launch template on an existing stack requires replacement,
+which the fixed private addresses block; this setting applies to new stacks.
 
 This covers worker process crashes and supported failed-machine recovery.
 It does not replace a deleted machine, replace a terminated instance, or
@@ -378,8 +387,11 @@ only child exit; it never sends a replace request or coordinates with control.
 The final `PASS` requires every cycle. A short drill does not prove the existing
 60-second consent gate, systemd behavior or machine recovery.
 
+Preview HTTP workers rejoin through the heartbeat token acknowledgement.
+`TestHTTPWorkerRestartDuringControlDowntimeRequiresTakeover` covers a missed
+crash, takeover and that HTTP rejoin path. The separate
 `TestReturningWorkerAtSameAddressReceivesNewCallsAfterTakeover` pins the
-existing replacement latch without changing control-plane production code.
+dial-out `Replace` path.
 `TestWorkerRestartSupervisorRetriesFailureAndStopsOnCleanExit` checks failure
 retry and clean-stop behavior. The opt-in `TestWorkerRestartProcessDrill` runs
 two real-process cycles with `RELAIS_TEST_WORKER_RESTART=1` and a dedicated

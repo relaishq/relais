@@ -52,10 +52,10 @@ func TestRelayRegistryFindsRejoinsAndLateRegistrationsOnSameInstance(t *testing.
 	require.NoError(t, registry.Sync(ctx, plane, remote))
 	require.Equal(t, []netip.AddrPort{b.addr}, remote.addresses)
 	// Exercise the actual remote rejoin challenge/ACK path.
-	reply, err := plane.remoteHeartbeat("a", HeartbeatRequest{Address: a.addr})
+	reply, err := plane.remoteHeartbeat(context.Background(), "a", HeartbeatRequest{Address: a.addr})
 	require.NoError(t, err)
 	require.NotEmpty(t, reply.Token)
-	_, err = plane.remoteHeartbeat("a", HeartbeatRequest{Address: a.addr, Token: reply.Token})
+	_, err = plane.remoteHeartbeat(context.Background(), "a", HeartbeatRequest{Address: a.addr, Token: reply.Token})
 	require.NoError(t, err)
 	require.NoError(t, registry.Sync(ctx, plane, remote))
 	require.ElementsMatch(t, []netip.AddrPort{a.addr, b.addr}, remote.addresses)

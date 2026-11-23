@@ -158,7 +158,8 @@ def check(template):
     assert template['Outputs']['RelayIPv4']['Value'] == {'Ref': 'RelayAddress'}
     assert template['Outputs']['SignalLoadBalancer']['Value'] == {'Fn::GetAtt': ['SignalAlb', 'DNSName']}
     assert template['Outputs']['StoreConfigurationEndpoint']['Value'] == {'Fn::GetAtt': ['Store', 'ConfigurationEndPoint.Address']}
-    assert not any('AutoScaling' in r['Type'] or 'LifecycleHook' in r['Type'] for r in resources.values())
+    assert not any('AutoScaling' in r['Type'] or 'LifecycleHook' in r['Type'] or
+        r['Type'] in ('AWS::EC2::EC2Fleet', 'AWS::EC2::SpotFleet') for r in resources.values())
     for name, resource in resources.items():
         if name in RETAINED:
             assert resource.get('DeletionPolicy') == 'RetainExceptOnCreate', name
@@ -328,6 +329,8 @@ def regression_tests(template):
     mutations = list(zip(names, mutations))
     mutations += [
         ('no_scaling', lambda t: t['Resources'].update(ScalingPool={'Type': 'AWS::AutoScaling::AutoScalingGroup', 'Properties': {}})),
+        ('no_fleet', lambda t: t['Resources'].update(FleetPool={'Type': 'AWS::EC2::EC2Fleet', 'Properties': {}})),
+        ('no_spot_fleet', lambda t: t['Resources'].update(SpotPool={'Type': 'AWS::EC2::SpotFleet', 'Properties': {}})),
         ('no_managed_role_policy', lambda t: t['Resources']['WorkerRole']['Properties'].update(ManagedPolicyArns=['AdministratorAccess'])),
         ('store_role_group_attached', lambda t: t['Resources']['Store']['Properties'].pop('UserGroupIds')),
         ('no_extra_embedded_secret_file', lambda t: t['Resources']['BootFiles']['Metadata']['RelaisFiles'].update({'/etc/extra': {'content': 'RELAIS_SESSIONSTORE_KEY=literal', 'mode':'000600'}})),
