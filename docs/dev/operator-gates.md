@@ -1482,8 +1482,9 @@ The rehearsal keeps sliding the trailing window until its opening clears this
 prefix and the unchanged selector admits every in-window probe. It retains the
 unchecked warm-up records and all falsifications. The extra 50 s attempt
 allowance funds this recovery; it does not change probe trust or clock ceilings.
-If and only if selection returns `clock-select-updates`, rehearsal can collect
-at most **two extra fresh windows** and select again. Each new window starts
+If and only if selection returns `clock-select-updates` or `clock-select-ceiling`,
+rehearsal can collect at most **two extra fresh windows** and select again.
+Both causes count toward the same two-extra-window limit. Each new window starts
 collection after the failed selection and keeps the full 240 s duration.
 Tracking history and cursors stay intact so the selector checks the real
 predecessor row. The admission start check excludes failed-window updates
@@ -1491,9 +1492,12 @@ from the next selection.
 Helpers start once, and probe falsifications remain sticky across retries.
 `clock-select-probes` keeps re-reading within the same attempt until its
 deadline; it does not start a fresh window. A falsification stays sticky and
-still refuses selection. Every other non-updates selector cause, including
-ceiling, growth, break, leap, coverage and stale failures, stops selection at
-once. A window that fails on updates does not evaluate the ceiling.
+still refuses selection. Every other selector cause, including growth, break,
+leap, coverage and stale failures, stops selection at once. A window that fails
+on updates does not evaluate the ceiling. The final `wrong-time-source` negative
+control restarts chronyd on `shared`; a larger settling interval can exceed the
+control ceiling because `shared` counts twice in that bound. A fresh window
+allows that interval to age out without changing the ceiling or selector policy.
 The standalone paid `clock-admit` path does not gain these retries.
 
 Each attempt has a derived 320 s admission deadline at hosted inputs: the paid
@@ -1502,8 +1506,9 @@ Seed and helper setup stay at ten seconds each. Retries use **unused convergence
 time**, within a combined bound of ten minutes plus one 320 s admission attempt
 after seeding.
 A retry starts only if its full derived admission allowance remains. A late
-convergence can therefore leave no room for retries. Three update failures retain `clock-select-updates` and
-refuse binding. The minimum ten updates, selector, ceilings, eight-second poll
+convergence can therefore leave no room for retries. Three failed windows refuse
+binding and retain the last cause; all failed windows remain in `failedWindows`.
+The minimum ten updates, selector, ceilings, eight-second poll
 and five-poll lease remain unchanged.
 Non-cancelled exits wait through the final attempted deadline +2 s before calibration
 (at most 932 s including seed, convergence and any retries). Parent cancellation skips that wait and returns promptly;
@@ -1513,7 +1518,7 @@ configuration declares hosts and caller unsmeared.
 At these hosted inputs, seed plus one rehearsal attempt is 330 s. The
 standalone paid launcher keeps its 120 s policy, 123 s first read, 150 s
 attempt and 300 s timing-reference limit. Rehearsal's combined post-seed bound
-is **920 s**. Early update failures can fund up to two fresh attempts, but
+is **920 s**. Early update or ceiling failures can fund up to two fresh attempts, but
 three full 320 s attempts cannot extend that bound. A later convergence allows
 fewer retries. Including the ten-second seed and two-second exit guard gives a
 maximum of **15 min 32 s** for this admission phase.

@@ -80,6 +80,16 @@ class FlakeClassification(unittest.TestCase):
         self.assertEqual(classify(clock_select_fixture()),
                          ('clock-select-flake', 'clock-select-ceiling-before-any-gate'))
 
+    def test_clock_selection_three_ceiling_windows(self):
+        report = clock_select_fixture()
+        report['clockSelection']['failedWindows'] = [
+            {'cause': 'clock-select-ceiling'} for _ in range(3)]
+        self.assertEqual(classify(report),
+                         ('clock-select-flake', 'clock-select-ceiling-before-any-gate'))
+        report['clockSelection']['failedWindows'][1]['cause'] = 'clock-select-updates'
+        self.assertEqual(classify(report),
+                         ('not-known', 'clock-selection-windows-not-ceiling'))
+
     def test_clock_selection_requires_only_ceiling_failure_before_any_work(self):
         changes = [
             (('schemaVersion',), True), (('verdict',), 'passed'), (('latched',), True),
