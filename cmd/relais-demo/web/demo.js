@@ -2,7 +2,7 @@
 (() => {
   const M = window.relaisMetrics;
   const A = window.relaisContinuity;
-  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer','voice','ptt','voice-notice','voice-phase','voice-transcript','voice-reply','voice-timing','intro'].map((id) => [id,document.getElementById(id)]));
+  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer','relay-addresses','voice','ptt','voice-notice','voice-phase','voice-transcript','voice-reply','voice-timing','intro'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
   let launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
   let tokenLaunchId = null;
@@ -160,11 +160,14 @@
   function selectedIntro(name) {
     if(name==='voice-agent/v1' && el.intro)el.intro.textContent='Hold the button, speak, then release to hear the voice agent answer. Move keeps the turn going. Kill shows what the worker could not save.';
   }
+  function showRelayAddresses(status) {
+    el['relay-addresses'].textContent=Array.isArray(status.relays) && status.relays.length?status.relays.join(', '):M.UNKNOWN;
+  }
   async function statuses(s) {
     while (active(s)) {
       try {
         const status = await json('/demo/status'); if (!active(s)) return;
-        s.status = status; s.statusError = null;resultsEnabled=!!status.results_enabled;captureAttachToken(status);selectedIntro(status.selected_agent);
+        s.status = status; s.statusError = null;resultsEnabled=!!status.results_enabled;captureAttachToken(status);selectedIntro(status.selected_agent);showRelayAddresses(status);
         if(s.agentMode==='demo' && s.id) {
           try { s.agent=await json(`/demo/agent/${encodeURIComponent(s.id)}`);s.agentError=null; }
           catch(err) {s.agentError=String(err);s.agent=null;}
@@ -546,7 +549,7 @@
   document.addEventListener('pointerdown',()=>{if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);});
   window.addEventListener('pagehide',()=>{if(call?.resource)request(call.resource,{method:'DELETE',keepalive:true}).catch(()=>{});});
   json('/demo/status').then((status)=>{
-    resultsEnabled=!!status.results_enabled;captureAttachToken(status);selectedIntro(status.selected_agent);
+    resultsEnabled=!!status.results_enabled;captureAttachToken(status);selectedIntro(status.selected_agent);showRelayAddresses(status);
     if(['on','off'].includes(status.relayBuffer))pageRelayBuffer=status.relayBuffer;
     render();
   }).catch(()=>{});

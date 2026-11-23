@@ -78,10 +78,13 @@ registrations remain in control-plane status, while `worker_pids` lists only
 live launcher-owned workers. No media or lease policy is changed.
 
 `GET /demo/status` proxies control-plane status and adds `worker_pids`, the
-`pool_size`, `expected_pool_size`, the relay media address, and dedicated Redis address. `POST /demo/kill` and
-`POST /demo/drain` take JSON `{"id":"call-id"}`; an omitted ID is accepted only
-when exactly one call exists. The launcher also forwards call creation, call moves, worker drains and
-`/status`. Creating a call requires `X-Relais-Demo-Launch-ID` with the launch
+`pool_size`, `expected_pool_size`, both relay media addresses (`relays`), and
+the dedicated Redis address. The legacy `relay` field keeps the first address.
+The startup JSON also lists both addresses in `relays`; the page shows them.
+`POST /demo/kill` and `POST /demo/drain` take JSON `{"id":"call-id"}`.
+An omitted ID is accepted only when exactly one call exists. The launcher
+forwards call creation, call moves, worker drains and `/status`. Creating a
+call requires `X-Relais-Demo-Launch-ID` with the launch
 identifier; it is not an unrestricted external signaling endpoint. Use
 [relais-signal](connect-an-app.md) for an app or an external caller. Replacement
 work belongs to the launcher lifetime even if the browser disconnects.

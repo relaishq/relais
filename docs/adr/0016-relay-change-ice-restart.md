@@ -112,7 +112,9 @@ New terms (added to the glossary when this ADR is accepted):
 - **Relay set:** the slots control knows. Control takes `-relay name=URL`,
   repeated. The shipped control command enables the set with several entries.
   One entry, including the old `-relay URL` form, keeps legacy behavior without
-  a configured set (configuration amendment 2026-11-23, #536).
+  a configured set (configuration amendment 2026-11-23, #536). With several
+  entries, every listed relay must answer when control starts; admitting a
+  slot later is #545.
 - **Relay assignment:** per call, stored in the call's existing session hash
   (`{sess:ID}`, next to the lease and the ADR 0003 routes): `relay` (slot ID),
   `relay_gen` (a counter that never goes down) and, during a change,

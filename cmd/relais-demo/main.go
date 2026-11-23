@@ -137,6 +137,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		return nil, err
 	}
 	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, launchID: id, agentName: selectedAgent(cfg), relayBuffer: selectedRelayBuffer(cfg)}
+	d.relays = []string{relay.Media, secondRelay.Media}
 	if err := d.prepareResults(cfg.ResultsDir); err != nil {
 		return nil, err
 	}
@@ -312,7 +313,7 @@ func run() error {
 		fmt.Printf("certificate SHA-256 fingerprint (Chrome): %s\n", chromeFingerprint(fingerprint))
 	}
 	pageURL := scheme + "://" + listener.Addr().String()
-	processrun.Ready(map[string]any{"http": pageURL, "media": d.relay, "redis": d.redis, "certificate_sha256": fingerprint})
+	processrun.Ready(map[string]any{"http": pageURL, "media": d.relay, "relays": d.relays, "redis": d.redis, "certificate_sha256": fingerprint})
 	fmt.Printf("cluster demo: %s\n", demoPageURL(cfg, listener.Addr().String(), d.launchToken))
 	err = processrun.Serve(ctx, listener, d.handler(http.FileServer(http.FS(files))))
 	if errors.Is(err, context.Canceled) {
