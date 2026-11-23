@@ -24,6 +24,33 @@ def lease_fixture():
     return json.loads((FIXTURES / 'lease-preparation-refusal.json').read_text())
 
 
+def clock_select_fixture():
+    # Reduced from operator-rehearsal-44984258994-1.json to the fields the classifier reads.
+    return {
+        'schemaVersion': 1, 'verdict': 'failed', 'latched': False, 'cleanup': True,
+        'errors': ['clock-binding-failed', 'clock-binding-missing'],
+        'failures': ['clock-binding-failed', 'clock-binding-missing', 'calibration-failed',
+                     'gate-count-differs', 'pooled-media-not-passed'],
+        'uncertainties': [], 'gates': [], 'pooledMedia': None, 'clocks': [],
+        'callerTiming': [], 'timingUndecided': [], 'exemptions': [],
+        'clockSelection': {'cause': 'clock-select-ceiling',
+                           'failedWindows': [{'cause': 'clock-select-ceiling'}]},
+        'cpu': {
+            'callerAffinities': [], 'phases': [],
+            'calibration': {
+                'passed': False, 'checks': [], 'causes': ['incomplete-calibration-evidence'],
+                'samples': 0, 'mediaNs': 0, 'flaggedNs': 0, 'flaggedPercent': 0,
+                'peakP99Ns': 0, 'peakMaxNs': 0, 'peakCpuPerGomaxprocs': 0,
+                'decoderDropped': 0, 'decoderErrors': 0, 'completedCalls': 0,
+                'duplicatePackets': 0,
+                'mediaWindow': {'firstVideoSendOffsetMs': 0, 'hangUpOffsetMs': 0,
+                                'flaggedIntervals': [], 'clippedFlaggedMs': 0,
+                                'mediaWindowMs': 0},
+            },
+        },
+    }
+
+
 class SummaryLoaderCharacterization(unittest.TestCase):
     def test_object_and_fixed_failure_notes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -45,6 +72,72 @@ class SummaryLoaderCharacterization(unittest.TestCase):
 
 
 class FlakeClassification(unittest.TestCase):
+    def test_real_clock_selection_report(self):
+        self.assertEqual(classify(fixture('44984258994-1')),
+                         ('clock-select-flake', 'clock-select-ceiling-before-any-gate'))
+
+    def test_clock_selection_ceiling_before_any_gate(self):
+        self.assertEqual(classify(clock_select_fixture()),
+                         ('clock-select-flake', 'clock-select-ceiling-before-any-gate'))
+
+    def test_clock_selection_requires_only_ceiling_failure_before_any_work(self):
+        changes = [
+            (('schemaVersion',), True), (('verdict',), 'passed'), (('latched',), True),
+            (('cleanup',), False), (('gates',), [{'gate': 'rollout'}]),
+            (('errors',), ['clock-binding-failed', 'clock-binding-missing', 'unclassified']),
+            (('errors',), ['clock-binding-failed']),
+            (('failures',), clock_select_fixture()['failures'] + ['unclassified']),
+            (('failures',), clock_select_fixture()['failures'][:-1]),
+            (('failures',), clock_select_fixture()['failures'][:-1] + ['clock-binding-failed']),
+            (('failures',), [{}]),
+            (('clockSelection', 'cause'), 'clock-select-probes'),
+            (('clockSelection', 'failedWindows'), []),
+            (('clockSelection', 'failedWindows'), [None]),
+            (('clockSelection', 'failedWindows'), [{}]),
+            (('clockSelection', 'failedWindows'), [{'cause': 'clock-select-probes'}]),
+            (('clockSelection', 'failedWindows'), [{'cause': 'clock-select-ceiling'},
+                                                  {'cause': 'clock-select-probes'}]),
+            (('uncertainties',), ['unknown']), (('pooledMedia',), {}),
+            (('clocks',), [{}]), (('callerTiming',), [{}]),
+            (('timingUndecided',), [{}]), (('exemptions',), ['unknown']),
+            (('cpu', 'callerAffinities'), ['0,1']), (('cpu', 'phases'), [{}]),
+            (('cpu', 'calibration', 'passed'), True),
+            (('cpu', 'calibration', 'checks'), [{}]),
+            (('cpu', 'calibration', 'causes'), ['unclassified']),
+            (('cpu', 'calibration', 'mediaWindow', 'flaggedIntervals'), [{}]),
+        ]
+        calibration = clock_select_fixture()['cpu']['calibration']
+        for key, value in calibration.items():
+            if type(value) is int:
+                changes.extend((('cpu', 'calibration', key), changed) for changed in (1, False, 0.0))
+        for key, value in calibration['mediaWindow'].items():
+            if type(value) is int:
+                changes.extend((('cpu', 'calibration', 'mediaWindow', key), changed)
+                               for changed in (1, False, 0.0))
+        for path, value in changes:
+            with self.subTest(path=path, value=value):
+                report = clock_select_fixture()
+                owner = report
+                for key in path[:-1]:
+                    owner = owner[key]
+                owner[path[-1]] = value
+                self.assertEqual(classify(report)[0], 'not-known')
+
+    def test_clock_selection_requires_all_evidence_fields(self):
+        def paths(row, prefix=()):
+            for key, value in row.items():
+                yield prefix + (key,)
+                if isinstance(value, dict):
+                    yield from paths(value, prefix + (key,))
+        for path in paths(clock_select_fixture()):
+            with self.subTest(missing=path):
+                report = clock_select_fixture()
+                owner = report
+                for key in path[:-1]:
+                    owner = owner[key]
+                del owner[path[-1]]
+                self.assertEqual(classify(report)[0], 'not-known')
+
     def test_historical_generator_reports(self):
         # The two 4371 reports have the same JSON generator evidence as the
         # 4368 reports. Neither has a JSON precondition refusal.
@@ -256,6 +349,7 @@ if sys.argv[1:3] == ['run', 'rerun']:
             for signature, eligible, rerun_exit, expected_count in (
                     ('generator-saturation-flake', 'true', '0', 3),
                     ('lease-expired-flake', 'true', '0', 3),
+                    ('clock-select-flake', 'true', '0', 3),
                     ('generator-saturation-flake', 'false', '0', 1),
                     ('generator-saturation-flake', 'true', '1', 2),
                     ('not-known', 'true', '0', 0)):
