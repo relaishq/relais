@@ -84,37 +84,39 @@ report, clean calibration, no latch, no errors or uncertainties, completed
 cleanup, four identified gates and no unexplained failure code or media failure.
 `generator-saturation-flake` requires only `pooled-media-not-passed`, completed
 procedures and media, generator event exclusion with an interval-max violation,
-at least 10 qualified takeovers and fewer than 20 qualified moves. Pooled `excludedEvents` and `saturationOverlaps`
-are not used: both counters are zero in the four historical generator positives,
-whose pooled failure comes from a `clock-coverage-missing` timing row; the rule
-accepts that row only together with generator evidence.
-Each media phase inventory must match the exact expected population.
-A trial-count shortage alone is insufficient.
-`lease-expired-flake` requires exactly one gate with `reason: clock-lease-expired`
-and an empty category, refused before its procedure starts. Its media is absent;
-the other three procedures complete, with exactly three CPU phases and matching
-media phase inventories. Later gates must complete, rather than report
-`prior-gate-stopped`. The exact failure set contains that gate's
-`procedure-incomplete`, `media-missing-or-failed`, `procedure-error`, `not-passed`
-and `pooled-media-not-passed`. The missing-media failure is emitted by Go for a
-preparation refusal. A missing lease or incomplete armed inventory alone does
-not prove lease expiry.
+at least 10 qualified takeovers and fewer than 20 qualified moves. Pooled
+`excludedEvents` and `saturationOverlaps` are not used: both counters are zero
+in the four historical generator positives, whose pooled failure comes from a
+`clock-coverage-missing` timing row; the rule accepts that row only together
+with generator evidence. Each media phase inventory must match the exact
+expected population. A trial-count shortage alone is insufficient.
+`lease-expired-flake` requires exactly one gate with `reason:
+clock-lease-expired` and an empty category, refused before its procedure starts.
+Its media is absent; the other three procedures complete, with exactly three CPU
+phases and matching media phase inventories. Later gates must complete, rather
+than report `prior-gate-stopped`. The exact failure set contains that gate's
+`procedure-incomplete`, `media-missing-or-failed`, `procedure-error`,
+`not-passed` and `pooled-media-not-passed`. The missing-media failure is emitted
+by Go for a preparation refusal. A missing lease or incomplete armed inventory
+alone does not prove lease expiry.
 
 `clock-select-flake` requires a failed schema-1 report with no latch, completed
 cleanup and no uncertainties or exemptions. Failed windows must be nonempty.
-Clock selection and every failed window must report `clock-select-ceiling`.
-The errors are exactly `clock-binding-failed` and `clock-binding-missing`. The failure set adds only
-`calibration-failed`, `gate-count-differs` and `pooled-media-not-passed`.
-No gate, clock, caller timing, undecided timing or CPU phase can be present.
-Pooled media must be null, and caller affinities must be empty. Calibration must
-be unstarted: failed with only `incomplete-calibration-evidence`, no checks,
-zero counters and an empty media window. This signature covers clock selection
-failure before any gate or caller work starts.
+Clock selection and every failed window must report `clock-select-ceiling`. The
+errors are exactly `clock-binding-failed` and `clock-binding-missing`. The
+failure set adds only `calibration-failed`, `gate-count-differs` and
+`pooled-media-not-passed`. No gate, clock, caller timing, undecided timing or
+CPU phase can be present. Pooled media must be null, and caller affinities must
+be empty. Calibration must be unstarted: failed with only
+`incomplete-calibration-evidence`, no checks, zero counters and an empty media
+window. This signature covers clock selection failure before any gate or caller
+work starts.
 
-Missing, malformed or unexplained evidence produces `not-known` and no retry. Classification and a fixed reason appear in
-the job summary. Extracted report fixtures live in
-`scripts/ci/fixtures/rehearsal-flakes/`; they include a log-only lease refusal
-that deliberately stays `not-known` because its JSON lacks that cause.
+Missing, malformed or unexplained evidence produces `not-known` and no retry.
+Classification and a fixed reason appear in the job summary. Extracted report
+fixtures live in `scripts/ci/fixtures/rehearsal-flakes/`; they include a
+log-only lease refusal that deliberately stays `not-known` because its JSON
+lacks that cause.
 
 This privileged workflow checks out only default-branch code. It reads the
 triggering run's artifact as untrusted JSON with Python `-I`, outside the trusted
