@@ -20,6 +20,9 @@ upgrade target B. The session verifies the judge binary hash and requires
 `scenario.caller.sourceCommit == scenario.judge.sourceCommit`. Caller manifests,
 registrations and pooled evidence must use that same source; mixed caller
 sources or a different registration source refuse qualification.
+The session does not check `scenario.caller.sha256` against the running caller.
+The caller echoes `PublicSHA` from its manifest, so proof that the caller binary
+is the operator-source build rests on the operator's build binding.
 
 Server identities remain A/B. `scenario.releaseA` and `scenario.releaseB` bind
 the runtime release pins. Fresh host inventories independently prove each

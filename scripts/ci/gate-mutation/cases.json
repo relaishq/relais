@@ -7751,7 +7751,7 @@
     "File": "internal/operatorgates/inventory/inventory.go",
     "Function": "ValidatePins",
     "Old": "identity.SourceCommit != p.Commit",
-    "New": "false",
+    "New": "(i != 0 && identity.SourceCommit != p.Commit)",
     "Test": "TestResourceConfigSourceBinding/release-a",
     "Marker": "MUTATION: resource-source-binding",
     "Package": "./internal/operatorgates"
@@ -7761,10 +7761,20 @@
     "File": "internal/operatorgates/inventory/inventory.go",
     "Function": "ValidatePins",
     "Old": "identity.SourceCommit != p.Commit",
-    "New": "false",
+    "New": "(i != 1 && identity.SourceCommit != p.Commit)",
     "Test": "TestResourceConfigSourceBinding/release-b",
     "Marker": "MUTATION: resource-source-binding",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pool-server-source-unchecked",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "p.DeployedSHA == \"\" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA })",
+    "New": "false && (p.DeployedSHA == \"\" || slices.ContainsFunc(p.Inventory.Participants, func(row releasecompat.Participant) bool { return row.Commit != p.DeployedSHA }))",
+    "Test": "TestPoolRegistrationAndBoundary/empty-deployment",
+    "Marker": "MUTATION: pool-server-source",
+    "Package": "./internal/operatorevidence"
   },
   {
     "ID": "pool-caller-forced-to-deployment",
@@ -7829,9 +7839,9 @@
   {
     "ID": "scenario-release-a-source-tamper",
     "File": "pkg/operator/scenario.go",
-    "Function": "CheckPlan",
-    "Old": "s.Digest != plan",
-    "New": "false",
+    "Function": "ScenarioIdentityBytes",
+    "Old": "s.Digest = \"\"",
+    "New": "s.Digest = \"\"\n\ts.ReleaseA.SourceCommit = \"\"",
     "Test": "TestScenarioBindsIndependentCallerAndServerSources/release-a",
     "Marker": "MUTATION: scenario-source-tamper",
     "Package": "./pkg/operator"
@@ -7839,9 +7849,9 @@
   {
     "ID": "scenario-release-b-source-tamper",
     "File": "pkg/operator/scenario.go",
-    "Function": "CheckPlan",
-    "Old": "s.Digest != plan",
-    "New": "false",
+    "Function": "ScenarioIdentityBytes",
+    "Old": "s.Digest = \"\"",
+    "New": "s.Digest = \"\"\n\ts.ReleaseB.SourceCommit = \"\"",
     "Test": "TestScenarioBindsIndependentCallerAndServerSources/release-b",
     "Marker": "MUTATION: scenario-source-tamper",
     "Package": "./pkg/operator"
@@ -7849,9 +7859,9 @@
   {
     "ID": "scenario-caller-source-tamper",
     "File": "pkg/operator/scenario.go",
-    "Function": "CheckPlan",
-    "Old": "s.Digest != plan",
-    "New": "false",
+    "Function": "ScenarioIdentityBytes",
+    "Old": "s.Digest = \"\"",
+    "New": "s.Digest = \"\"\n\ts.Caller.SourceCommit = \"\"",
     "Test": "TestScenarioBindsIndependentCallerAndServerSources/caller",
     "Marker": "MUTATION: scenario-source-tamper",
     "Package": "./pkg/operator"
@@ -7859,9 +7869,9 @@
   {
     "ID": "scenario-judge-source-tamper",
     "File": "pkg/operator/scenario.go",
-    "Function": "CheckPlan",
-    "Old": "s.Digest != plan",
-    "New": "false",
+    "Function": "ScenarioIdentityBytes",
+    "Old": "s.Digest = \"\"",
+    "New": "s.Digest = \"\"\n\ts.Judge.SourceCommit = \"\"",
     "Test": "TestScenarioBindsIndependentCallerAndServerSources/judge",
     "Marker": "MUTATION: scenario-source-tamper",
     "Package": "./pkg/operator"

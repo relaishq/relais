@@ -93,7 +93,7 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 		return releasecompat.Pool{}, err
 	}
 	if deployedSHA != "" && slices.ContainsFunc(pool.Participants, func(p releasecompat.Participant) bool { return p.Commit != deployedSHA }) {
-		return releasecompat.Pool{}, errors.New("deployed release differs from judge pin")
+		return releasecompat.Pool{}, errors.New("deployed release differs from server pin")
 	}
 	s.mu.Lock()
 	s.inventoryComponents = components
