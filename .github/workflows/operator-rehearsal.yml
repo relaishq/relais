@@ -4,6 +4,12 @@ on:
   pull_request:
     paths: &operator-paths
       - 'cmd/relais-gates/**'
+      - 'cmd/crash-run/**'
+      - 'cmd/relais-relay/**'
+      - 'cmd/relais-control/**'
+      - 'cmd/relais-worker/**'
+      - 'internal/nettopology/**'
+      - 'internal/relayloss/**'
       - 'cmd/relais-load/**'
       - 'internal/operator*/**'
       - 'pkg/operator/**'
@@ -53,7 +59,12 @@ jobs:
         timeout-minutes: 10
         uses: ./.github/actions/ubuntu-packages
         with:
-          packages: ffmpeg chrony
+          packages: ffmpeg chrony iproute2 iptables
+      - name: Build pinned Redis without starting a system service
+        timeout-minutes: 10
+        run: |
+          deploy/aws/tests/install-ci-tools.sh boot "$RUNNER_TEMP/relay-loss-tools"
+          echo "$RUNNER_TEMP/relay-loss-tools/redis-7.0.11/src" >> "$GITHUB_PATH"
       - name: Prepare compiler, modules and gate binary before media
         shell: bash
         run: |
@@ -66,7 +77,7 @@ jobs:
           done
           # Build once for both release-read and rehearsal; a 1 s later rebuild must match byte for byte.
           make operator-rehearsal-reproducible
-          sha256sum bin/relais-gates bin/relais-load | tee "$RUNNER_TEMP/operator-binaries.sha256"
+          sha256sum bin/relais-gates bin/relais-load bin/crash-run bin/relais-relay bin/relais-worker bin/relais-control | tee "$RUNNER_TEMP/operator-binaries.sha256"
           mkdir -p runtime
       - name: Read and verify published releases
         env:
@@ -74,7 +85,7 @@ jobs:
           # scopes it to the public API and removes it before starting children.
           RELAIS_RELEASE_TOKEN: ${{ github.token }}
         run: ./bin/relais-gates rehearse -prepare-only
-      - name: Rehearse four gates with idle caller calibration
+      - name: Rehearse four gates and relay host loss with idle caller calibration
         env:
           TESTED_HEAD: ${{ github.event.pull_request.head.sha }}
           TESTED_EVENT: ${{ github.event_name }}
@@ -85,7 +96,7 @@ jobs:
           # Rehearse with the exact binaries that prepared; never rebuild here.
           sha256sum --strict --check "$RUNNER_TEMP/operator-binaries.sha256"
           make operator-rehearsal-run OPERATOR_REHEARSAL_RUNNER='sudo -n --preserve-env=GOMODCACHE,GOCACHE' \
-            OPERATOR_REHEARSAL_FLAGS="-prepared -head-commit=$TESTED_HEAD -event=$TESTED_EVENT"
+            OPERATOR_REHEARSAL_FLAGS="-prepared -head-commit=$TESTED_HEAD -event=$TESTED_EVENT -redis-server=$RUNNER_TEMP/relay-loss-tools/redis-7.0.11/src/redis-server"
       - name: Make sanitized artifacts available to uploader
         if: always()
         shell: bash

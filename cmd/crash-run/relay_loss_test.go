@@ -118,3 +118,27 @@ func TestResumedRelayFenceRejectsWorkerPacketsDuringObservation(t *testing.T) {
 	require.ErrorContains(t, lossResumedWorkerFence(before, after), "phase=restored-relay-fence")
 	require.ErrorContains(t, lossResumedWorkerFence(before, after), "before=10 after=11")
 }
+
+// Characterize the existing polling deadline before adding rehearsal margin.
+func TestRelayLossWaitPreservesDeadlineAndImmediateSuccess(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, lossWait(ctx, func() bool { return true }))
+		require.Equal(t, time.Duration(0), time.Since(start))
+		require.ErrorIs(t, lossWait(ctx, func() bool { return false }), context.DeadlineExceeded)
+		require.Equal(t, 5*time.Second, time.Since(start))
+	})
+}
+
+func TestRelayLossOperationalMarginKeepsFiveSecondGrade(t *testing.T) {
+	require.Equal(t, 1, (relayLossOptions{}).margin())
+	require.Equal(t, 2, (relayLossOptions{ReportPath: "report.json"}).margin())
+	started := time.Unix(1000, 0)
+	report := &callharness.Report{StartedAt: started, Tracks: []callharness.TrackReport{
+		{Kind: "audio", Packets: 100, LastArrival: 10 * time.Second, MediaGap: 6 * time.Second},
+		{Kind: "video", Packets: 100, LastArrival: 10 * time.Second, MediaGap: time.Second},
+	}}
+	require.ErrorContains(t, relayLossMediaProgress("call-1", report, started.Add(10*time.Second)), "gap=6s")
+}

@@ -7,7 +7,13 @@ The live topology needs
 
 A reviewable [AWS preview template](../deploy/aws/README.md) defines the fixed
 lean and resilience profiles in native CloudFormation. It is tested without an
-AWS account. Single-control restart recovery is tested locally; paid AWS acceptance still blocks public use.
+AWS account. Both profiles have two always-on relay hosts and two stable public
+addresses. The added footprint is one more always-on relay instance and one
+more public address, plus its root volume and network interface. The supported
+failure domain is one relay host lost at a time. A call whose relay and worker
+both die is still lost. The [free host-loss rehearsal](../deploy/aws/README.md#free-relay-host-loss-rehearsal)
+records all eight per-call recovery gaps against the unchanged 5 s budget.
+Single-control restart recovery is tested locally; paid AWS acceptance still blocks public use.
 
 ## One machine
 

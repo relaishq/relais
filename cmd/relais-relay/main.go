@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"time"
@@ -28,6 +30,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	var storeConfig processrun.StoreConfig
 	storeConfig.ConnectionFlags(flag.CommandLine)
 	public := flag.String("media", processrun.Env("RELAIS_RELAY_MEDIA", "127.0.0.1:0"), "public UDP address")
+	advertise := flag.String("advertise-media", "", "caller-visible UDP address behind a static public address mapping; default is the bound media address")
 	leg := flag.String("leg", processrun.Env("RELAIS_RELAY_LEG", "127.0.0.1:0"), "private worker-leg UDP address")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")
 	hold := flag.Duration("hold-timeout", 3*time.Second, "abandoned move backstop")
@@ -70,6 +73,14 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	}
 	if err := validateAddresses(*standby, *public, *leg, *httpAddr); err != nil {
 		return err
+	}
+	var advertised netip.AddrPort
+	if *advertise != "" {
+		var err error
+		advertised, err = netip.ParseAddrPort(*advertise)
+		if err != nil || advertised.Port() == 0 || advertised.Addr().IsUnspecified() || advertised.Addr().IsMulticast() {
+			return errors.New("invalid advertised media address")
+		}
 	}
 	ctx, cancel := processrun.Context()
 	defer cancel()
@@ -120,7 +131,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 		return bindFailed(err)
 	}
 	defer func() { _ = listener.Close() }()
-	r, err := relay.New(relay.Config{SlotID: *slotID, InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold, Buffer: buffer})
+	r, err := relay.New(relay.Config{SlotID: *slotID, InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, AdvertiseAddr: advertised, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold, Buffer: buffer})
 	if err != nil {
 		return bindFailed(err)
 	}

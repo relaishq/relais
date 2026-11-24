@@ -394,7 +394,7 @@ masterauth {self.passwords['admin']}
         original = source.read_text()
         env = dict(self.env)
         signaler = self.image / 'opt/aws/bin/cfn-signal'
-        for name in ('RelayHost', 'WorkerOne', 'ControlHost', 'SignalHost', 'SharedHost'):
+        for name in ('RelayHost', 'RelayTwoHost', 'WorkerOne', 'ControlHost', 'SignalHost', 'SharedHost'):
             image = self.work / ('host-' + name)
             target = image / 'opt/aws/bin/cfn-signal'
             target.parent.mkdir(parents=True); shutil.copy2(signaler, target)
@@ -419,14 +419,17 @@ masterauth {self.passwords['admin']}
         print('PASS: real UserData installs only each host role binaries/units; all executable ancestors searchable')
 
     def node_environment(self, role):
-        instance = resolve(self.template)['RelayHost' if role.startswith('relay') else 'WorkerOne' if role.startswith('worker') else 'SharedHost']
+        instance = resolve(self.template)['RelayTwoHost' if role.startswith('relay-two') else 'RelayHost' if role.startswith('relay') else 'WorkerOne' if role.startswith('worker') else 'SharedHost']
         text = instance['Metadata']['RelaisFiles']['/etc/relais/node.env']['content']
         values = dict(line.split('=', 1) for line in text.splitlines() if line)
         values.update(RELAIS_REDIS_ADDR=self.seed, RELAIS_REDIS_TLS='0', RELAIS_PRIVATE_NETS='10.42.0.0/16',
                       RELAIS_BIN_DIR=str(self.image / 'opt/relais/bin'), NODE_PRIVATE='127.0.0.1',
-                      RELAY_PRIVATE='127.0.0.1', RELAY_PUBLIC='127.0.0.1', CONTROL_PRIVATE='127.0.0.1',
+                      RELAY_PRIVATE='127.0.0.1', RELAY_PUBLIC='127.0.0.1', RELAY_TWO_PRIVATE='127.0.0.1', CONTROL_PRIVATE='127.0.0.1',
                       WORKER_ONE='127.0.0.1', WORKER_TWO='127.0.0.1', WORKER_THREE='', WORKER_CALL_CAP='2')
         values.update({k: str(v) for k, v in self.ports.items()})
+        if role.startswith('relay-two'):
+            for suffix in ('HTTP', 'MEDIA', 'LEG'):
+                values['RELAY_' + suffix + '_PORT'] = str(self.ports['RELAY_TWO_' + suffix + '_PORT'])
         if role == 'worker-two':
             values.update(WORKER_NAME='w2', WORKER_HTTP_PORT=str(self.ports['WORKER_TWO_PORT']), WORKER_MEDIA_PORT=str(self.worker_two_media))
         else:
@@ -434,7 +437,7 @@ masterauth {self.passwords['admin']}
         return values
 
     def service(self, name):
-        role = 'worker' if name.startswith('worker') else name
+        role = 'worker' if name.startswith('worker') else 'relay-standby' if name == 'relay-two-standby' else 'relay' if name == 'relay-two' else name
         unit = (ROOT / 'units' / ('relais-' + role + '.service')).read_text()
         if self.args.mutation == 'unit' and name == 'relay':
             unit += '\n[Service]\nInaccessiblePaths=/opt/relais/bin\n'
@@ -476,7 +479,7 @@ masterauth {self.passwords['admin']}
             self.start(name, shlex.split(command), {**self.env, **environment})
 
     def services(self):
-        names = ['RELAY_MEDIA_PORT', 'RELAY_LEG_PORT', 'RELAY_HTTP_PORT', 'CONTROL_HTTP_PORT', 'WORKER_ONE_PORT', 'WORKER_TWO_PORT', 'SIGNAL_PORT']
+        names = ['RELAY_MEDIA_PORT', 'RELAY_LEG_PORT', 'RELAY_HTTP_PORT', 'RELAY_TWO_MEDIA_PORT', 'RELAY_TWO_LEG_PORT', 'RELAY_TWO_HTTP_PORT', 'CONTROL_HTTP_PORT', 'WORKER_ONE_PORT', 'WORKER_TWO_PORT', 'SIGNAL_PORT']
         self.ports = {name: self.port()[0] for name in names}
         self.worker_one_media, _ = self.port()
         self.worker_two_media, _ = self.port()
@@ -516,7 +519,7 @@ masterauth {self.passwords['admin']}
         self.service('relay')
         self.wait(lambda: urllib.request.urlopen(f'http://127.0.0.1:{self.ports["RELAY_HTTP_PORT"]}/status', timeout=1).status == 200,
                   'primary relay unit')
-        for name in ('relay-standby', 'worker', 'worker-two', 'control', 'signal'):
+        for name in ('relay-standby', 'relay-two', 'relay-two-standby', 'worker', 'worker-two', 'control', 'signal'):
             self.service(name)
         for port in ('WORKER_ONE_PORT', 'WORKER_TWO_PORT'):
             self.wait(lambda: urllib.request.urlopen(f'http://127.0.0.1:{self.ports[port]}/status', timeout=1).status == 200,
@@ -539,7 +542,18 @@ masterauth {self.passwords['admin']}
                 assert subprocess.run(['runuser', '-u', 'relais-' + role, '--', 'test', '-r', '/run/relais/' + role + '.env'], capture_output=True).returncode != 0
 
 
-        print('PASS: same unit ExecStart commands boot relay + standby, two workers, control, signaling')
+        def joined():
+            with urllib.request.urlopen(f'http://127.0.0.1:{self.ports["CONTROL_HTTP_PORT"]}/status', timeout=1) as response:
+                status = json.load(response)
+            slots = status.get('relays', [])
+            return status.get('ready') and {slot['name'] for slot in slots} == {'preview', 'preview-two'} and all(not slot.get('pending') and not slot.get('lost') and not slot.get('error') for slot in slots)
+        self.wait(joined, 'both private relay paths acknowledged by every worker')
+        for prefix in ('RELAY', 'RELAY_TWO'):
+            def relay_workers():
+                with urllib.request.urlopen(f'http://127.0.0.1:{self.ports[prefix + "_HTTP_PORT"]}/status', timeout=1) as response:
+                    return json.load(response)['stats']['Workers'] == 2
+            self.wait(relay_workers, 'both workers registered at ' + prefix)
+        print('PASS: same unit ExecStart commands boot two relays with standbys; every worker joins both private paths')
 
     def get_certificate(self):
         try:
@@ -632,7 +646,7 @@ masterauth {self.passwords['admin']}
             units = {p.name for p in (ROOT / 'units').glob('*.service')} | set(self.units)
             units |= {p.name for p in Path('/etc/systemd/system').glob('relais-*.service')}
             units |= {'relais-test-' + name + '.service' for name in
-                      ('relay', 'relay-standby', 'worker', 'worker-two', 'control', 'signal')}
+                      ('relay', 'relay-standby', 'relay-two', 'relay-two-standby', 'worker', 'worker-two', 'control', 'signal')}
             for unit in sorted(units):
                 capture(['systemctl', 'status', '--no-pager', '--full', unit])
                 capture(['journalctl', '--no-pager', '-u', unit, '--output=cat'])
@@ -672,7 +686,7 @@ masterauth {self.passwords['admin']}
 
     def close(self):
         unit_order = ['relais-test-' + n + '.service' for n in
-                      ('signal', 'worker-two', 'worker', 'control', 'relay-standby', 'relay')]
+                      ('signal', 'worker-two', 'worker', 'control', 'relay-two-standby', 'relay-two', 'relay-standby', 'relay')]
         for unit in unit_order + ['relais-prepare.service']:
             if unit in self.units:
                 subprocess.run(['systemctl', 'stop', unit], capture_output=True, timeout=25)
@@ -680,7 +694,7 @@ masterauth {self.passwords['admin']}
                 log = self.work / (unit + '.log')
                 log.write_bytes(result.stdout + result.stderr)
                 self.logs[unit] = log
-        order = [self.named_children[n] for n in ('caller', 'signal', 'worker-two', 'worker', 'control', 'relay-standby', 'relay')
+        order = [self.named_children[n] for n in ('caller', 'signal', 'worker-two', 'worker', 'control', 'relay-two-standby', 'relay-two', 'relay-standby', 'relay')
                  if n in self.named_children]
         order += [p for p in reversed(self.children) if p not in order]
         for child in order:

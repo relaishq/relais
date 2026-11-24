@@ -25,7 +25,7 @@ import (
 )
 
 type RehearseConfig struct {
-	Checkout, Assets, Output, GoExecutable, Commit, HeadCommit, Event string
+	Checkout, Assets, Output, GoExecutable, RedisExecutable, Commit, HeadCommit, Event string
 }
 
 type rehearsal struct {
@@ -262,6 +262,7 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	// The pinned verdict inputs are final here. The head-caller phase only adds
 	// its own diagnostic section; Evaluate never reads it.
 	report.HeadCaller = r.runHeadCaller(ctx, scenario)
+	report.RelayLoss = r.runRelayLoss(ctx)
 	return report, nil
 }
 func (r *rehearsal) recordSequence(sequence operatorgates.SequenceResult, stops map[operator.Gate]bool) {

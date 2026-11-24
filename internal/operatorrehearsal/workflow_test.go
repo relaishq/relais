@@ -59,7 +59,7 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 	for _, step := range job.Steps {
 		if strings.Contains(step.Run, "make operator-rehearsal") && !strings.Contains(step.Run, "make operator-rehearsal-run ") {
 			builds++
-			recorded = !released && strings.Contains(step.Run, "make operator-rehearsal-reproducible") && strings.Contains(step.Run, `sha256sum bin/relais-gates bin/relais-load | tee "$RUNNER_TEMP/operator-binaries.sha256"`)
+			recorded = !released && strings.Contains(step.Run, "make operator-rehearsal-reproducible") && strings.Contains(step.Run, `sha256sum bin/relais-gates bin/relais-load bin/crash-run bin/relais-relay bin/relais-worker bin/relais-control | tee "$RUNNER_TEMP/operator-binaries.sha256"`)
 		}
 		released = released || strings.Contains(step.Run, "-prepare-only")
 		chowned = chowned || strings.Contains(step.Run, "chown -R") && strings.Contains(step.Run, "runtime/operator-report")
@@ -87,13 +87,13 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		}
 		check := strings.Index(step.Run, `sha256sum --strict --check "$RUNNER_TEMP/operator-binaries.sha256"`)
 		run := strings.Index(step.Run, "make operator-rehearsal-run OPERATOR_REHEARSAL_RUNNER=")
-		execute = execute || released && check >= 0 && run > check && strings.Contains(step.Run, "-prepared")
+		execute = execute || released && check >= 0 && run > check && strings.Contains(step.Run, "-prepared") && strings.Contains(step.Run, "-redis-server=$RUNNER_TEMP/relay-loss-tools/redis-7.0.11/src/redis-server")
 	}
 	if tokens != 1 || uploads != 1 || !execute || summaries != 1 || builds != 1 || !recorded || strings.Contains(string(raw), "secrets.") {
 		t.Fatal(tokens, uploads, execute, summaries, builds, recorded)
 	}
 	paths := w.On["pull_request"].(map[string]any)["paths"].([]any)
-	for _, expected := range []string{"internal/operator*/**", "deploy/aws/**", "cmd/relais-gates/**", "pkg/operator/**", "scripts/ci/gate-mutation/**", ".github/workflows/operator-rehearsal.yml"} {
+	for _, expected := range []string{"cmd/crash-run/**", "cmd/relais-relay/**", "cmd/relais-control/**", "cmd/relais-worker/**", "internal/nettopology/**", "internal/relayloss/**", "internal/operator*/**", "deploy/aws/**", "cmd/relais-gates/**", "pkg/operator/**", "scripts/ci/gate-mutation/**", ".github/workflows/operator-rehearsal.yml"} {
 		found := false
 		for _, p := range paths {
 			found = found || p == expected

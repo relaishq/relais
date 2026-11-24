@@ -954,7 +954,7 @@ workflow-only verification.
 Owner decision, 2026-10-28: the free rehearsal proves that the operator procedures
 complete and that the media evidence contains no known failure. A shared runner
 cannot provide the scheduling isolation needed to settle every media timing
-measurement. Media timing is judged strictly only in the paid run. The pinned
+measurement. Pinned media timing is judged strictly only in the paid run. The pinned
 judge, its thresholds and the paid-run pass rule remain unchanged.
 
 A free rehearsal passes only when every covered procedure completed, every
@@ -1016,6 +1016,22 @@ Every changed file is restored byte-for-byte, affected units must run again,
 and the restored clock must pass the same source check. The ACL control restores
 exact template rules and repeats its positive authenticated probe even after a
 failed negative observation. All hosts are verified again before gates start.
+
+The free run also requires the separate tested-head relay-host-loss procedure.
+It reuses the namespace blackhole from #537 with eight live audio/video calls.
+Both traffic directions on one relay host are dropped, including private paths;
+the surviving relay stays up. `report.json` includes `relayLoss` with all eight
+call gaps and recovery observations. Each gap must be at most 5 s. The driver
+has a 10 s recovery observation limit and a 3-minute outer limit; these are
+operational margins, not relaxed product thresholds. A missing report, unknown
+completion, missing call or over-budget call fails the free run. Its measurements
+are outside the pinned four-phase media pool. See the
+[procedure and limits](../../deploy/aws/README.md#free-relay-host-loss-rehearsal).
+The existing 180-minute job limit is unchanged; the new child can consume at
+most 3 minutes of its remaining reserve. These are configured bounds, not a
+measured CI duration. The summary shows each call's gap even when the procedure
+fails. Local unit tests cover grading; live namespace and AWS execution remain
+separate evidence.
 
 The workflow uploads `runtime/operator-report/report.json`,
 `runtime/operator-report/host-diagnostics.log`,

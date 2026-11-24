@@ -224,6 +224,11 @@ func Load(root fs.FS, c Config) (*Topology, error) {
 		if len(h.Secrets) == 0 {
 			return nil, errors.New("empty-secret-scope")
 		}
+		// The pinned four-gate comparison predates relay sets. Keep its single
+		// relay launcher path; the tested-head netns phase covers host loss.
+		file := h.Metadata.Files["/etc/relais/node.env"]
+		file.Content = strings.ReplaceAll(file.Content, "RELAY_TWO_PRIVATE=10.42.1.10", "RELAY_TWO_PRIVATE=")
+		h.Metadata.Files["/etc/relais/node.env"] = file
 		t.Hosts[slot] = h
 	}
 	// Follow only the store's attached groups; detached resources must not gain

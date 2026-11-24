@@ -825,3 +825,17 @@ func TestBufferBoundsIncludeDerivedHolds(t *testing.T) {
 		})
 	}
 }
+
+func TestAdvertisedAddressRefusesBeforeLeaseAcquisition(t *testing.T) {
+	previousFlags, previousArgs := flag.CommandLine, os.Args
+	defer func() { flag.CommandLine, os.Args = previousFlags, previousArgs }()
+	for _, address := range []string{"invalid", "0.0.0.0:24780", "192.0.2.10:0", "224.0.0.1:24780"} {
+		flag.CommandLine = flag.NewFlagSet("relay", flag.ContinueOnError)
+		os.Args = []string{"relay", "-advertise-media", address}
+		err := runWithLease(func(context.Context, bool, string, relaylease.Config) (commandGuard, error) {
+			t.Fatal("invalid advertised address reached relay fencing")
+			return nil, nil
+		})
+		require.EqualError(t, err, "invalid advertised media address")
+	}
+}

@@ -698,6 +698,7 @@ func run() (err error) {
 	workerRestart := flag.Bool("worker-restart", false, "repeated worker crashes with automatic same-address restart and new-call placement")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	relayLoss := flag.Bool("relay-loss", false, "eight-call relay-slot loss: interleaved SIGSTOP/SIGCONT and SIGKILL of active plus standby")
+	lossReport := flag.String("relay-loss-report", "", "sanitized one-trial operator report; netns only; doubles operational waits, keeps the 5s product budget")
 	relayLossNetns := flag.Bool("relay-loss-netns", false, "eight-call network blackhole of a live relay; requires -topology=netns")
 	relayLossProcesses := flag.Bool("relay-loss-processes", false, "relay-loss drill using shipped relay, control and worker binaries")
 	relayDrain := flag.Bool("relay-drain", false, "drain eight live calls over the shipped control API; grade planned relay-change gaps")
@@ -724,6 +725,9 @@ func run() (err error) {
 	flag.DurationVar(&pair.Settle, "pair-settle", 5*time.Second, "media observation after each replacement step")
 	selectedWorker.Flags(flag.CommandLine)
 	flag.Parse()
+	if *lossReport != "" && (!*relayLossNetns || *runs != 1) {
+		return errors.New("relay-loss-report requires relay-loss-netns and runs=1")
+	}
 	if *workerRestart {
 		if err := validateWorkerRestartFlags(flag.CommandLine); err != nil {
 			return err
@@ -927,7 +931,7 @@ func run() (err error) {
 		return runStoreStallTrials(ctx, manager, ownedRedis, bin, dir, hex.EncodeToString(key[:]), addr, *storeStall, *stallDuration, *runs, *after, *verbose)
 	}
 	if *relayLoss || *relayLossProcesses || *relayLossNetns {
-		return runRelayLossTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after, *relayLossProcesses || *relayLossNetns, topology, password)
+		return runRelayLossTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after, *relayLossProcesses || *relayLossNetns, topology, password, relayLossOptions{ReportPath: *lossReport})
 	}
 	if *relayDrain {
 		return runRelayDrainTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after)
