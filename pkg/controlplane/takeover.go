@@ -111,7 +111,9 @@ func (p *Plane) Run(ctx context.Context) error {
 	ticker := time.NewTicker(p.config.CheckInterval)
 	defer ticker.Stop()
 	var wg sync.WaitGroup
-	wg.Go(func() { p.runRelayLoss(ctx) })
+	if p.restart == nil {
+		wg.Go(func() { p.runRelayLoss(ctx) })
+	}
 	var reconciling bool
 	var nextReconcile time.Time
 	var reconcileMu sync.Mutex

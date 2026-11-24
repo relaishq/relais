@@ -31,7 +31,7 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			if !p.controlAuthority() {
+			if !p.relayAuthority() {
 				continue
 			}
 			p.mu.Lock()
@@ -53,7 +53,7 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 						case <-ctx.Done():
 							return
 						case <-poll.C:
-							if !p.controlAuthority() {
+							if !p.relayAuthority() {
 								continue
 							}
 							readCtx, cancel := context.WithTimeout(ctx, relaylease.DefaultPoll)
@@ -62,9 +62,7 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 							if observation.Observe(lease, err, time.Now(), relayLossAfter) {
 								// Retries retain the lost mark. No placement or planned change can
 								// use the slot while a worker's cut-off acknowledgement is pending.
-								if p.loseRelay(ctx, id) == nil {
-									return
-								}
+								_ = p.loseRelay(ctx, id, lease.Epoch)
 							}
 						}
 					}
@@ -74,10 +72,26 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 	}
 }
 
-func (p *Plane) loseRelay(ctx context.Context, slot string) error {
+func (p *Plane) loseRelay(ctx context.Context, slot string, observed ...uint64) error {
 	p.relayPlacement.Lock()
 	p.mu.Lock()
 	binding := p.relaySet[slot]
+
+	epoch := binding.Epoch
+	if len(observed) > 0 && observed[0] != 0 {
+		epoch = observed[0]
+	}
+	epoch = max(epoch, binding.cutoff)
+	if epoch == 0 {
+		p.mu.Unlock()
+		p.relayPlacement.Unlock()
+		return mediaworker.ErrRelayUnsupported
+	}
+	if len(observed) > 0 && observed[0] > 0 && observed[0] < binding.Epoch {
+		p.mu.Unlock()
+		p.relayPlacement.Unlock()
+		return nil
+	}
 	if binding.lostAt.IsZero() {
 		binding.lostAt = time.Now() // the decision; retries keep it
 		p.relayMetrics.losses.WithLabelValues(slot).Inc()
@@ -91,14 +105,9 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 			delete(binding.lossUnaffected, id)
 		}
 	}
-	binding.lost = true
+	binding.lost, binding.pending, binding.cutoffDone = true, true, false
+	binding.pairs = map[*registration]relayPairAck{}
 	p.relaySet[slot] = binding
-	var slots []mediaworker.RelaySlot
-	for _, b := range p.relaySet {
-		if !b.lost {
-			slots = append(slots, b.Slot)
-		}
-	}
 	var workers []relayChangeWorker
 	for _, w := range p.workers {
 		if w.observation.canReplace(w.reserved) {
@@ -117,6 +126,20 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 		calls = append(calls, c)
 	}
 	p.mu.Unlock()
+	if epoch > binding.cutoff {
+		bounded, cancel := context.WithTimeout(ctx, time.Second)
+		err := p.controlRecord(bounded, "relay-cutoff:"+slot, epoch)
+		cancel()
+		if err != nil {
+			p.relayPlacement.Unlock()
+			return err
+		}
+	}
+	p.mu.Lock()
+	current := p.relaySet[slot]
+	current.cutoff = max(current.cutoff, epoch)
+	p.relaySet[slot] = current
+	p.mu.Unlock()
 	p.relayPlacement.Unlock()
 	var wg sync.WaitGroup
 	out := make(chan error, len(workers))
@@ -124,7 +147,7 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 		wg.Go(func() {
 			cutCtx, cancel := context.WithTimeout(ctx, time.Second)
 			defer cancel()
-			out <- w.ConfigureRelays(cutCtx, slots)
+			out <- w.ConfigureRelays(cutCtx, mediaworker.RelaySetRequest{Cutoffs: map[string]uint64{slot: epoch}})
 		})
 	}
 	wg.Wait()
@@ -160,6 +183,9 @@ func (p *Plane) loseRelay(ctx context.Context, slot string) error {
 		p.mu.Lock()
 		binding := p.relaySet[slot]
 		binding.lossUnaffected = nil
+		if binding.cutoff == epoch {
+			binding.cutoffDone = true
+		}
 		p.relaySet[slot] = binding
 		p.mu.Unlock()
 	}

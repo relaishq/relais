@@ -23,8 +23,8 @@ type oldRelayWorker struct {
 	inner *relayProtocolWorker
 }
 
-func (w *oldRelayWorker) ConfigureRelays(ctx context.Context, slots []mediaworker.RelaySlot) error {
-	return w.inner.ConfigureRelays(ctx, slots)
+func (w *oldRelayWorker) ConfigureRelays(ctx context.Context, req mediaworker.RelaySetRequest) error {
+	return w.inner.ConfigureRelays(ctx, req)
 }
 func (w *oldRelayWorker) CreateSessionAtRelay(ctx context.Context, offer, slot string) (string, string, sessionstore.Lease, error) {
 	return w.inner.CreateSessionAtRelay(ctx, offer, slot)
@@ -355,7 +355,7 @@ func TestControlRestartAdoptsUnconfirmedAttempt(t *testing.T) {
 				committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 				require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(ctx, lease, pending, committed))
 				now := time.Now()
-				attempt := sessionstore.RelayAttempt{Generation: 1, Slot: "r2", Phase: sessionstore.RelayPhaseSwitched, Required: []string{"0"}, Kind: "planned", Tried: []string{"r2"},
+				attempt := sessionstore.RelayAttempt{Generation: 1, Slot: "r2", Phase: sessionstore.RelayPhaseSwitched, Required: []string{"0"}, Kind: "planned", From: "r1", Tried: []string{"r2"},
 					CommitAt: now, AttemptBound: now.Add(5 * time.Second), PlannedDeadline: now.Add(5 * time.Second)}
 				if mode == sessionstore.RelayConfirmDecode {
 					attempt.Decoded = []string{"0"} // a saved full set from before the restart

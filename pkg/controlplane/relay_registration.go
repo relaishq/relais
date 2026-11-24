@@ -33,6 +33,7 @@ func (p *Plane) RegisterRelayWorkers(ctx context.Context, relay interface {
 // belong to one relay instance; late registrations and rejoins are discovered
 // on every tick. Failed adds are retried without renewing leases or heartbeats.
 type RelayWorkerRegistry struct {
+	Slot       string
 	instance   string
 	registered map[netip.AddrPort]bool
 }
@@ -43,6 +44,29 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 }) error {
 	if !p.controlAuthority() {
 		return ErrNotReady
+	}
+	p.mu.Lock()
+	set := len(p.relaySet) > 0
+	p.mu.Unlock()
+	if set {
+		err := p.syncRelaySlot(ctx, s.Slot, r)
+		p.mu.Lock()
+		b, known := p.relaySet[s.Slot]
+		if known {
+			b.admissionError = ""
+			if err != nil {
+				b.admissionError = err.Error()
+			}
+			p.relaySet[s.Slot] = b
+		}
+		s.instance, s.registered = b.instance, map[netip.AddrPort]bool{}
+		for worker, ack := range b.pairs {
+			if ack.epoch == b.Epoch && ack.instance == worker.instance && p.workers[worker.name] == worker {
+				s.registered[worker.addr] = true
+			}
+		}
+		p.mu.Unlock()
+		return err
 	}
 	status, err := r.Status(ctx)
 	if err != nil {

@@ -177,7 +177,7 @@ func TestStatusShowsOrdinaryCallOnRelaySet(t *testing.T) {
 // as aborted, even before control rewrites the stored phase.
 func TestRelayAttemptStatusPhase(t *testing.T) {
 	attempt := func(phase string, decoded, delivered []string) *sessionstore.RelayAttempt {
-		return &sessionstore.RelayAttempt{Generation: 1, Slot: "r2", Phase: phase, Kind: "planned", Required: []string{"0", "1"}, Decoded: decoded, Delivered: delivered}
+		return &sessionstore.RelayAttempt{Generation: 1, Slot: "r2", Phase: phase, Kind: "planned", From: "r1", Required: []string{"0", "1"}, Decoded: decoded, Delivered: delivered}
 	}
 	switched := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 	pending := sessionstore.RelayAssignment{Slot: "r1", Pending: "r2"}

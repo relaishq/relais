@@ -140,7 +140,7 @@ func run() error {
 			if entry.remote == r {
 				first = firstRelay
 			}
-			registrations.Go(func() { registerRestartedRelay(ctx, plane, entry.remote, first) })
+			registrations.Go(func() { registerRestartedRelay(ctx, plane, entry.id, entry.remote, first) })
 		}
 		registrations.Wait()
 	}()
@@ -189,8 +189,8 @@ func main() {
 
 // A new relay process loses its private-leg registry. Re-register live workers
 // on each tick, including late registrations and rejoins in the same instance.
-func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *controlplane.RemoteRelay, first chan<- struct{}) {
-	var registry controlplane.RelayWorkerRegistry
+func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, slot string, r *controlplane.RemoteRelay, first chan<- struct{}) {
+	registry := controlplane.RelayWorkerRegistry{Slot: slot}
 	healthy := false
 	lastInstance, lastRegistered := "", 0
 	for attempt, delay := 1, 100*time.Millisecond; ; attempt++ {

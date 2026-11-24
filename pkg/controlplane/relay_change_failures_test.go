@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,12 +15,14 @@ import (
 
 type relayProtocolWorker struct {
 	*fakeWorker
-	abortErr   error
-	abortBlock bool
-	noDelivery atomic.Bool // withhold C, as a caller whose reports never arrive
+	abortErr            error
+	abortBlock          bool
+	noDelivery          atomic.Bool // withhold C, as a caller whose reports never arrive
+	relayConfigurations atomic.Int64
 }
 
-func (w *relayProtocolWorker) ConfigureRelays(context.Context, []mediaworker.RelaySlot) error {
+func (w *relayProtocolWorker) ConfigureRelays(context.Context, mediaworker.RelaySetRequest) error {
+	w.relayConfigurations.Add(1)
 	return nil
 }
 func (w *relayProtocolWorker) RestartSession(context.Context, string, mediaworker.RestartRequest) (string, error) {
@@ -70,7 +73,7 @@ func relayFailurePlane(t *testing.T, store sessionstore.Store, modes ...string) 
 	b := &relayProtocolWorker{fakeWorker: &fakeWorker{store: store, addr: netip.MustParseAddrPort("127.0.0.1:17002"), running: map[string]bool{}}}
 	require.NoError(t, p.Register("a", a.addr, a))
 	require.NoError(t, p.Register("b", b.addr, b))
-	require.NoError(t, p.ConfigureRelaySet(context.Background(), relayTestSlots()))
+	configureRelayFixture(t, p, relayTestSlots())
 	id, _, err := p.Create(context.Background(), "offer", "a")
 	require.NoError(t, err)
 	c, err := p.lookup(id)
@@ -93,6 +96,59 @@ func relayTestSlots() []RelayBinding {
 		slots = append(slots, RelayBinding{Slot: mediaworker.RelaySlot{ID: id, Leg: addr, Public: addr}, Relay: &fakeRelay{}})
 	}
 	return slots
+}
+
+// Existing protocol tests use acknowledged fake relay and worker boundaries.
+// Admission integration tests below exercise the real lease/status checks.
+func configureRelayFixture(t *testing.T, p *Plane, bindings []RelayBinding) {
+	t.Helper()
+	require.NoError(t, p.ConfigureRelaySet(t.Context(), bindings))
+	req := mediaworker.RelaySetRequest{Epochs: map[string]uint64{}}
+	for _, b := range bindings {
+		req.Slots = append(req.Slots, b.Slot)
+		req.Epochs[b.Slot.ID] = 1
+	}
+	for _, w := range p.workers {
+		require.NoError(t, w.worker.(relayChangeWorker).ConfigureRelays(t.Context(), req))
+	}
+	for id, b := range p.relaySet {
+		b.Epoch, b.instance, b.pending = 1, id+"-first", false
+		for _, w := range p.workers {
+			b.pairs[w] = relayPairAck{epoch: 1, instance: w.instance}
+			w.observation.relayRegistered()
+		}
+		p.relaySet[id] = b
+	}
+}
+
+// Protocol-only tests treat r3's fake enrollment as already acknowledged.
+func acknowledgedRelayFixture(p *Plane, b RelayBinding) RelayBinding {
+	b.Epoch, b.instance, b.pending, b.syncMu = 1, b.Slot.ID+"-first", false, &sync.Mutex{}
+	if b.Slot.ID == "r3" {
+		addr := netip.MustParseAddrPort("127.0.0.1:18003")
+		b.Slot.Leg, b.Slot.Public = addr, addr
+	}
+	b.pairs = map[*registration]relayPairAck{}
+	for _, w := range p.workers {
+		b.pairs[w] = relayPairAck{epoch: 1, instance: w.instance}
+	}
+	return b
+}
+
+func TestConfigureRelaySetRefusesWithLiveCalls(t *testing.T) {
+	p, a, _, id := relayFailurePlane(t, sessionstore.NewMemory())
+	b := p.workers["b"].worker.(*relayProtocolWorker)
+	configuredA, configuredB := a.relayConfigurations.Load(), b.relayConfigurations.Load()
+	before := relayStatusOf(t, p, id)
+	bindings := relayTestSlots()
+	bindings[1].Slot.ID = "r3"
+	require.ErrorIs(t, p.ConfigureRelaySet(t.Context(), bindings), ErrMoveInProgress)
+	require.Equal(t, configuredA, a.relayConfigurations.Load(), "refusal sends no relay configuration to worker a")
+	require.Equal(t, configuredB, b.relayConfigurations.Load(), "refusal sends no relay configuration to worker b")
+	require.Equal(t, before, relayStatusOf(t, p, id), "refusal preserves the live call assignment")
+	status, err := p.Status(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []RelayStatus{{Name: "r1", Calls: 1}, {Name: "r2"}}, status.Relays)
 }
 
 func waitRelayPending(t *testing.T, store sessionstore.Store, id string) (sessionstore.Lease, sessionstore.RelayAssignment) {

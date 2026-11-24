@@ -113,7 +113,7 @@ func TestRestartCompletesFullAThenCommit(t *testing.T) {
 		stopRelayRecoveries(t, p)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", Tried: []string{"r2"},
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", Tried: []string{"r2"},
 			PlannedDeadline: now.Add(5 * time.Second), StoreDeadline: now.Add(5 * time.Second)})
 		committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, committed))
@@ -162,7 +162,7 @@ func TestLateEvidenceNeverCompletes(t *testing.T) {
 		stopRelayRecoveries(t, p)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", Tried: []string{"r2"},
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", Tried: []string{"r2"},
 			PlannedDeadline: now.Add(30 * time.Millisecond), StoreDeadline: now.Add(30 * time.Millisecond)})
 		time.Sleep(80 * time.Millisecond)
 		committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
@@ -250,7 +250,7 @@ func TestMediaProgressNeedsAuthority(t *testing.T) {
 		authorizeTestControl(t, p)
 		now := time.Now()
 		seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		guard := *p.restart.guard.Load()
 		lapsed := guard
 		lapsed.deadline = time.Now().Add(-time.Millisecond)
@@ -329,7 +329,7 @@ func TestAdoptionNeverExtendsPlannedBound(t *testing.T) {
 		start := time.Now()
 		deadline := start.Add(time.Second)
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Kind: "planned", Tried: []string{"r2"}, PlannedDeadline: deadline, StoreDeadline: deadline})
+			Required: []string{"0"}, Kind: "planned", From: "r1", Tried: []string{"r2"}, PlannedDeadline: deadline, StoreDeadline: deadline})
 		waitUntil(start, 800*time.Millisecond)
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
 		waitUntil(start, 900*time.Millisecond)
@@ -358,7 +358,7 @@ func TestEvidenceUsesSavedStoreBound(t *testing.T) {
 		skewed := now.Add(10 * time.Second) // the previous control's local clock
 		storeBound := now.Add(50 * time.Millisecond)
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Kind: "planned", PlannedDeadline: skewed, StoreDeadline: storeBound})
+			Required: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: skewed, StoreDeadline: storeBound})
 		committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, committed))
 		_, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
@@ -467,7 +467,7 @@ func TestOneSlotSetAcceptsAAndRecoversSameSlot(t *testing.T) {
 		w := &relayProtocolWorker{fakeWorker: &fakeWorker{store: store, addr: netip.MustParseAddrPort("127.0.0.1:17021"), running: map[string]bool{}}}
 		require.NoError(t, p.Register("a", w.addr, w))
 		addr := netip.MustParseAddrPort("127.0.0.1:18021")
-		require.NoError(t, p.ConfigureRelaySet(context.Background(), []RelayBinding{{Slot: mediaworker.RelaySlot{ID: "r1", Leg: addr, Public: addr}, Relay: &fakeRelay{}}}))
+		configureRelayFixture(t, p, []RelayBinding{{Slot: mediaworker.RelaySlot{ID: "r1", Leg: addr, Public: addr}, Relay: &fakeRelay{}}})
 		stopRelayRecoveries(t, p)
 		server := httptest.NewServer(p.Handler())
 		defer server.Close()

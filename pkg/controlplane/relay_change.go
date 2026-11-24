@@ -39,16 +39,32 @@ type relayCleanupFailure struct{ error }
 
 func (e *relayCleanupFailure) Unwrap() error { return e.error }
 
+type relayPairAck struct {
+	epoch    uint64
+	instance string
+}
+
 type RelayBinding struct {
+	joinedEpoch    uint64
+	admissionError string
 	Slot           mediaworker.RelaySlot
+	Epoch          uint64
+	instance       string
+	pending        bool
+	cutoff         uint64
+	cutoffDone     bool
+	pairs          map[*registration]relayPairAck
+	syncMu         *sync.Mutex
 	Relay          Relay
 	draining       bool
+	drainActive    bool
+	drainEpoch     uint64
 	lost           bool
 	lostAt         time.Time
 	lossUnaffected map[string]bool // guarded by Plane.mu
 }
 type relayChangeWorker interface {
-	ConfigureRelays(context.Context, []mediaworker.RelaySlot) error
+	ConfigureRelays(context.Context, mediaworker.RelaySetRequest) error
 	CreateSessionAtRelay(context.Context, string, string) (string, string, sessionstore.Lease, error)
 	AbortRelayRestart(context.Context, string, uint64) error
 	RestartSession(context.Context, string, mediaworker.RestartRequest) (string, error)
@@ -79,52 +95,41 @@ func (p *Plane) ConfigureRelaySet(ctx context.Context, bindings []RelayBinding) 
 		return mediaworker.ErrRelayUnsupported
 	}
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if len(p.calls) != 0 {
-		p.mu.Unlock()
 		return ErrMoveInProgress
 	}
-	var workers []relayChangeWorker
-	for _, w := range p.workers {
-		worker, ok := w.worker.(relayChangeWorker)
-		if !ok {
-			p.mu.Unlock()
-			return mediaworker.ErrRelayUnsupported
-		}
-		workers = append(workers, worker)
-	}
-	p.mu.Unlock()
-	slots := make([]mediaworker.RelaySlot, 0, len(bindings))
 	next := make(map[string]RelayBinding, len(bindings))
 	for _, b := range bindings {
 		if b.Relay == nil || b.Slot.ID == "" || next[b.Slot.ID].Relay != nil {
 			return mediaworker.ErrRelayUnsupported
 		}
+		b.pending, b.pairs, b.syncMu = true, map[*registration]relayPairAck{}, &sync.Mutex{}
 		next[b.Slot.ID] = b
-		slots = append(slots, b.Slot)
 	}
-	for _, w := range workers {
-		if err := w.ConfigureRelays(ctx, slots); err != nil {
-			return err
-		}
-	}
-	p.mu.Lock()
 	p.relaySet = next
-	p.mu.Unlock()
+	for _, worker := range p.workers {
+		worker.observation.relayRegistered()
+	}
 	for id := range next {
 		p.relayMetrics.exposeSlot(id)
 	}
 	return nil
 }
 
-// Registration and loss marking serialize through relayPlacement. Publish a
-// fresh worker only after it accepts the current view, including prior losses.
+// Enrollment precedes publication of a worker. Relay acknowledgements follow
+// independently for each pair in the existing registration loops.
 func (p *Plane) configureWorkerRelays(ctx context.Context, worker Worker) error {
 	p.mu.Lock()
 	enabled := len(p.relaySet) > 0
-	var slots []mediaworker.RelaySlot
-	for _, binding := range p.relaySet {
-		if !binding.lost {
-			slots = append(slots, binding.Slot)
+	req := mediaworker.RelaySetRequest{Epochs: map[string]uint64{}, Cutoffs: map[string]uint64{}}
+	for id, b := range p.relaySet {
+		if b.cutoff > 0 {
+			req.Cutoffs[id] = b.cutoff
+		}
+		if !b.lost && b.Epoch > b.cutoff && b.Slot.Leg.IsValid() {
+			req.Slots = append(req.Slots, b.Slot)
+			req.Epochs[id] = b.Epoch
 		}
 	}
 	p.mu.Unlock()
@@ -135,7 +140,7 @@ func (p *Plane) configureWorkerRelays(ctx context.Context, worker Worker) error 
 	if !ok {
 		return mediaworker.ErrRelayUnsupported
 	}
-	return w.ConfigureRelays(ctx, slots)
+	return w.ConfigureRelays(ctx, req)
 }
 
 func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr error) {
@@ -181,7 +186,10 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 	p.mu.Lock()
 	b, known := p.relaySet[target]
 	p.mu.Unlock()
-	if !capable || !known || b.draining || b.lost {
+	p.mu.Lock()
+	pair := p.callRelayPairLocked(c, target)
+	p.mu.Unlock()
+	if !capable || !known || b.draining || b.lost || b.pending || !pair {
 		return mediaworker.ErrRelayUnsupported
 	}
 	a := p.store.(sessionstore.RelayAssignments)
@@ -218,7 +226,7 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 			changeErr = &relayPlannedFailure{changeErr}
 		}
 	}()
-	planned := relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit), tried: []string{target}}
+	planned := relayAttemptOptions{kind: "planned", from: from.Slot, outer: time.Now().Add(relayPlannedLimit), tried: []string{target}}
 	firstOuter := planned.outer // never extended by a fresh rollback window
 	err = p.waitRelayChange(ctx, c, pending, relayPlannedLimit, planned)
 	cleanup := from.Slot
@@ -276,7 +284,7 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 				// caller that dropped its old pair gets one restart on the old
 				// slot in a fresh planned window (ADR 0016 section 7).
 				current, switched = rolled, false
-				planned = relayAttemptOptions{kind: "planned", outer: time.Now().Add(relayPlannedLimit), tried: []string{target}}
+				planned = relayAttemptOptions{kind: "planned", from: from.Slot, outer: time.Now().Add(relayPlannedLimit), tried: []string{target}}
 			}
 		}
 		if current.Slot != "" {
@@ -345,7 +353,7 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 		bound := episode.deadline
 		p.mu.Lock()
 		for slot, binding := range p.relaySet {
-			if slot != original && !binding.lost && !binding.draining && !slices.Contains(tried, slot) {
+			if slot != original && !binding.lost && !binding.draining && !binding.pending && p.callRelayPairLocked(c, slot) && !slices.Contains(tried, slot) {
 				if attempt := time.Now().Add(relayRollbackRecoveryWindow); attempt.Before(bound) {
 					bound = attempt
 				}
@@ -355,7 +363,7 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 		p.mu.Unlock()
 		proposal := episode.proposal()
 		// Rollback remains planned even when the episode owns its bounds.
-		planned = relayAttemptOptions{kind: "planned", outer: bound, detected: proposal.Started, episode: proposal.Token}
+		planned = relayAttemptOptions{kind: "planned", from: original, outer: bound, detected: proposal.Started, episode: proposal.Token}
 	}
 	settle := func() time.Duration {
 		if episode == nil {
@@ -370,7 +378,7 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 			return false, nil
 		}
 		p.mu.Lock()
-		lost := p.relaySet[original].lost
+		lost := p.relaySet[original].lost || !p.callRelayPairLocked(c, original)
 		p.mu.Unlock()
 		if lost {
 			return false, nil
@@ -692,8 +700,8 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 	})
 }
 
-func (w *RemoteWorker) ConfigureRelays(ctx context.Context, slots []mediaworker.RelaySlot) error {
-	return privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/relays", mediaworker.RelaySetRequest{Slots: slots}, nil, RemoteErrors)
+func (w *RemoteWorker) ConfigureRelays(ctx context.Context, req mediaworker.RelaySetRequest) error {
+	return privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/relays", req, nil, RemoteErrors)
 }
 func (w *RemoteWorker) RestartSession(ctx context.Context, id string, req mediaworker.RestartRequest) (string, error) {
 	var reply mediaworker.RestartReply
@@ -714,7 +722,7 @@ func (w *RemoteWorker) CreateSessionAtRelay(ctx context.Context, offer, slot str
 // pickRelay keeps one-slot placement unchanged. Reads happen outside registry
 // and packet locks. Known assignments are local placement hints; authorization
 // and all relay transitions still use the authoritative store.
-func (p *Plane) pickRelay(ctx context.Context, exclude string) (string, error) {
+func (p *Plane) pickRelay(ctx context.Context, exclude string, names ...string) (string, error) {
 	p.mu.Lock()
 	if len(p.relaySet) == 0 {
 		p.mu.Unlock()
@@ -723,8 +731,18 @@ func (p *Plane) pickRelay(ctx context.Context, exclude string) (string, error) {
 	var slots []string
 	var calls []*call
 	for id, b := range p.relaySet {
-		if !b.draining && !b.lost && id != exclude {
-			slots = append(slots, id)
+		if b.draining || b.lost || b.pending || id == exclude {
+			continue
+		}
+		for _, w := range p.workers {
+			eligible := w.observation.knowledge().eligible
+			if len(names) > 0 && names[0] != "" {
+				eligible = w.name == names[0] && w.observation.knowledge().relayEligible
+			}
+			if eligible && p.relayPairLocked(w, id) {
+				slots = append(slots, id)
+				break
+			}
 		}
 	}
 	for _, c := range p.calls {
@@ -812,7 +830,7 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 	}
 	available := false
 	for id, other := range p.relaySet {
-		if id != slot && !other.draining && !other.lost {
+		if id != slot && !other.draining && !other.lost && !other.pending {
 			available = true
 			break
 		}
@@ -822,7 +840,7 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 		p.relayPlacement.Unlock()
 		return RelayDrainResult{}, fmt.Errorf("controlplane: cannot drain relay %q: no other healthy relay: %w", slot, ErrNoTarget)
 	}
-	b.draining = true
+	b.draining, b.drainActive, b.drainEpoch = true, true, b.Epoch
 	p.relaySet[slot] = b
 	calls := make([]*call, 0, len(p.calls))
 	for _, c := range p.calls {
@@ -830,6 +848,7 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 	}
 	p.mu.Unlock()
 	p.relayPlacement.Unlock()
+	defer func() { p.mu.Lock(); b := p.relaySet[slot]; b.drainActive = false; p.relaySet[slot] = b; p.mu.Unlock() }()
 	sort.Slice(calls, func(i, j int) bool { return calls[i].id < calls[j].id })
 	jobs := make([]*call, 0, len(calls))
 	for _, c := range calls {
@@ -946,7 +965,17 @@ func (p *Plane) drainRelayCall(ctx context.Context, c *call, slot string, sem ch
 				}
 				return false, nil
 			}
-			target, err := p.pickRelay(ctx, slot)
+			c.stateMu.Lock()
+			addr := c.lease.Worker
+			c.stateMu.Unlock()
+			p.mu.Lock()
+			owner := p.owner(addr)
+			name := ""
+			if owner != nil {
+				name = owner.name
+			}
+			p.mu.Unlock()
+			target, err := p.pickRelay(ctx, slot, name)
 			if err == nil {
 				err = p.ChangeRelay(ctx, c.id, target)
 				if err == nil {

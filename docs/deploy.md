@@ -414,11 +414,11 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   keeps legacy behavior without a relay set. With several entries, each name
   must equal its relay's `-relay-slot` and `-relay-lease` key. Each relay has
   its own public UDP, private UDP leg and private HTTP address. Control
-  discovers those UDP addresses from each relay's private status, so every
-  listed relay must answer when control starts. If one does not, control
-  exits; restart it after that relay answers (late admission is
-  [#545](https://github.com/relaishq/relais/issues/545)). Control configures
-  workers and monitors slot leases for the
+  discovers those UDP addresses from each relay's private status. Listed
+  relays start pending and join independently after worker registration and
+  enrollment acknowledgements. Control starts even if every relay is down;
+  management stays available and creates remain not ready until a pair joins.
+  Control configures workers and monitors slot leases for the
   [ADR 0016](adr/0016-relay-change-ice-restart.md) loss rule.
   For example: `-relay r1=http://127.0.0.1:25700` and
   `-relay r2=http://127.0.0.1:25703`. `RELAIS_RELAY_URL` remains the single URL

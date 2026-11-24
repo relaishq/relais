@@ -412,6 +412,10 @@ func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
 	if p.restart == nil {
 		return errors.New("controlplane: EnableRestart required")
 	}
+	lossCtx, stopLoss := context.WithCancel(ctx)
+	lossDone := make(chan struct{})
+	go func() { defer close(lossDone); p.runRelayLoss(lossCtx) }()
+	defer func() { stopLoss(); <-lossDone }()
 	renewCtx, stopRenew := context.WithCancel(context.WithoutCancel(ctx))
 	renewDone := make(chan struct{})
 	fatal := make(chan error, 1)
@@ -642,6 +646,9 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	if err != nil {
 		return err
 	}
+	if err := p.restoreRelayCutoffs(records, lease.Epoch); err != nil {
+		return err
+	}
 	saved := map[string]FixedWorker{}
 	for key, data := range records {
 		if strings.HasPrefix(key, "worker:") {
@@ -715,7 +722,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		}
 	}
 	p.mu.Unlock()
-	if !relayReady {
+	if len(p.relaySet) == 0 && !relayReady {
 		return fmt.Errorf("controlplane: relay workers not registered: %w", ErrNotReady)
 	}
 	observations := map[string]mediaworker.InstalledSession{}
@@ -869,6 +876,19 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		p.mu.Unlock()
 		if draining {
 			p.restartOutcome("drain", worker.name, "partial", "interrupted")
+		}
+	}
+	p.mu.Lock()
+	cutoffs := map[string]uint64{}
+	for id, b := range p.relaySet {
+		if b.lost && b.cutoff > 0 {
+			cutoffs[id] = b.cutoff
+		}
+	}
+	p.mu.Unlock()
+	for id, epoch := range cutoffs {
+		if err := p.loseRelay(ctx, id, epoch); err != nil {
+			return err
 		}
 	}
 	p.resumeRelayAttempts(ctx)

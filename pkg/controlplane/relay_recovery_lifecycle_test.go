@@ -86,7 +86,7 @@ func TestSingleRelayStallRequestPreservesCall(t *testing.T) {
 
 type unavailableRelayWorker struct{ *relayProtocolWorker }
 
-func (w *unavailableRelayWorker) ConfigureRelays(context.Context, []mediaworker.RelaySlot) error {
+func (w *unavailableRelayWorker) ConfigureRelays(context.Context, mediaworker.RelaySetRequest) error {
 	return mediaworker.ErrClosed
 }
 
@@ -117,8 +117,8 @@ type enrolledRelayWorker struct {
 	configured atomic.Bool
 }
 
-func (w *enrolledRelayWorker) ConfigureRelays(ctx context.Context, slots []mediaworker.RelaySlot) error {
-	err := w.Worker.ConfigureRelays(ctx, slots)
+func (w *enrolledRelayWorker) ConfigureRelays(ctx context.Context, req mediaworker.RelaySetRequest) error {
+	err := w.Worker.ConfigureRelays(ctx, req)
 	if err == nil {
 		w.configured.Store(true)
 	}
@@ -158,8 +158,8 @@ func TestLateRelayWorkerStartsWithSurvivingSet(t *testing.T) {
 				}
 				require.True(t, w.configured.Load(), "registration must initialize relays before eligibility")
 				// Fresh workers initialized from the current view can acknowledge retries.
-				require.NoError(t, w.ConfigureRelays(context.Background(), []mediaworker.RelaySlot{live}))
-				require.Error(t, w.ConfigureRelays(context.Background(), []mediaworker.RelaySlot{old, live}), "lost leg must never be readmitted")
+				require.NoError(t, w.ConfigureRelays(context.Background(), mediaworker.RelaySetRequest{Slots: []mediaworker.RelaySlot{live}, Epochs: map[string]uint64{live.ID: 1}}))
+				require.Error(t, w.ConfigureRelays(context.Background(), mediaworker.RelaySetRequest{Slots: []mediaworker.RelaySlot{old, live}, Epochs: map[string]uint64{old.ID: 1, live.ID: 1}}), "lost leg must never be readmitted")
 				require.NoError(t, p.loseRelay(context.Background(), "r1"))
 			})
 		})
@@ -252,7 +252,7 @@ func TestRelayEpisodeNeverRetriesTriedSlot(t *testing.T) {
 				}, bound, 5*time.Millisecond, "an exhausted slot must not be retried within the episode")
 				// A new untried live slot is used at once, under the same deadline.
 				p.mu.Lock()
-				p.relaySet["r3"] = RelayBinding{Slot: mediaworker.RelaySlot{ID: "r3", Leg: netip.MustParseAddrPort("127.0.0.1:18003"), Public: netip.MustParseAddrPort("127.0.0.1:18003")}, Relay: &fakeRelay{}}
+				p.relaySet["r3"] = acknowledgedRelayFixture(p, RelayBinding{Slot: mediaworker.RelaySlot{ID: "r3"}, Relay: &fakeRelay{}})
 				p.mu.Unlock()
 				require.Eventually(t, func() bool {
 					_, a, err := store.(sessionstore.RelayAssignments).RelayOwner(context.Background(), id)
@@ -324,11 +324,13 @@ type lossCutWorker struct {
 	cuts *atomic.Int64
 }
 
-func (w *lossCutWorker) ConfigureRelays(ctx context.Context, slots []mediaworker.RelaySlot) error {
-	if err := w.relayProtocolWorker.ConfigureRelays(ctx, slots); err != nil {
+func (w *lossCutWorker) ConfigureRelays(ctx context.Context, req mediaworker.RelaySetRequest) error {
+	if err := w.relayProtocolWorker.ConfigureRelays(ctx, req); err != nil {
 		return err
 	}
-	w.cuts.Add(1)
+	if len(req.Cutoffs) > 0 {
+		w.cuts.Add(1)
+	}
 	return nil
 }
 

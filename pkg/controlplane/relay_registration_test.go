@@ -6,7 +6,9 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,4 +70,49 @@ func TestRelayRegistryFindsRejoinsAndLateRegistrationsOnSameInstance(t *testing.
 	remote.err = nil
 	require.NoError(t, registry.Sync(ctx, plane, remote))
 	require.Equal(t, c.addr, remote.addresses[len(remote.addresses)-1])
+}
+
+func TestDrainedOrLostRelaySlotWaitsForNewInstance(t *testing.T) {
+	for _, state := range []string{"draining", "lost"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := t.Context()
+			store := sessionstore.NewMemory()
+			plane := New(&fakeRelay{}, store)
+			configureRelayFixture(t, plane, relayTestSlots())
+			slot := plane.relaySet["r1"].Slot
+			worker, err := mediaworker.New(mediaworker.Config{Relay: &mediaworker.RelayConfig{Owners: store, Addr: slot.Leg, PublicAddr: slot.Public}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, worker.Close()) })
+			require.NoError(t, plane.Register("w", worker.LocalAddr(), worker))
+			if state == "draining" {
+				require.NoError(t, plane.DrainRelay(ctx, "r1"))
+			} else {
+				require.NoError(t, plane.loseRelay(ctx, "r1"))
+			}
+			remote := &registryRecorder{instance: "before"}
+			registry := RelayWorkerRegistry{Slot: "r1"}
+			for _, instance := range []string{"before", "after", "after"} {
+				remote.instance = instance
+				syncErr := registry.Sync(ctx, plane, remote)
+				require.Error(t, syncErr, "status alone is not a leased relay admission")
+				status, err := plane.Status(ctx)
+				require.NoError(t, err)
+				require.Equal(t, RelayStatus{Name: "r1", Draining: state == "draining", Lost: state == "lost", Pending: true, Error: syncErr.Error()}, status.Relays[0],
+					"healthy polls and a new relay instance do not clear the mark")
+			}
+			// The marks are local to this control, rather than restored from the store.
+			restarted := New(&fakeRelay{}, store)
+			require.NoError(t, restarted.ConfigureRelaySet(ctx, relayTestSlots()))
+			status, err := restarted.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, []RelayStatus{{Name: "r1", Pending: true}, {Name: "r2", Pending: true}}, status.Relays)
+			if state == "lost" {
+				require.NoError(t, restarted.Register("w", worker.LocalAddr(), worker), "a pending worker can register without admitting the revoked slot")
+				require.ErrorIs(t, worker.ConfigureRelays(ctx, mediaworker.RelaySetRequest{Slots: []mediaworker.RelaySlot{slot}, Epochs: map[string]uint64{"r1": 1}}), mediaworker.ErrRelayUnsupported, "worker cutoff still refuses the old epoch")
+				status, err = restarted.Status(ctx)
+				require.NoError(t, err)
+				require.False(t, status.Ready, "registering without a joined pair cannot make control ready")
+			}
+		})
+	}
 }

@@ -75,7 +75,7 @@ func TestRelayPollingLogsTransitionsAndLatchesReadiness(t *testing.T) {
 	first, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
-		registerRestartedRelay(ctx, plane, &controlplane.RemoteRelay{URL: server.URL, Client: server.Client()}, first)
+		registerRestartedRelay(ctx, plane, "", &controlplane.RemoteRelay{URL: server.URL, Client: server.Client()}, first)
 	}()
 	defer func() { releaseOnce.Do(func() { close(release) }); cancel(); <-done }()
 	ready := func() bool {

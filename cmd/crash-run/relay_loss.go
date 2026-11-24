@@ -239,14 +239,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 			}
 			workers = append(workers, worker)
 		}
-		for _, b := range bindings {
-			for _, worker := range workers {
-				if err = b.Relay.(*controlplane.RemoteRelay).AddWorker(ctx, worker.LocalAddr()); err != nil {
-					return err
-				}
-			}
-		}
-		if err = p.ConfigureRelaySet(ctx, bindings); err != nil {
+		if err = configureCrashRelaySet(ctx, p, bindings); err != nil {
 			return err
 		}
 		server := httptest.NewServer(p.Handler())
@@ -684,6 +677,20 @@ func relayLossObservedGap(report *callharness.Report, now time.Time) time.Durati
 func lossResumedWorkerFence(before, after relay.RelayStatus) error {
 	if after.Stats.WorkerPackets != before.Stats.WorkerPackets {
 		return fmt.Errorf("phase=restored-relay-fence: resumed old slot worker packets changed: before=%d after=%d", before.Stats.WorkerPackets, after.Stats.WorkerPackets)
+	}
+	return nil
+}
+
+// configureCrashRelaySet admits each private relay before the caller starts.
+func configureCrashRelaySet(ctx context.Context, p *controlplane.Plane, bindings []controlplane.RelayBinding) error {
+	if err := p.ConfigureRelaySet(ctx, bindings); err != nil {
+		return err
+	}
+	for _, b := range bindings {
+		registry := controlplane.RelayWorkerRegistry{Slot: b.Slot.ID}
+		if err := registry.Sync(ctx, p, b.Relay.(*controlplane.RemoteRelay)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

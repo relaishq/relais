@@ -59,6 +59,7 @@ type relayDeliveryWorker interface {
 }
 
 type relayAttemptOptions struct {
+	from     string
 	kind     string    // planned or recovery
 	outer    time.Time // planned deadline, or the saved episode deadline
 	detected time.Time // episode detection; zero for planned
@@ -482,6 +483,10 @@ func (p *Plane) beginRelayAttempt(ctx context.Context, c *call, lease sessionsto
 			Required: slices.Clone(report.Required), Kind: opt.kind, Tried: slices.Clone(opt.tried)}
 		if opt.kind == "planned" {
 			attempt.PlannedDeadline = opt.outer
+			attempt.From = opt.from
+			if previous := rec.Attempt; previous != nil && previous.Kind == "planned" && (previous.Phase == sessionstore.RelayPhasePending || previous.Phase == sessionstore.RelayPhaseSwitched) {
+				attempt.From = previous.From
+			}
 		} else {
 			attempt.Detected, attempt.EpisodeDeadline = opt.detected, opt.outer
 		}
@@ -932,19 +937,23 @@ func (p *Plane) resumeRelayAttempts(ctx context.Context) {
 			continue
 		}
 		var tried []string
+		rollbackFrom := ""
 		if rec.Attempt != nil {
 			tried = rec.Attempt.Tried
+			if rec.Attempt.Kind == "planned" {
+				rollbackFrom = rec.Attempt.From
+			}
 		}
 		if e != nil && !e.completed.Load() {
 			if !e.unsupported() {
-				_ = p.startRelayRecoveryFrom(ctx, c, false, e.proposal().Started, tried)
+				_ = p.startRelayRecoveryFrom(ctx, c, false, e.proposal().Started, tried, rollbackFrom)
 			}
 			continue
 		}
 		if ep := rec.Episode; ep != nil && (ep.Open() || ep.Outcome == sessionstore.RelayEpisodeEnded) {
 			e, err = p.journalDurableEpisode(ctx, c, *ep)
 			if err == nil && ep.Open() {
-				err = p.startRelayRecoveryFrom(ctx, c, false, e.proposal().Started, tried)
+				err = p.startRelayRecoveryFrom(ctx, c, false, e.proposal().Started, tried, rollbackFrom)
 			}
 			if err != nil {
 				log.Printf("controlplane: relay episode not resumed call=%s: %v", c.id, err)
@@ -962,7 +971,7 @@ func (p *Plane) resumeRelayAttempts(ctx context.Context) {
 				detected = t.PlannedDeadline
 			}
 		}
-		if err = p.startRelayRecoveryFrom(ctx, c, false, detected, t.Tried); err != nil {
+		if err = p.startRelayRecoveryFrom(ctx, c, false, detected, t.Tried, rollbackFrom); err != nil {
 			log.Printf("controlplane: relay attempt not resumed call=%s generation=%d: %v", c.id, t.Generation, err)
 		}
 	}

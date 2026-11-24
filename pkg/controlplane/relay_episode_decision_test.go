@@ -109,7 +109,7 @@ func TestPlannedSettlementBeginsBeforeConfirmation(t *testing.T) {
 		defer c.mu.Unlock()
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
 		e, err := p.relayRecoveryEpisodeFor(context.Background(), c, now, &pending)
 		require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestPlannedSettlementProposalKeepsObservedSequence(t *testing.T) {
 		defer c.mu.Unlock()
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
 		gate := &settlementReadGate{settlementStore: store.(settlementStore), held: make(chan struct{}), release: make(chan struct{})}
 		p.store = gate
@@ -298,7 +298,7 @@ func TestInFlightSwitchToLiveSlotJoinsEpisode(t *testing.T) {
 		require.NoError(t, err)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		markLost(p, "r1")
 		e := armEpisode(t, p, c, 400*time.Millisecond)
 		require.Equal(t, e.proposal().Token, attemptOf(t, store, id).Attempt.Episode, "begin binds the in-flight switch to a live slot")
@@ -455,7 +455,7 @@ func TestEndPromotesProofAndWaitsForDeadline(t *testing.T) {
 		require.NoError(t, err)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		e := armEpisode(t, p, c, 10*time.Second)
 		require.Equal(t, relayUncertain, p.endRelayEpisode(context.Background(), c, e.proposal().Token, "relay_change_failed", true), "a timeout end waits for the store deadline")
 		require.True(t, episodeOf(t, store, id).Open())
@@ -478,7 +478,7 @@ func TestEndPromotesCommitLastProof(t *testing.T) {
 		require.NoError(t, err)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		e := armEpisode(t, p, c, 10*time.Second)
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
 		require.Equal(t, relayCompleted, p.endRelayEpisode(context.Background(), c, e.proposal().Token, "confirmation_unsupported", false))
@@ -496,7 +496,7 @@ func TestSuccessWithoutEpisodeFencesStaleProposal(t *testing.T) {
 		require.NoError(t, err)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		stale := sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKind, Started: now, Lease: lease, Seq: 1}
 		committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, committed))
@@ -548,7 +548,7 @@ func TestEndedEpisodeRefusesAcknowledgement(t *testing.T) {
 				c, err := p.lookup(id)
 				require.NoError(t, err)
 				now := time.Now()
-				attempt := sessionstore.RelayAttempt{Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)}
+				attempt := sessionstore.RelayAttempt{Required: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)}
 				if !pending {
 					attempt.Decoded = []string{"0"}
 				}
@@ -752,7 +752,7 @@ func TestBeginNeverAdoptsHistoricalConfirmation(t *testing.T) {
 		require.NoError(t, err)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, committed))
 		_, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
@@ -931,7 +931,7 @@ func confirmedRelayCall(t *testing.T, store sessionstore.Store) (*Plane, *call) 
 	require.NoError(t, err)
 	now := time.Now()
 	lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-		Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+		Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 	committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 	require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, committed))
 	_, rec, err := confirmations(store).RelayConfirmation(context.Background(), id)
@@ -1286,7 +1286,7 @@ func TestImmediateEndFollowsCompletedEpisode(t *testing.T) {
 		events := watchEvents(t, c)
 		now := time.Now()
 		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+			Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
 		e := armEpisode(t, p, c, 10*time.Second)
 		require.Equal(t, e.proposal().Token, attemptOf(t, store, id).Attempt.Episode, "begin binds the attempt")
 		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))

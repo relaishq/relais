@@ -73,6 +73,7 @@ func (e *RelayEpisode) Open() bool { return e != nil && e.Outcome == RelayEpisod
 // current attempt only; supersession replaces it and keeps the episode fields
 // (Tried, Detected, EpisodeDeadline).
 type RelayAttempt struct {
+	From            string    `json:"from,omitempty"`
 	Generation      uint64    `json:"generation"`
 	Slot            string    `json:"slot"`
 	Phase           string    `json:"phase"`
@@ -257,7 +258,7 @@ func encodeRelayAttempt(c RelayConfirmation) (mode, state string, err error) {
 	}
 	t := c.Attempt
 	if c.Mode == "" || c.Mode == RelayConfirmNone || t.Slot == "" || len(t.Slot) > 256 ||
-		len(t.Required) > maxRelayMIDs || len(t.Decoded) > maxRelayMIDs || len(t.Delivered) > maxRelayMIDs || len(t.Tried) > maxRelayTriedSlots {
+		(t.Kind == "planned" && t.From == "") || (t.Kind == "recovery" && t.From != "") || len(t.From) > 256 || len(t.Required) > maxRelayMIDs || len(t.Decoded) > maxRelayMIDs || len(t.Delivered) > maxRelayMIDs || len(t.Tried) > maxRelayTriedSlots {
 		return "", "", ErrRelayConfirmationInvalid
 	}
 	switch t.Phase {
@@ -321,6 +322,9 @@ func validRelayConfirmationTransition(from, to RelayConfirmation) bool {
 		return false
 	}
 	if to.Attempt.Generation == from.Attempt.Generation {
+		if to.Attempt.From != from.Attempt.From {
+			return false
+		}
 		switch from.Attempt.Phase {
 		case RelayPhaseConfirmed, RelayPhaseExpired, RelayPhaseAborted:
 			return to.Attempt.Phase == from.Attempt.Phase

@@ -691,6 +691,163 @@ change and makes the refusal exact:
 Rules 5 and 6 do not change. They refuse to move a call to, or roll back to, a
 version that cannot read its state. They are refusals, not migration paths.
 
+### Amendment 2026-11-24: late relay slot admission
+
+**Implemented:** pending slots, epoch-fenced enrollment and durable cutoffs. This addresses
+[#545](https://github.com/relaishq/relais/issues/545). It replaces
+section 1's requirement that every listed relay answer at startup. Sections 6,
+8 and 9 keep their safety rules and product thresholds.
+
+**Slot states.** Admission permits new calls; it grants no call ownership.
+Keep the configured name and HTTP URL before UDP addresses are known.
+
+- **Pending:** listed, but admission is incomplete. No new calls use it. It
+  becomes joined after acknowledgement, or lost under the relay-loss rule.
+- **Joined:** at least one eligible worker has acknowledged admission. It can
+  become draining on request, lost under section 4, or pending when a new relay
+  instance needs admission.
+- **Draining:** new placement is stopped. Existing calls can finish, move or
+  roll back under section 7. It can become lost, or pending after a completed
+  drain when an empty new instance returns.
+- **Lost:** new placement is stopped and workers must acknowledge cutoff. It
+  becomes pending only for an empty replacement that passes the epoch rule below.
+
+All other transitions are refused. A healthy status reply alone clears neither
+lost nor draining. A failed HTTP probe alone does not prove relay loss.
+
+**Startup and readiness.** Start listed slots as pending. Keep management
+available even when all relays are down; refuse creates as not ready until a
+worker/slot pair joins. This keeps the same behavior as today's single-relay
+startup (`cmd/relais-control/relays_test.go`, `pkg/controlplane/pool.go`).
+An unreachable slot does not stop rebuild or calls on joined pairs. Readiness
+still needs the existing control authority, store and rebuild checks.
+
+Reuse the per-relay `registerRestartedRelay` loop in
+`cmd/relais-control/main.go`: a 1 s context per sync, 100 ms healthy pacing,
+and failure backoff doubling from 100 ms to at most 5 s. Each slot runs
+independently. Tests wait up to 8 s for a pair to join.
+
+Before this change, the plane-wide `relayReady` flag reset on any relay instance change
+(`relay_registration.go:51`, `pool.go:53`). The relay set now uses per-slot knowledge
+of the observed relay epoch and per-pair registration acknowledgements. The
+worker-wide `relayPending` flag cleared when whichever relay registers
+first (`relay_registration.go:74`, `worker_observation.go:208`). The set now uses
+per-worker/slot eligibility. Rebuild permits a usable pair while other slots
+stay pending; its single-relay gates remain unchanged. This is why publication must be per pair. Keep the other worker
+liveness, rejoin, drain and authority checks.
+
+**The epoch rule (section 6).** The slot's ADR 0004 relay lease epoch is its
+single admission identity. An epoch is the store counter advanced for a new
+lease holder. Both memory and Redis preserve it on renewal and release; renewal
+can revive the same expired epoch when no successor exists
+(`pkg/sessionstore/relay_leases.go`, `redis_relay_leases.go`). The relay command
+already sets status instance to the lease holder's `Owner` and reports its epoch
+in status `Continuity` (`cmd/relais-relay/main.go:103`, `:123`).
+
+Each enrollment carries the relay lease epoch. Each worker keeps, per slot,
+the highest epoch it has cut off and refuses any add at or below it. Control
+admits a slot only when status instance equals the current lease holder's
+`Owner`, the reported epoch equals that lease's epoch, and the epoch is above
+the worker's cutoff epoch for that slot. An expired or unreadable lease grants
+no admission. There is no separate command counter or old-instance token list.
+
+Cutoff means acknowledged removal of leg traffic, including queued packets
+and previous-path grace. A cutoff for epoch e removes enrollment at or below e;
+it cannot remove a later epoch. A worker never replaces an enrolled epoch with
+a lower epoch. Workers keep their cutoff epochs across control
+restarts. A renewed frozen instance at the same epoch remains refused even
+when a restarted control has forgotten its lost mark.
+
+Before sending a cutoff, persist the observed loss epoch in the existing control
+record as `relay-cutoff:<slot>`. Before publication, `relay-joined:<slot>` saves
+the admitted lease epoch. A cutoff is a current loss only when it is at least
+that admitted epoch; older cutoffs remain history. Rebuild reads these records,
+even if every former worker has died. Bootstrap `ConfigureRelaySet` and worker
+registration enrollment both carry the relay lease epoch, so no published
+worker has an enrolled slot with an unknown epoch. Every cutoff command carries
+the loss epoch control observed, at runtime and during rebuild. A later claim
+does not change that recorded loss epoch. Without an observed epoch, leave the
+slot unavailable rather than guess. Every still-unfenced worker must
+acknowledge cutoff before loss recovery proceeds. A settled dead worker is
+already fenced by its death cycle.
+
+After store data loss, a new claim can start below surviving workers' cutoffs;
+that slot cannot rejoin until those workers restart, an availability limit only.
+
+**Enrollment and publication.** Keep bootstrap `ConfigureRelaySet` separate
+from adding a slot while calls are live. For each worker/slot pair:
+
+1. Under current control authority, check addresses and the epoch rule.
+2. Register the worker's leg at the relay and wait for its acknowledgement.
+3. Send additive enrollment with that epoch to the worker and wait for its
+   acknowledgement. Existing slots and sessions stay in place.
+4. Recheck authority, epoch and slot state. Publish this pair immediately; the
+   first usable pair makes the slot joined. Placement, moves and recovery
+   targets check the pair, not only the slot's state.
+
+A failed pair does not block other pairs or revoke existing readiness. An
+unknown result is not an acknowledgement: read back or retry the same epoch.
+Epoch changes invalidate old relay acknowledgements; worker replacement
+invalidates that worker's acknowledgements. Loss or drain racing enrollment
+prevents placement. Keep network work outside registry locks.
+
+A higher enrollment epoch does not reopen revoked local session paths or
+captured senders. A new authenticated restart can establish the session's new
+path. Section 6 still requires the call's
+current or pending assignment, one output path and increasing call generations.
+A relay cannot forward a call assigned only to another relay. Rejoin revives
+no old credentials, calls or recovery outcomes.
+
+**Rebuild, empty slots and rejoin.** Restore calls and saved episodes before
+readiness. For calls found on a still-down slot, apply section 4: 2 s of
+reachable store observation without lease renewal. Failed store reads add no
+evidence. Cut off the slot, then recover capable calls on acknowledged joined
+pairs. Calls without relay change follow the existing `relay_lost` end rule.
+Saved episodes retain detection time, tried slots and deadline. With no saved
+episode, detection starts one as today. Readiness need not wait for these calls
+to recover or end. The 5 s loss target still needs an already running, joined
+spare; admission never extends a saved recovery deadline.
+
+For rejoin, **empty** means no live store assignment names the slot as current
+or pending. A **completed drain** also has no open planned attempt whose stored
+`From` names that slot. Planned attempts store `From` through supersession and
+rebuild; recovery attempts leave it empty. Control checks these conditions
+before admission. After completed drain, only an empty new instance rejoins
+automatically; the same instance has no resume path. After loss, only an empty
+replacement above the cutoff epoch can rejoin. Successful admission clears the
+applicable mark for new placement. Neither path needs a control restart.
+
+Relay drains are not persisted; control restart cancels an active relay drain,
+and persisting it is outside this change.
+
+**Scope and refusals.** The `-relay` list is fixed for one control run. Live
+name or URL changes are outside scope. Dial-out relay-set enrollment is outside
+scope; workers already refuse it (`pkg/mediaworker/relay_restart.go:139`).
+There is no migration or mixed-version path. Refuse duplicate identities,
+conflicting legs, changed addresses within an enrolled epoch, stale authority,
+adds at or below cutoff, and unsupported workers. Keep affected pairs unavailable
+and expose their state and failure in private status.
+
+**Rejected alternatives.**
+
+- Wait at startup until all relays answer: one down relay still blocks all calls.
+- Publish before both acknowledgements: placement can choose an unusable path.
+- Use a healthy token or a command counter to clear loss: neither stops a frozen
+  holder that renews its revoked epoch after control restart.
+
+**Admission tests.** `TestControlStartsWithListedRelayDown`,
+`TestPendingRelayJoinsWithoutControlRestart`,
+`TestEmptyNewRelayInstanceRejoinsAfterCompletedDrain`, and
+`TestControlRestartDuringRelayOutageKeepsEpochCutoff`. The last covers loss
+during rebuild without the old token, same-epoch renewal after cutoff, and
+rejoin at a higher epoch.
+
+Regression coverage includes:
+`TestControlStartsWithListedRelayDown`,
+`TestWorkerEnrollmentAddsRelaySlotAfterEnrollment`,
+`TestConfigureRelaySetRefusesWithLiveCalls`, and
+`TestDrainedOrLostRelaySlotWaitsForNewInstance`.
+
 ### Implementation note (2026-11-04): confirmation choices left open
 
 These record choices the accepted text left open while building sections 5,

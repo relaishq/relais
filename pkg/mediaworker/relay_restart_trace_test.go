@@ -36,7 +36,7 @@ func TestRestartMismatchTraceNamesEveryRefusingCheckWithoutCredentials(t *testin
 			w, err := New(Config{Relay: &RelayConfig{Owners: store, Addr: first, PublicAddr: first}})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, w.Close()) })
-			require.NoError(t, w.ConfigureRelays(ctx, []RelaySlot{{ID: "r1", Leg: first, Public: first}, {ID: "r2", Leg: second, Public: second}}))
+			require.NoError(t, w.ConfigureRelays(ctx, relayEnrollment([]RelaySlot{{ID: "r1", Leg: first, Public: first}, {ID: "r2", Leg: second, Public: second}}, 1)))
 			offer := testOffer(testOfferAttrs{session: []string{"a=ice-pwd:session-secret", "a=ICE-PWD:case-secret"}, audio: []string{"a=ssrc:123 cname:caller"}})
 			id, _, err := w.CreateSession(ctx, offer)
 			require.NoError(t, err)

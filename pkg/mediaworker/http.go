@@ -110,7 +110,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		if err := w.ConfigureRelays(r.Context(), req.Slots); err != nil {
+		if err := w.ConfigureRelays(r.Context(), req); err != nil {
 			workerAPIError(rw, err)
 			return
 		}
