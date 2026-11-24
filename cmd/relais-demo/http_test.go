@@ -174,6 +174,7 @@ func TestDemoStatusAndProxyAndActionGuards(t *testing.T) {
 	}))
 	defer control.Close()
 	d := &demo{ctx: context.Background(), control: control.URL, client: control.Client(), workers: map[string]*workerProcess{}, relay: "127.0.0.1:1111", redis: "127.0.0.1:2222", launchID: "test-launch"}
+	d.relays = []string{d.relay, "127.0.0.1:1112"}
 	handler := d.handler(http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodGet, "http://localhost/demo/status", nil)
 	response := httptest.NewRecorder()
@@ -183,6 +184,7 @@ func TestDemoStatusAndProxyAndActionGuards(t *testing.T) {
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &status))
 	require.Len(t, status.Calls, 2)
 	require.Equal(t, d.relay, status.Relay)
+	require.Equal(t, d.relays, status.Relays)
 	require.Equal(t, d.redis, status.Redis)
 	for _, tc := range []struct {
 		body, origin string

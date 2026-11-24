@@ -57,7 +57,7 @@ redis_port=$((10#$redis_port))
 [[ $redis_port -gt 0 && $redis_port -le 65535 && $redis_port != 6379 ]] || { echo 'Redis port 6379 is reserved; choose another port in 1..65535' >&2; exit 2; }
 [[ $port_base =~ ^[0-9]+$ && ${#port_base} -le 5 ]] || { echo 'invalid PORT_BASE' >&2; exit 2; }
 port_base=$((10#$port_base))
-[[ $port_base -gt 0 && $port_base -le 65454 ]] || { echo 'PORT_BASE must be in 1..65454' >&2; exit 2; }
+[[ $port_base -gt 0 && $port_base -le 65452 ]] || { echo 'PORT_BASE must be in 1..65452' >&2; exit 2; }
 [[ -n $worker_bin || $agent == echo || $agent == demo ]] || { echo 'AGENT must be echo or demo unless -worker-bin is set' >&2; exit 2; }
 worker_bin=${worker_bin:-$bin/relais-worker}
 [[ -x $worker_bin ]] || { echo "missing worker binary: $worker_bin" >&2; exit 1; }
@@ -143,14 +143,16 @@ started=1
 start redis redis-server --bind 127.0.0.1 --port "$redis_port" --save '' --appendonly no --dir "$state/redis"
 wait_ready redis 'Ready to accept connections'
 unset RELAIS_SESSIONSTORE_KEY RELAIS_SESSIONSTORE_KEY_ID RELAIS_SESSIONSTORE_OLD_KEYS
-start relay "$bin/relais-relay" -media "127.0.0.1:$((port_base+80))" -leg "127.0.0.1:$((port_base+81))" -http "127.0.0.1:$port_base"
+start relay "$bin/relais-relay" -relay-lease r1 -relay-slot r1 -media "127.0.0.1:$((port_base+80))" -leg "127.0.0.1:$((port_base+81))" -http "127.0.0.1:$port_base"
 wait_ready relay '"pid"'
+start relay-r2 "$bin/relais-relay" -relay-lease r2 -relay-slot r2 -media "127.0.0.1:$((port_base+82))" -leg "127.0.0.1:$((port_base+83))" -http "127.0.0.1:$((port_base+3))"
+wait_ready relay-r2 '"pid"'
 worker 1
 worker 2
 RELAIS_SESSIONSTORE_KEY=$(cat "$state/secrets/sessionstore.key")
 export RELAIS_SESSIONSTORE_KEY
 start control "$bin/relais-control" \
-  -http "127.0.0.1:$((port_base+10))" -relay "http://127.0.0.1:$port_base" \
+  -http "127.0.0.1:$((port_base+10))" -relay "r1=http://127.0.0.1:$port_base" -relay "r2=http://127.0.0.1:$((port_base+3))" \
   -worker "w1=http://127.0.0.1:$((port_base+1))" -worker "w2=http://127.0.0.1:$((port_base+2))"
 unset RELAIS_SESSIONSTORE_KEY RELAIS_SESSIONSTORE_KEY_ID RELAIS_SESSIONSTORE_OLD_KEYS
 wait_ready control '"pid"'

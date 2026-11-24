@@ -8,16 +8,23 @@ ADR 0017 amends the store boundary in §4. The reference deployment keeps the
 full guarantee (ADR 0017 §1). Deployments at ADR 0017's weaker level are outside this ADR's supported safety claims. They do not relax
 the reference deployment's store requirements.
 
+**Amended 2026-11-23 by [ADR 0016](0016-relay-change-ice-restart.md).**
+ADR 0016 selects several relay slots and caller ICE restart for relay-host
+recovery. Section 3 and implementation steps 6 and 11 now use that path.
+The earlier stable-address host-replacement experiment is superseded.
+
 ## Owner summary
 
 - AWS creates Relais in the customer's own account from a public link.
 - The default preview keeps four machines and two database nodes running with no calls. The optional resilience profile uses six machines and two database nodes.
 - Two workers can survive one worker crash at the validated load. After that crash, there is no destination for a further move. A worker rollout has no protection from another worker failure.
 - One machine runs control and the HTTPS front end. They share a failure. Restarted control must manage existing calls before we publish the link.
-- A failed relay machine drops calls in the preview. Test browser recovery early, then choose how relay replacement will work.
+- A single-relay preview loses calls when its relay host fails. Production
+  relay recovery uses several slots and ICE restart, as ADR 0016 specifies.
 - The database must keep every confirmed call-ownership write. The usual setting can lose recent writes and leave two workers thinking they own a call.
 - Ship alerts, an outside test call, a safe support report, upgrade and rollback checks, and clear setup and cleanup limits with the preview.
-- Add automatic scaling only after the fixed preview works for real users and the relay experiment has a result.
+- Add automatic scaling only after the fixed preview works for real users
+  and the ADR 0016 relay recovery gates pass.
 - The preview trusts its private network. Internal servers must prove their identity to each other before general release.
 - The owner approved the direction and order only. Each cloud test needs separate approval and a cost cap.
 
@@ -206,6 +213,14 @@ settings meet the same fault gates.
 
 ## 3. Relay availability in explicit phases
 
+**Chosen path (amendment 2026-11-23):**
+[ADR 0016](0016-relay-change-ice-restart.md) selects several relay slots and
+caller ICE restart. Each slot keeps its own addresses and same-host standby.
+Its loss, retry, rollback and confirmation rules replace the proposal below.
+
+**Superseded 2026-11-23 by [ADR 0016](0016-relay-change-ice-restart.md).**
+The original reasoning and phases below are retained unchanged for reference.
+
 **Recommendation:** test fixed Elastic IP plus a movable secondary network interface (ENI) as phase B; choose production phase B or multi-relay from slice 6 before ASG work. Keep private UDP and HTTP
 addresses stable too. EIP is regional/border-group scoped [E9]; an ENI moves only within its AZ and carries its IP attributes [E10].
 This is a bounded first-cloud design, not an AZ-availability solution. Keep worker crypto state and caller's advertised candidate
@@ -384,7 +399,7 @@ existing-VPC option until mutual TLS or equivalent authenticated private transpo
 | Relay | Ownership/routes/relay-lease ACL, config and logs; no snapshot/provider keys. Validate Lua/scan command/key ACLs; code-level keylessness alone is not an ACL. |
 | Worker/control/signal | Workers get only their pool's secrets; control needs the snapshot key. Signal gets its token, no store or snapshot key. Scope every role to its resources. |
 | Later lifecycle coordinator | Approved group description/capacity/protection/targeted termination, queue consumption and hook heartbeat/completion only. Supervisor signals its owned service after empty proof; no arbitrary remote-shell permission. Validate retention behavior and IAM. |
-| Later relay recovery | Separate role restricted to relay hosts and the designated ENI/IP/EIP operations; no worker networking or IAM grants. Persist operation-generation checks before mutations. |
+| Later relay recovery | **Superseded 2026-11-23 by [ADR 0016](0016-relay-change-ice-restart.md).** Separate role restricted to relay hosts and the designated ENI/IP/EIP operations; no worker networking or IAM grants. Persist operation-generation checks before mutations. |
 
 Separate deploy/runtime roles; restrict `PassRole`. Constrain unavoidable wildcard reads/metric writes. Use IMDSv2, encrypted disks,
 patched OS, verified pinned artifacts and compatible agent manifests. Disable demo/test registration and diagnostics; log outcomes,
@@ -441,6 +456,9 @@ charges. Alerts alone do not cap spend. The template precedes full automation; m
    authenticated consent, selected path, decrypted gaps and ICE restart. Compare phase B with multi-relay;
    choose and record the production approach before ASG work. Cloud fencing/IP movement is not proven
    by local trials; each needed cloud feasibility run is **paid with separate approval/cap**.
+   **Superseded 2026-11-23 by
+   [ADR 0016](0016-relay-change-ice-restart.md).** Use its chosen relay
+   recovery path; the original step above is retained for reference.
 7. **Dynamic registration and ASG lifecycle implementation.** Blockers: 5, 6 and fixed-pool preview
    success with real users. Build authenticated registration, ASG template variant, EventBridge/SQS
    hooks, coordinator deployment/IAM and retention simulator. Demo duplicate/lost events and failed
@@ -458,6 +476,9 @@ charges. Alerts alone do not cap spend. The template precedes full automation; m
 11. **Production relay resilience.** Blockers: 5, 6 and its recorded production choice. Implement the
     chosen cloud-fenced same-AZ transition or multi-relay/restart path; verify both legs, consent and lost replies.
     **Free checks first; cloud acceptance paid with approval/cap per run.** Respect the early experiment's result.
+    **Superseded 2026-11-23 by
+    [ADR 0016](0016-relay-change-ice-restart.md).** Use its chosen relay
+    recovery path; the original step above is retained for reference.
 12. **Release evidence and claim gate.** Blockers: 8, 9, 11; 10 only if selected. Join evidence, monthly
     idle bill, utilisation break-even, dated tariffs and supported failure domains. **Free from artifacts;
     extra cloud/soak runs each need approval/cap.** No infrastructure-free or cheaper-than-hosted claim before its evidence gate passes.

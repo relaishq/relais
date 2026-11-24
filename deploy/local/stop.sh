@@ -46,7 +46,7 @@ identity_mismatch() {
   failed=1
 }
 # Keep control and Redis alive while workers drain.
-for role in signal worker-1 worker-2 control relay redis; do
+for role in signal worker-1 worker-2 control relay relay-r2 redis; do
   [[ -z $only || $role == "$only" ]] || continue
   while IFS='|' read -r name pid stamp comm; do
     [[ $name == "$role" && $pid =~ ^[0-9]+$ && -n $stamp ]] || continue

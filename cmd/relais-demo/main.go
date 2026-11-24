@@ -122,7 +122,13 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		ready, err := readyChild(startup, child)
 		return child, ready, err
 	}
-	_, relay, err := start(ctx, "relay", processEnv("", addr, prefix, false), append([]string{filepath.Join(bin, "relais-relay")}, relayArgs(cfg)...)...)
+	relayFlags := append(relayArgs(cfg), "-relay-lease", "r1", "-relay-slot", "r1")
+	_, relay, err := start(ctx, "relay", processEnv("", addr, prefix, false), append([]string{filepath.Join(bin, "relais-relay")}, relayFlags...)...)
+	if err != nil {
+		return nil, err
+	}
+	secondFlags := append(relayArgs(cfg), "-relay-lease", "r2", "-relay-slot", "r2")
+	_, secondRelay, err := start(ctx, "relay-r2", processEnv("", addr, prefix, false), append([]string{filepath.Join(bin, "relais-relay")}, secondFlags...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +137,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		return nil, err
 	}
 	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, launchID: id, agentName: selectedAgent(cfg), relayBuffer: selectedRelayBuffer(cfg)}
+	d.relays = []string{relay.Media, secondRelay.Media}
 	if err := d.prepareResults(cfg.ResultsDir); err != nil {
 		return nil, err
 	}
@@ -150,7 +157,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		}
 		return &workerProcess{child: child, URL: ready.HTTP}, nil
 	}
-	args := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relay.HTTP, "-demo-register"}
+	args := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", "r1=" + relay.HTTP, "-relay", "r2=" + secondRelay.HTTP, "-demo-register"}
 	for i := 0; i < 3; i++ {
 		name := fmt.Sprintf("%d", i)
 		worker, err := d.spawn(ctx, name)
@@ -306,7 +313,7 @@ func run() error {
 		fmt.Printf("certificate SHA-256 fingerprint (Chrome): %s\n", chromeFingerprint(fingerprint))
 	}
 	pageURL := scheme + "://" + listener.Addr().String()
-	processrun.Ready(map[string]any{"http": pageURL, "media": d.relay, "redis": d.redis, "certificate_sha256": fingerprint})
+	processrun.Ready(map[string]any{"http": pageURL, "media": d.relay, "relays": d.relays, "redis": d.redis, "certificate_sha256": fingerprint})
 	fmt.Printf("cluster demo: %s\n", demoPageURL(cfg, listener.Addr().String(), d.launchToken))
 	err = processrun.Serve(ctx, listener, d.handler(http.FileServer(http.FS(files))))
 	if errors.Is(err, context.Canceled) {

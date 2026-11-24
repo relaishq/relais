@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/relaytrace"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -61,7 +63,7 @@ func (p *lossProbe) replay(a net.Addr) error {
 	return nil
 }
 
-func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bin, dir, key, addr string, runs int, after time.Duration) error {
+func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bin, dir, key, addr string, runs int, after time.Duration, shipped bool) error {
 	for i := range runs {
 		for _, freeze := range []bool{true, false} {
 			mode := "SIGKILL"
@@ -73,7 +75,7 @@ func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bi
 				return err
 			}
 			bounded, cancel := context.WithTimeout(ctx, after+35*time.Second)
-			err := relayLossTrial(bounded, manager, bin, trialDir, key, addr, after, freeze)
+			err := relayLossTrial(bounded, manager, bin, trialDir, key, addr, after, freeze, shipped)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("relay loss %s trial %d: %w (logs %s)", mode, i+1, err, trialDir)
@@ -84,7 +86,7 @@ func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bi
 	return nil
 }
 
-func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze bool) (trialErr error) {
+func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool) (trialErr error) {
 	prefix := fmt.Sprintf("relais:slot-loss:%s:", filepath.Base(dir))
 	env := processEnv(keyHex, addr, prefix)
 	key, err := hex.DecodeString(keyHex)
@@ -96,15 +98,17 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		return err
 	}
 	defer store.Close()
-	// Workers and control run in this process; child relay logs are already
-	// retained by Manager.Start. Keep control output in the trial artifact too.
-	controlLog, err := os.OpenFile(filepath.Join(dir, "control.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
+	if !shipped {
+		// Workers and control run in this process; child relay logs are already
+		// retained by Manager.Start. Keep control output in the trial artifact too.
+		controlLog, err := os.OpenFile(filepath.Join(dir, "control.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
+			return err
+		}
+		previousLog := log.Writer()
+		log.SetOutput(io.MultiWriter(previousLog, controlLog))
+		defer func() { log.SetOutput(previousLog); _ = controlLog.Close() }()
 	}
-	previousLog := log.Writer()
-	log.SetOutput(io.MultiWriter(previousLog, controlLog))
-	defer func() { log.SetOutput(previousLog); _ = controlLog.Close() }()
 	var children []*clusterprocess.Child
 	defer func() {
 		for i := len(children) - 1; i >= 0; i-- {
@@ -112,7 +116,11 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		}
 	}()
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
-		child, e := manager.Start(dir, name, withoutKey(env), args...)
+		childEnv := withoutKey(env)
+		if name == "control" || strings.HasPrefix(name, "worker-") {
+			childEnv = env
+		}
+		child, e := manager.Start(dir, name, childEnv, args...)
 		if e != nil {
 			return nil, clusterprocess.Ready{}, e
 		}
@@ -140,41 +148,76 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		return err
 	}
 	children = append(children, standby)
-	p := controlplane.New(bindings[0].Relay, store)
+	var p *controlplane.Plane
 	var workers []*mediaworker.Worker
-	for i := range 2 {
-		workerLog, e := os.OpenFile(filepath.Join(dir, fmt.Sprintf("worker-%d.log", i)), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	var workerURLs []string
+	var signalingURL string
+	if shipped {
+		controlAddr, e := clusterprocess.FreeTCP()
 		if e != nil {
 			return e
 		}
-		defer workerLog.Close()
-		// Fix the level explicitly: environment-enabled Pion debug/trace logs
-		// can contain credentials and must not enter uploaded artifacts.
-		factory := &logging.DefaultLoggerFactory{Writer: workerLog, DefaultLogLevel: logging.LogLevelInfo}
-		worker, e := mediaworker.New(mediaworker.Config{LoggerFactory: factory, Relay: &mediaworker.RelayConfig{Owners: store, Addr: bindings[0].Slot.Leg, PublicAddr: bindings[0].Slot.Public}})
-		if e != nil {
+		signalingURL = "http://" + controlAddr
+		args := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr}
+		for _, b := range bindings {
+			args = append(args, "-relay", b.Slot.ID+"="+b.Relay.(*controlplane.RemoteRelay).URL)
+		}
+		for i := range 2 {
+			name := fmt.Sprint(i)
+			_, ready, e := start("worker-"+name, filepath.Join(bin, "relais-worker"), "-name", name, "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-control", signalingURL, "-relay-leg", first.Leg, "-relay-media", first.Media, "-agent", "echo")
+			if e != nil {
+				return e
+			}
+			workerURLs = append(workerURLs, ready.HTTP)
+			args = append(args, "-worker", name+"="+ready.HTTP)
+		}
+		if _, _, e := start("control", args...); e != nil {
 			return e
 		}
-		defer worker.Close()
-		if err = p.Register(fmt.Sprint(i), worker.LocalAddr(), worker); err != nil {
-			return err
+		if e := lossWait(ctx, func() bool {
+			var status controlplane.Status
+			err := privateapi.Do(ctx, http.DefaultClient, signalingURL, http.MethodGet, "/status", nil, &status, nil)
+			return err == nil && status.Ready && len(status.Workers) == 2
+		}); e != nil {
+			return e
 		}
-		workers = append(workers, worker)
-	}
-	for _, b := range bindings {
-		for _, worker := range workers {
-			if err = b.Relay.(*controlplane.RemoteRelay).AddWorker(ctx, worker.LocalAddr()); err != nil {
+	} else {
+		p = controlplane.New(bindings[0].Relay, store)
+		for i := range 2 {
+			workerLog, e := os.OpenFile(filepath.Join(dir, fmt.Sprintf("worker-%d.log", i)), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+			if e != nil {
+				return e
+			}
+			defer workerLog.Close()
+			// Fix the level explicitly: environment-enabled Pion debug/trace logs
+			// can contain credentials and must not enter uploaded artifacts.
+			factory := &logging.DefaultLoggerFactory{Writer: workerLog, DefaultLogLevel: logging.LogLevelInfo}
+			worker, e := mediaworker.New(mediaworker.Config{LoggerFactory: factory, Relay: &mediaworker.RelayConfig{Owners: store, Addr: bindings[0].Slot.Leg, PublicAddr: bindings[0].Slot.Public}})
+			if e != nil {
+				return e
+			}
+			defer worker.Close()
+			if err = p.Register(fmt.Sprint(i), worker.LocalAddr(), worker); err != nil {
 				return err
 			}
+			workers = append(workers, worker)
 		}
+		for _, b := range bindings {
+			for _, worker := range workers {
+				if err = b.Relay.(*controlplane.RemoteRelay).AddWorker(ctx, worker.LocalAddr()); err != nil {
+					return err
+				}
+			}
+		}
+		if err = p.ConfigureRelaySet(ctx, bindings); err != nil {
+			return err
+		}
+		server := httptest.NewServer(p.Handler())
+		defer server.Close()
+		signalingURL = server.URL
 	}
-	if err = p.ConfigureRelaySet(ctx, bindings); err != nil {
-		return err
-	}
-	server := httptest.NewServer(p.Handler())
-	defer server.Close()
 	var probes []*lossProbe
-	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: bindings[0].Slot.Public, CallerSocket: func() (net.PacketConn, error) {
+	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: signalingURL + "/calls", RelayAddr: bindings[0].Slot.Public, CallerSocket: func() (net.PacketConn, error) {
 		socket, e := net.ListenPacket("udp4", "127.0.0.1:0")
 		if e != nil {
 			return nil, e
@@ -211,31 +254,33 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 			return err
 		}
 	}
-	life, stop := context.WithCancel(ctx)
-	defer stop()
-	done := make(chan error, 1)
-	for _, worker := range workers {
-		_ = p.Heartbeat(worker.LocalAddr())
-	}
-	go func() { done <- p.Run(life) }()
-	defer func() { stop(); <-done }()
-	heartbeatDone := make(chan struct{})
-	go func() {
-		defer close(heartbeatDone)
-		tick := time.NewTicker(50 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-life.Done():
-				return
-			case <-tick.C:
-				for _, worker := range workers {
-					_ = p.Heartbeat(worker.LocalAddr())
+	if !shipped {
+		life, stop := context.WithCancel(ctx)
+		defer stop()
+		done := make(chan error, 1)
+		for _, worker := range workers {
+			_ = p.Heartbeat(worker.LocalAddr())
+		}
+		go func() { done <- p.Run(life) }()
+		defer func() { stop(); <-done }()
+		heartbeatDone := make(chan struct{})
+		go func() {
+			defer close(heartbeatDone)
+			tick := time.NewTicker(50 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				select {
+				case <-life.Done():
+					return
+				case <-tick.C:
+					for _, worker := range workers {
+						_ = p.Heartbeat(worker.LocalAddr())
+					}
 				}
 			}
-		}
-	}()
-	defer func() { stop(); <-heartbeatDone }()
+		}()
+		defer func() { stop(); <-heartbeatDone }()
+	}
 	media, stopMedia := context.WithCancel(ctx)
 	sent := make(chan error, 8)
 	for _, c := range calls {
@@ -281,8 +326,9 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	var cutoff atomic.Bool
 	var oldInput, oldOutput atomic.Uint64
 	oldLeg := bindings[0].Slot.Leg.String()
-	// Both workers are in-process, so this observer sees their successful
-	// leg writes directly, independently of the child relay's receive queue.
+	// In the in-process lane, observe successful worker leg writes directly,
+	// independently of the child relay's receive queue. The process lane uses
+	// relay forwarding counters and worker metrics instead.
 	stopTrace := relaytrace.Observe(func(_ time.Time, name, path string, _ []byte) {
 		if path == oldLeg && name == "worker-relay-cutoff" {
 			cutoff.Store(true)
@@ -332,7 +378,7 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		}
 		gaps = append(gaps, gap)
 	}
-	if !cutoff.Load() {
+	if !shipped && !cutoff.Load() {
 		return fmt.Errorf("worker cut-off boundary missing")
 	}
 	if freeze {
@@ -381,6 +427,16 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		return ctx.Err()
 	case <-time.After(after):
 	}
+	for _, endpoint := range workerURLs {
+		values, _, e := scrapeMetrics(ctx, http.DefaultClient, endpoint+"/metrics")
+		if e != nil {
+			return e
+		}
+		failures, ok := values["relais_worker_decryption_failures_total"]
+		if !ok || failures != 0 {
+			return fmt.Errorf("worker decryption evidence missing or nonzero: present=%t failures=%g", ok, failures)
+		}
+	}
 	for _, c := range calls {
 		lease, e := store.Get(ctx, c.SessionID())
 		if e != nil {
@@ -412,7 +468,11 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		return fmt.Errorf("old slot oldInput=%d oldOutput=%d cutoff=%t", oldInput.Load(), oldOutput.Load(), cutoff.Load())
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
-	fmt.Printf("RELAY_LOSS freeze=%t n=8 decoded_upper_bounds p50=%s p95=%s max=%s samples=%v old_accepted=0 old_sent=0 auth=0 duplicates=0\n", freeze, gaps[3], gaps[7], gaps[7], gaps)
+	if shipped {
+		fmt.Printf("RELAY_LOSS_PROCESSES freeze=%t n=8 decoded_upper_bounds p50=%s p95=%s max=%s samples=%v auth=0 duplicates=0\n", freeze, gaps[3], gaps[7], gaps[7], gaps)
+	} else {
+		fmt.Printf("RELAY_LOSS freeze=%t n=8 decoded_upper_bounds p50=%s p95=%s max=%s samples=%v old_accepted=0 old_sent=0 auth=0 duplicates=0\n", freeze, gaps[3], gaps[7], gaps[7], gaps)
+	}
 	return nil
 }
 

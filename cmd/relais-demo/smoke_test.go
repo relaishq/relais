@@ -110,7 +110,7 @@ func TestDemoLocalNetworkSmoke(t *testing.T) {
 			}
 		}
 	}
-	require.Equal(t, 5, privateCount, "relay, control, and three workers")
+	require.Equal(t, 6, privateCount, "two relays, control, and three workers")
 	t.Logf("TLS page %s, public media %s; all %d private APIs refuse %s", listener.Addr(), d.relay, privateCount, isolationHost)
 }
 

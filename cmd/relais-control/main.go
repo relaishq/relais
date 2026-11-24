@@ -23,7 +23,8 @@ func (w *workers) Set(s string) error { *w = append(*w, s); return nil }
 func run() error {
 	var storeConfig processrun.StoreConfig
 	storeConfig.Flags(flag.CommandLine)
-	relayURL := flag.String("relay", processrun.Env("RELAIS_RELAY_URL", ""), "relay control HTTP URL")
+	var relayURLs workers
+	flag.Var(&relayURLs, "relay", "relay control HTTP URL, or name=URL repeated for several relay slots")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_CONTROL_HTTP", "127.0.0.1:0"), "WHIP and private heartbeat HTTP address")
 	demoRegister := flag.Bool("demo-register", false, "enable loopback demo replacement registration")
 	clockProber := flag.Bool("clock-prober", false, "enable private GET /clock for recorded frontend probes")
@@ -37,13 +38,22 @@ func run() error {
 	if *version {
 		return buildinfo.PrintVersion(os.Stdout, "relais-control")
 	}
-	if *relayURL == "" || len(registered) < 1 {
+	if len(relayURLs) == 0 {
+		if endpoint := processrun.Env("RELAIS_RELAY_URL", ""); endpoint != "" {
+			relayURLs = append(relayURLs, endpoint)
+		}
+	}
+	if len(relayURLs) == 0 || len(registered) < 1 {
 		return errors.New("control requires -relay and at least one -worker")
 	}
 	if *workerCallCap < 0 {
 		return errors.New("worker-call-cap must be nonnegative")
 	}
 	fixed, err := parseWorkers(registered)
+	if err != nil {
+		return err
+	}
+	relays, err := parseRelays(relayURLs)
 	if err != nil {
 		return err
 	}
@@ -59,13 +69,16 @@ func run() error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	r := &controlplane.RemoteRelay{URL: *relayURL}
+	r := relays[0].remote
 	frames, err := storeConfig.OpenFrames(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = frames.Close() }()
 	plane := controlplane.NewWithConfig(r, store, controlplane.Config{FrameCache: frames, StoreOutageBudget: storeConfig.OutageBudget, WorkerCallCap: *workerCallCap})
+	if err := configureRelaySet(ctx, plane, relays); err != nil {
+		return err
+	}
 	names := make([]string, 0, len(fixed))
 	for _, entry := range fixed {
 		names = append(names, entry.name)
@@ -119,7 +132,18 @@ func run() error {
 	}()
 	firstRelay := make(chan struct{})
 	registrationDone := make(chan struct{})
-	go func() { defer close(registrationDone); registerRestartedRelay(ctx, plane, r, firstRelay) }()
+	go func() {
+		defer close(registrationDone)
+		var registrations sync.WaitGroup
+		for _, entry := range relays {
+			var first chan<- struct{}
+			if entry.remote == r {
+				first = firstRelay
+			}
+			registrations.Go(func() { registerRestartedRelay(ctx, plane, entry.remote, first) })
+		}
+		registrations.Wait()
+	}()
 	defer func() { cancel(); <-registrationDone }()
 	select {
 	case <-firstRelay:
@@ -181,7 +205,7 @@ func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *c
 			log.Printf("relay bootstrap attempt=%d instance=%s workers=%d result=%s", attempt, instance, registered, bootstrapResult(err))
 		}
 		healthy, lastInstance, lastRegistered = err == nil, instance, registered
-		if attempt == 1 {
+		if attempt == 1 && first != nil {
 			close(first)
 		}
 		if err != nil {

@@ -172,7 +172,7 @@ try:
     demo = launch([str(archive / 'relais-demo'), '-bin', str(archive), '-http', '127.0.0.1:0', '-agent=demo'], 'demo')
     demo_ready = ready(demo, 'demo')
     demo_children = descendants(demo.pid)
-    assert len(demo_children) == 6, f'expected Redis, relay, 3 workers and control: {demo_children}'
+    assert len(demo_children) == 7, f'expected Redis, 2 relays, 3 workers and control: {demo_children}'
     save('demo-processes.json', sorted(demo_children))
     with http.open(demo_ready['http'], timeout=5) as response:
         assert response.status == 200

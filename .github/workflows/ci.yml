@@ -375,7 +375,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [relay-restart, relay-standby, relay-loss]
+        mode: [relay-restart, relay-standby, relay-loss, relay-loss-processes]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -398,6 +398,8 @@ jobs:
           go test -race -v -count=1 ./internal/processidentity/ | tee bin/relay-continuity-fencing.log
       # Restart compares ten restore-on and ten restore-off trials. Standby
       # compares ten SIGKILL and ten SIGSTOP trials. Redis is driver-owned.
+      # Both loss lanes reuse the eight-call drill; processes uses shipped
+      # control and workers through the repeated -relay flag path.
       - name: Run relay continuity acceptance
         shell: bash
         run: |

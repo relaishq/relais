@@ -36,6 +36,7 @@ type demo struct {
 	ctx                        context.Context
 	client                     *http.Client
 	control, relay, redis, dir string
+	relays                     []string
 	agentName                  string
 	relayBuffer                string
 	publicHost                 string     // exact opt-in page IP; empty means loopback only
@@ -64,6 +65,7 @@ type demoStatus struct {
 	ExpectedPoolSize  int            `json:"expected_pool_size"`
 	WorkerPIDs        map[string]int `json:"worker_pids"`
 	Relay             string         `json:"relay"`
+	Relays            []string       `json:"relays"`
 	Redis             string         `json:"redis"`
 }
 
@@ -75,6 +77,7 @@ func (d *demo) status(ctx context.Context) (demoStatus, error) {
 	}
 	status.AttachMode, status.ResultsEnabled = d.attached, d.resultsDir != ""
 	status.Relay, status.Redis = d.relay, d.redis
+	status.Relays = d.relays
 	status.LaunchID = d.launchID
 	status.RelayBuffer = selectedRelayBuffer(config{RelayBuffer: d.relayBuffer})
 	status.SelectedAgent = d.agentName

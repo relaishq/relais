@@ -698,6 +698,7 @@ func run() (err error) {
 	workerRestart := flag.Bool("worker-restart", false, "repeated worker crashes with automatic same-address restart and new-call placement")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	relayLoss := flag.Bool("relay-loss", false, "eight-call relay-slot loss: interleaved SIGSTOP/SIGCONT and SIGKILL of active plus standby")
+	relayLossProcesses := flag.Bool("relay-loss-processes", false, "relay-loss drill using shipped relay, control and worker binaries")
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
 	profile := flag.String("profile", "lan", "lan, region, far-caller or lossy-dc (shaping requires netns)")
@@ -729,7 +730,7 @@ func run() (err error) {
 			return errors.New("worker-restart requires at least two crashes")
 		}
 	}
-	if *relayLoss && (*relayStandby || *relayRestart || *terminate || *pauseWorker || *bufferOn || *compareBuffer || *storeStall != "" || *scenario != "" || *topologyOption != "loopback" || workerdriver.IsCustom(selectedWorker.Agent)) {
+	if (*relayLoss || *relayLossProcesses) && (*relayLoss && *relayLossProcesses || *relayStandby || *relayRestart || *terminate || *pauseWorker || *bufferOn || *compareBuffer || *storeStall != "" || *scenario != "" || *topologyOption != "loopback" || workerdriver.IsCustom(selectedWorker.Agent)) {
 		return errors.New("relay-loss requires the loopback echo topology and cannot combine with another fault mode")
 	}
 	if *releasePair {
@@ -913,8 +914,8 @@ func run() (err error) {
 	if *storeStall != "" {
 		return runStoreStallTrials(ctx, manager, ownedRedis, bin, dir, hex.EncodeToString(key[:]), addr, *storeStall, *stallDuration, *runs, *after, *verbose)
 	}
-	if *relayLoss {
-		return runRelayLossTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after)
+	if *relayLoss || *relayLossProcesses {
+		return runRelayLossTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after, *relayLossProcesses)
 	}
 	if *scenario != "" {
 		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRouteTuning: *privateRouteTuning, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)
