@@ -26,6 +26,13 @@ function page(search='',renderPage=false,status,hash='',storage=new Map()) {
 function call() {
  return {agentMode:'demo',source:'pattern',id:'test',resource:'/calls/test',armed:true,readyAtMs:1,pc:{connectionState:'connected'},events:[],baselines:[],hold:{status:'pass',verdict:{status:'pass',reasons:[]}},hiddenPeriods:[],transitions:[],negotiations:[],descriptionChanges:[],restartCalls:[],sampleErrors:[],samples:[{atMs:10000,audio:{},video:{}}],latest:{atMs:13000,audio:{},video:{}},contentFrames:[],baselineCount:1,headroomRatio:0.5};
 }
+test('demo status shows both relay media addresses',async()=>{
+ const relays=['127.0.0.1:25780','127.0.0.1:25782'];
+ const {elements}=page('',true,{relays,relayBuffer:'on'});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(elements.get('relay-addresses').textContent,relays.join(', '));
+});
+
 test('passing media cannot pass a demo event without its required agent verdict',()=>{
  const {api}=page();const s=call();
  s.events=[{kind:'move',windowVerdict:{status:'pass',reasons:[]}}];api.setCall(s);

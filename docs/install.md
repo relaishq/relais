@@ -113,7 +113,7 @@ Run the real process topology on this machine:
 ./start.sh
 ```
 
-This starts Redis, the relay, two workers, control, and the HTTPS signal
+This starts Redis, two relay slots, two workers, control, and the HTTPS signal
 frontend, in that order. Every listener binds to loopback. The default worker
 agent echoes audio and video. The script prints the signal URL, CA certificate
 path, token-file path, control URL, and PID-file path. Secrets are generated

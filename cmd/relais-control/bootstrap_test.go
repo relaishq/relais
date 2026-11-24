@@ -122,6 +122,7 @@ func TestFixedPoolTolerantBootstrapProcesses(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, s.Calls, 1)
 			require.Equal(t, "a", s.Calls[0].Owner)
+			require.Nil(t, s.Calls[0].Relay, "single -relay keeps legacy placement without a relay set")
 			require.Equal(t, 1, s.Pool.Pending)
 			require.Nil(t, s.Pool.Demand)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+controlHTTP+"/calls", strings.NewReader("offer"))
