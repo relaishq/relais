@@ -174,8 +174,13 @@ caller            signal/control              worker (owner)         relay R2   
    `g + 1` and the target slot. Control refuses an offer for any other
    generation.
 4. The worker checks that the offer keeps the session: same DTLS fingerprint,
-   same MIDs and BUNDLE group, same payload types and SSRCs. It refuses
-   anything else with a typed `restart_mismatch` outcome. It answers with the
+   MIDs, BUNDLE group, media protocols, payload lists and order, payload
+   mappings, SSRCs and msid. Default-candidate transport fields may change on
+   ICE restart: each nonzero `m=` port and port count, session/media `c=`
+   connection data, and `a=rtcp` (RFC 8839 section 4.2.1.2). These fields are
+   ignored by the restart identity; a port of 0 (a rejected m-section) is not.
+   Other media identity changes produce a typed `restart_mismatch` outcome.
+   It answers with the
    original `a=setup` role and fingerprint, the new ufrag and password, and the
    target slot's public address as the only candidate. It keeps generation `g`
    credentials valid on the current path.

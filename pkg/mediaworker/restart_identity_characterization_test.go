@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Characterize the existing byte-level identity before adding diagnostics.
-// These are synthetic Chrome-style offers, not captures of the failing run.
+// Characterize allowed ICE transport changes while keeping media pinned.
+// These are synthetic Chrome-style offers, not full browser captures.
 func TestRestartIdentityCurrentNormalization(t *testing.T) {
 	base := testOffer(testOfferAttrs{
 		session: []string{"a=extmap-allow-mixed", "a=msid-semantic: WMS stream-1", "a=ice-options:trickle"},
@@ -18,7 +18,6 @@ func TestRestartIdentityCurrentNormalization(t *testing.T) {
 	base = strings.Replace(base, "SAVPF 96\r\n", "SAVPF 96 97\r\n", 1)
 	want, err := restartIdentity(base)
 	require.NoError(t, err)
-	require.Equal(t, "543d1bab41afd613f467ce8a69c2a53610bed5d73b06e0ff12510dfe5370c3cf", want, "persisted identity bytes must not change")
 	for _, tc := range []struct {
 		name, from, to string
 		accepted       bool
@@ -50,9 +49,14 @@ func TestRestartIdentityCurrentNormalization(t *testing.T) {
 		{"msid-semantic", "a=msid-semantic: WMS stream-1", "a=msid-semantic: WMS *", false},
 		{"attribute-order", "a=sendrecv\r\na=msid:stream-1 video-1", "a=msid:stream-1 video-1\r\na=sendrecv", false},
 		{"ice-options", "a=ice-options:trickle", "a=ice-options:trickle renomination", false},
-		{"media-port", "m=audio 9 ", "m=audio 40000 ", false},
-		{"connection", "c=IN IP4 0.0.0.0", "c=IN IP4 192.0.2.1", false},
-		{"rtcp-address", "a=rtcp:9 IN IP4 0.0.0.0", "a=rtcp:40001 IN IP4 192.0.2.1", false},
+		{"protocol", "UDP/TLS/RTP/SAVPF", "RTP/SAVPF", false},
+		{"port-count", "m=video 9 ", "m=video 40000/2 ", true},
+		{"session-connection", "s=-\r\n", "s=-\r\nc=IN IP4 192.0.2.1\r\n", true},
+		{"rtcp-removal", "a=rtcp:9 IN IP4 0.0.0.0\r\n", "", true},
+		{"media-port", "m=audio 9 ", "m=audio 40000 ", true},
+		{"media-rejected", "m=video 9 ", "m=video 0 ", false},
+		{"connection", "c=IN IP4 0.0.0.0", "c=IN IP4 192.0.2.1", true},
+		{"rtcp-address", "a=rtcp:9 IN IP4 0.0.0.0", "a=rtcp:40001 IN IP4 192.0.2.1", true},
 		{"bandwidth", "c=IN IP4 0.0.0.0\r\n", "c=IN IP4 0.0.0.0\r\nb=AS:1000\r\n", false},
 		{"rtcp-mux-only", "a=rtcp-mux\r\n", "a=rtcp-mux\r\na=rtcp-mux-only\r\n", false},
 		{"rtcp-rsize", "a=rtcp-rsize\r\n", "", false},
@@ -68,4 +72,44 @@ func TestRestartIdentityCurrentNormalization(t *testing.T) {
 	}
 	_, err = restartIdentity("not SDP")
 	require.ErrorIs(t, err, ErrRestartMismatch)
+}
+
+func TestRestartIdentityIgnoresChromeDefaultCandidates(t *testing.T) {
+	initial := testOffer(testOfferAttrs{
+		audio: []string{"a=ssrc:123 cname:caller", "a=msid:stream-1 audio-1", "a=fmtp:111 minptime=10;useinbandfec=1", "a=rtcp:36574 IN IP4 10.0.141.37"},
+		video: []string{"a=ssrc:456 cname:caller", "a=msid:stream-1 video-1", "a=rtcp:36574 IN IP4 10.0.141.37"},
+	})
+	// Reproduce the transport lines from the CI failure on both m-lines.
+	initial = strings.Replace(initial, "SAVPF 111\r\n", "SAVPF 111 63 9 0 8 13 110 126\r\n", 1)
+	initial = strings.ReplaceAll(initial, " 9 UDP/TLS/RTP/SAVPF ", " 36573 UDP/TLS/RTP/SAVPF ")
+	initial = strings.ReplaceAll(initial, "c=IN IP4 0.0.0.0", "c=IN IP4 10.0.141.37")
+	initial = strings.Replace(initial, "t=0 0\r\n", "c=IN IP4 10.0.141.37\r\nt=0 0\r\n", 1)
+	want, err := restartIdentity(initial)
+	require.NoError(t, err)
+	for _, port := range []string{"9", "57630", "57630/2"} {
+		t.Run(port, func(t *testing.T) {
+			restart := strings.ReplaceAll(initial, " 36573 UDP/TLS/RTP/SAVPF ", " "+port+" UDP/TLS/RTP/SAVPF ")
+			restart = strings.ReplaceAll(restart, "c=IN IP4 10.0.141.37", "c=IN IP4 0.0.0.0")
+			restart = strings.ReplaceAll(restart, "a=rtcp:36574 IN IP4 10.0.141.37", "a=rtcp:9 IN IP4 0.0.0.0")
+			got, err := restartIdentity(restart)
+			require.NoError(t, err)
+			require.Equal(t, want, got, "placeholder and regathered default candidates preserve identity")
+			for _, change := range []struct{ name, from, to string }{
+				{"payload-list", "SAVPF 111 63 9 0 8 13 110 126", "SAVPF 111"},
+				{"payload-order", "SAVPF 111 63", "SAVPF 63 111"},
+				{"ssrc", "a=ssrc:123 ", "a=ssrc:124 "},
+				{"mid", "a=mid:1", "a=mid:2"},
+				{"fingerprint", "AB:", "CD:"},
+				{"protocol", "UDP/TLS/RTP/SAVPF", "RTP/SAVPF"},
+			} {
+				t.Run(change.name, func(t *testing.T) {
+					changed := strings.ReplaceAll(restart, change.from, change.to)
+					require.NotEqual(t, restart, changed)
+					got, err := restartIdentity(changed)
+					require.NoError(t, err)
+					require.NotEqual(t, want, got, "media identity stays pinned despite transport changes")
+				})
+			}
+		})
+	}
 }

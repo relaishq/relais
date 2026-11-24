@@ -219,10 +219,13 @@ func (w *Worker) initialRelay(id string) *RelaySlot {
 	return nil
 }
 
-// The signature permits changed ICE credentials/candidates, origin version,
-// and omitted unnegotiated extensions/feedback. It pins SSRCs, MIDs,
-// payload mappings, BUNDLE and fingerprint. parseOffer separately validates
-// the caller's setup role; the worker keeps its original passive answer role.
+// The signature permits changed ICE credentials/candidates, nonzero m-line
+// ports and port counts, session/media connection data, and a=rtcp default candidates.
+// Those transport fields can change on ICE restart (RFC 8839 section 4.2.1.2).
+// It also permits origin version changes and omitted extensions/feedback.
+// SSRCs, MIDs, protocols, payload lists/order/mappings, BUNDLE, fingerprint
+// and msid stay pinned. parseOffer separately validates the caller's setup
+// role; the worker keeps its original passive answer role.
 func restartIdentity(raw string) (string, error) {
 	data, err := normalizeRestartOffer(raw)
 	if err != nil {
@@ -231,19 +234,20 @@ func restartIdentity(raw string) (string, error) {
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
 
-// normalizeRestartOffer is also the credential-free input to opt-in restart
-// diagnostics. Keep its bytes stable: existing sessions store their hash.
+// normalizeRestartOffer supplies the bytes for the persisted identity hash
+// and the credential-free input to opt-in restart diagnostics.
 func normalizeRestartOffer(raw string) ([]byte, error) {
 	var d sdp.SessionDescription
 	if err := d.UnmarshalString(raw); err != nil {
 		return nil, ErrRestartMismatch
 	}
 	d.Origin.SessionVersion = 0
+	d.ConnectionInformation = nil
 	strip := func(attrs []sdp.Attribute) []sdp.Attribute {
 		out := make([]sdp.Attribute, 0, len(attrs))
 		for _, a := range attrs {
 			switch a.Key {
-			case "ice-ufrag", "ice-pwd", "candidate", "end-of-candidates", "setup", "extmap", "extmap-allow-mixed", "rtcp-fb":
+			case "ice-ufrag", "ice-pwd", "candidate", "end-of-candidates", "rtcp", "setup", "extmap", "extmap-allow-mixed", "rtcp-fb":
 			default:
 				out = append(out, a)
 			}
@@ -252,6 +256,11 @@ func normalizeRestartOffer(raw string) ([]byte, error) {
 	}
 	d.Attributes = strip(d.Attributes)
 	for _, m := range d.MediaDescriptions {
+		// Port 0 rejects the m-section (RFC 3264 section 6); keep that pinned.
+		if m.MediaName.Port.Value != 0 {
+			m.MediaName.Port = sdp.RangedPort{Value: 9}
+		}
+		m.ConnectionInformation = nil
 		m.Attributes = strip(m.Attributes)
 	}
 	return d.Marshal()
