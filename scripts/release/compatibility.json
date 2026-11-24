@@ -70,7 +70,7 @@
   },
   "relay_udp_contract": 3,
   "relay_udp_golden_sha256": "3ff7baf9748f6b962e224bbc3e76b5489b4e12afbccd1428168da034409fe154",
-  "private_http_golden_sha256": "9d2e7514aeeabf075ad3ba31eecc21699391789c93d9a9ad8fc78553f14eeb5f",
+  "private_http_golden_sha256": "82a122b92258475b757e3c9cd8f1a741d684ef3380f0eec2b53be13a5c7fbee8",
   "roles": {
     "control": {
       "default": {

@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 
 	"github.com/relaishq/relais/pkg/relay"
@@ -54,7 +55,8 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 		b, known := p.relaySet[s.Slot]
 		if known {
 			b.admissionError = ""
-			if err != nil {
+			// A completed drain still backs off until a new instance arrives.
+			if err != nil && !errors.Is(err, errRelayDrained) {
 				b.admissionError = err.Error()
 			}
 			p.relaySet[s.Slot] = b

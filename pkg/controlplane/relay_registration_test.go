@@ -2,7 +2,10 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"testing"
 
@@ -115,4 +118,28 @@ func TestDrainedOrLostRelaySlotWaitsForNewInstance(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRelayRegistryKeepsCompletedDrainStatusWithoutError(t *testing.T) {
+	store := sessionstore.NewMemory()
+	relays := newAdmissionRelays(t, store)
+	plane := New(relays[0], store)
+	configureAdmission(t, plane, relays)
+	registerAdmissionWorker(t, plane, store, relays[0].slot)
+	for _, r := range relays {
+		require.NoError(t, syncAdmission(t.Context(), plane, r))
+	}
+	require.NoError(t, plane.DrainRelay(t.Context(), "r1"))
+	registry := RelayWorkerRegistry{Slot: "r1"}
+	for range 2 {
+		require.Error(t, registry.Sync(t.Context(), plane, relays[0]), "the same drained instance must retain failure backoff")
+		response := httptest.NewRecorder()
+		plane.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/status", nil))
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		var status Status
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &status))
+		require.Equal(t, RelayStatus{Name: "r1", Draining: true}, status.Relays[0], "a completed drain is a steady state, not an admission error")
+	}
+	id := createAdmissionCall(t, plane)
+	require.Equal(t, "r2", relayStatusOf(t, plane, id).Slot, "the same instance must remain excluded from placement")
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
+var errRelayDrained = errors.New("controlplane: drained relay awaits a new instance")
+
 // relayPairLocked is traffic eligibility. Draining blocks new placement, but
 // existing calls can still move workers or roll back through that slot.
 func (p *Plane) relayPairLocked(w *registration, slot string) bool {
@@ -213,7 +215,17 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 	}
 	rejoin := b.lost || b.draining
 	if b.draining && (b.drainEpoch >= lease.Epoch || b.drainActive) {
+		sameInstance := !b.drainActive && b.drainEpoch == lease.Epoch && b.instance == status.Instance
 		p.mu.Unlock()
+		if sameInstance {
+			empty, err := p.relaySlotEmpty(ctx, id)
+			if err != nil {
+				return err
+			}
+			if empty {
+				return errRelayDrained
+			}
+		}
 		return ErrMoveInProgress
 	}
 	p.mu.Unlock()
