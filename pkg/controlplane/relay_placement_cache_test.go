@@ -26,3 +26,23 @@ func TestRelayPlacementReusesKnownAssignment(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, store.reads.Load(), "placement must not read every existing assignment")
 }
+
+func TestRelayPlacementDistributesNewCallsAcrossLiveRelays(t *testing.T) {
+	store := sessionstore.NewMemory()
+	p, _, _, first := relayFailurePlane(t, store)
+	ids := []string{first}
+	for range 7 {
+		id, _, err := p.Create(context.Background(), "offer", "a")
+		require.NoError(t, err)
+		ids = append(ids, id)
+	}
+	counts := map[string]int{}
+	for i, id := range ids {
+		_, assignment, err := store.RelayOwner(context.Background(), id)
+		require.NoError(t, err)
+		require.Equal(t, []string{"r1", "r2"}[i%2], assignment.Slot)
+		require.Empty(t, assignment.Pending)
+		counts[assignment.Slot]++
+	}
+	require.Equal(t, map[string]int{"r1": 4, "r2": 4}, counts)
+}

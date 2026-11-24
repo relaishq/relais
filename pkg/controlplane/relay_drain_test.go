@@ -158,6 +158,28 @@ func TestRelayDrainExcludesNewCalls(t *testing.T) {
 	})
 }
 
+func TestRelayDrainStatusShowsDrainingThenEmpty(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, w, _ := drainPlane(t, 2)
+		w.gate = make(chan struct{})
+		done := make(chan error, 1)
+		go func() { done <- p.DrainRelay(context.Background(), "r1") }()
+		synctest.Wait()
+		status, err := p.Status(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, []RelayStatus{
+			{Name: "r1", Draining: true, Calls: 2}, {Name: "r2"},
+		}, status.Relays)
+		close(w.gate)
+		require.NoError(t, <-done)
+		status, err = p.Status(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, []RelayStatus{
+			{Name: "r1", Draining: true}, {Name: "r2", Calls: 2},
+		}, status.Relays)
+	})
+}
+
 func TestRelayDrainConcurrencyEight(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p, w, _ := drainPlane(t, 17)
@@ -831,9 +853,15 @@ func TestRelayDrainOverallDeadline(t *testing.T) {
 					store.failures.Store(1000)
 					p.store, w.store = store, store
 				} else {
-					b := p.relaySet["r2"]
-					b.draining = true
-					p.relaySet["r2"] = b
+					store := &drainObservationStore{Memory: p.store.(*sessionstore.Memory)}
+					store.afterRead = func() {
+						p.mu.Lock()
+						b := p.relaySet["r2"]
+						b.draining = true
+						p.relaySet["r2"] = b
+						p.mu.Unlock()
+					}
+					p.store, w.store = store, store
 				}
 				// No caller deadline: cancellation is only a cleanup for broken code.
 				ctx, cancel := context.WithCancel(context.Background())
@@ -1135,28 +1163,27 @@ func TestRelayDrainTargetLostBeforeAttemptRepicks(t *testing.T) {
 	}
 }
 
-func TestRelayDrainNoTargetThenTargetAppears(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		p, w, ids := drainPlane(t, 1)
-		b := p.relaySet["r2"]
-		b.draining = true
-		p.relaySet["r2"] = b
-		actorDone := make(chan struct{})
-		go func() {
-			defer close(actorDone)
-			time.Sleep(8 * time.Second)
-			p.mu.Lock()
-			b := p.relaySet["r2"]
-			b.draining = false
-			p.relaySet["r2"] = b
-			p.mu.Unlock()
-		}()
-		start := time.Now()
-		result := drainHTTP(t, p, context.Background())
-		<-actorDone
-		require.Equal(t, []RelayMoveResult{{ID: ids[0], From: "r1", To: "r2"}}, result.Moves)
-		require.Zero(t, result.NotMovable)
-		require.EqualValues(t, 1, w.attempts.Load())
-		require.InDelta(t, 11, time.Since(start).Seconds(), 0.1, "wait 1, 2, 4, then keep waiting 4 seconds")
-	})
+func TestRelayDrainRefusesWithoutHealthyDestination(t *testing.T) {
+	for _, unavailable := range []string{"draining", "lost", "absent"} {
+		t.Run(unavailable, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p, w, ids := drainPlane(t, 1)
+				b := p.relaySet["r2"]
+				b.draining, b.lost = unavailable == "draining", unavailable == "lost"
+				p.relaySet["r2"] = b
+				if unavailable == "absent" {
+					delete(p.relaySet, "r2")
+				}
+				start := time.Now()
+				rec := httptest.NewRecorder()
+				p.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/relays/r1/drain", nil))
+				require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+				require.Contains(t, rec.Body.String(), "no other healthy relay")
+				require.Equal(t, start, time.Now(), "refuse before any retry")
+				require.False(t, p.relaySet["r1"].draining)
+				require.Zero(t, w.attempts.Load())
+				require.Equal(t, "r1", relayStatusOf(t, p, ids[0]).Slot)
+			})
+		})
+	}
 }

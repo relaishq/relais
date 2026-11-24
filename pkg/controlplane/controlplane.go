@@ -913,10 +913,19 @@ type CallStatus struct {
 	Relay *CallRelayStatus `json:"relay,omitempty"`
 }
 
-// Status is the HTTP view of workers and live calls.
+// RelayStatus describes placement eligibility and live calls on a named slot.
+type RelayStatus struct {
+	Name     string `json:"name"`
+	Draining bool   `json:"draining"`
+	Lost     bool   `json:"lost"`
+	Calls    int    `json:"call_count"`
+}
+
+// Status is the HTTP view of workers, relays and live calls.
 type Status struct {
 	Rebuild          *RebuildStatus     `json:"rebuild,omitempty"`
 	Workers          []WorkerStatus     `json:"workers"`
+	Relays           []RelayStatus      `json:"relays,omitempty"`
 	Calls            []CallStatus       `json:"calls"`
 	Takeovers        []MoveResult       `json:"takeovers"`
 	LostCount        uint64             `json:"lost_count"`
@@ -1003,14 +1012,25 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	status.Calls = live
 	status.Ready, status.Pool = p.readyLocked(), p.poolLocked(time.Now())
 	status.Takeovers, status.LostCount = p.recentTakeovers(), p.lostCount
+	for name, binding := range p.relaySet {
+		status.Relays = append(status.Relays, RelayStatus{Name: name, Draining: binding.draining, Lost: binding.lost})
+	}
 	p.mu.Unlock()
 	counts := make(map[string]int, len(status.Workers))
+	relayCounts := make(map[string]int, len(status.Relays))
 	for _, cs := range status.Calls {
 		counts[cs.Owner]++
+		if cs.Relay != nil {
+			relayCounts[cs.Relay.Slot]++
+		}
 	}
 	for i := range status.Workers {
 		status.Workers[i].Calls = counts[status.Workers[i].Name]
 	}
+	for i := range status.Relays {
+		status.Relays[i].Calls = relayCounts[status.Relays[i].Name]
+	}
+	sort.Slice(status.Relays, func(i, j int) bool { return status.Relays[i].Name < status.Relays[j].Name })
 	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
 	sort.Slice(status.Calls, func(i, j int) bool { return status.Calls[i].ID < status.Calls[j].ID })
 	return status, nil

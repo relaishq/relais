@@ -87,14 +87,12 @@ func TestRelayDrainLive(t *testing.T) {
 					limits[base.Kind] = limit
 				}
 			}
-			c.dialMu.Lock()
 			connected := 0
-			for _, state := range c.dtlsStates {
+			for _, state := range c.RelayDTLSStates() {
 				if state.State == "connected" {
 					connected++
 				}
 			}
-			c.dialMu.Unlock()
 			require.Equal(t, 1, connected)
 		}
 		for kind, gaps := range pauses {

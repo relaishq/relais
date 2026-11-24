@@ -804,6 +804,18 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 		p.relayPlacement.Unlock()
 		return RelayDrainResult{}, fmt.Errorf("controlplane: unknown relay slot %q: %w", slot, sessionstore.ErrNotFound)
 	}
+	available := false
+	for id, other := range p.relaySet {
+		if id != slot && !other.draining && !other.lost {
+			available = true
+			break
+		}
+	}
+	if !available {
+		p.mu.Unlock()
+		p.relayPlacement.Unlock()
+		return RelayDrainResult{}, fmt.Errorf("controlplane: cannot drain relay %q: no other healthy relay: %w", slot, ErrNoTarget)
+	}
 	b.draining = true
 	p.relaySet[slot] = b
 	calls := make([]*call, 0, len(p.calls))
