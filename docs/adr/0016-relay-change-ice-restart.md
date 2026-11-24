@@ -179,10 +179,11 @@ caller            signal/control              worker (owner)         relay R2   
    ICE restart: each nonzero `m=` port and port count, session/media `c=`
    connection data, and `a=rtcp` (RFC 8839 section 4.2.1.2). These fields are
    ignored by the restart identity; a port of 0 (a rejected m-section) is not.
-   Any other change produces a typed `restart_mismatch` outcome. It answers
-   with the original `a=setup` role and fingerprint, the new ufrag and
-   password, and the target slot's public address as the only candidate. It
-   keeps generation `g` credentials valid on the current path.
+   A change to the pinned session identity produces a typed
+   `restart_mismatch` outcome. It answers with the original `a=setup` role
+   and fingerprint, the new ufrag and password, and the target slot's public
+   address as the only candidate. It keeps generation `g` credentials valid
+   on the current path.
 5. The caller sends checks to R2. R2 routes the binding request by session ID,
    as today. It forwards it only if the assignment names R2 as current or
    pending (an extra field on the existing owner lookup).
