@@ -247,14 +247,20 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 				// A switched worker retries its fenced commit. Never send it back.
 				// The call left its path: arm the episode first, so settlement
 				// can never push its end past the first planned deadline + 15 s.
-				e, armErr := p.relayRecoveryEpisode(recovery, c, firstOuter)
+				e, armErr := p.relayRecoveryEpisodeFor(recovery, c, firstOuter, &pending)
 				if armErr != nil {
 					return errors.Join(err, armErr)
 				}
-				if err = p.waitRelayChange(recovery, c, pending, min(sessionstore.StoreOutageBudget(0), time.Until(e.deadline)), planned); err == nil {
+				deadline := firstOuter.Add(relayRecoveryLimit)
+				if e != nil {
+					deadline = e.deadline
+				}
+				if err = p.waitRelayChange(recovery, c, pending, min(sessionstore.StoreOutageBudget(0), time.Until(deadline)), planned); err == nil {
 					relayWatchEvent(c, "settlement-confirmed")
-					if err = p.completeRelayEpisode(recovery, c, e); err != nil {
-						return err // the episode ended at its deadline
+					if e != nil {
+						if err = p.completeRelayEpisode(recovery, c, e); err != nil {
+							return err // the episode ended at its deadline
+						}
 					}
 					ctx = recovery
 					break

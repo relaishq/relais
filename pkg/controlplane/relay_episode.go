@@ -90,6 +90,15 @@ const (
 // is never rebased past a later success. The watcher starts only once the
 // journal is reconciled and the final proposal is journaled.
 func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time.Time, snapshot ...map[string]sessionstore.ControlIntent) (*relayEpisode, error) {
+	return p.relayRecoveryEpisodeFor(ctx, c, detected, nil, snapshot...)
+}
+
+// relayRecoveryEpisodeFor admits planned settlement only against its own
+// unconfirmed attempt. The caller holds the call's operator lock, which keeps
+// that attempt from being replaced. Its seq and phase come from one read:
+// confirmation either already won (nil episode), or fences this proposal at
+// begin. Independent loss and stall triggers pass nil and keep their rules.
+func (p *Plane) relayRecoveryEpisodeFor(ctx context.Context, c *call, detected time.Time, planned *sessionstore.RelayAssignment, snapshot ...map[string]sessionstore.ControlIntent) (*relayEpisode, error) {
 	c.relayEpisodeMu.Lock()
 	defer c.relayEpisodeMu.Unlock()
 	journal := p.store.(sessionstore.ControlStore)
@@ -109,14 +118,31 @@ func (p *Plane) relayRecoveryEpisode(ctx context.Context, c *call, detected time
 		c.stateMu.Unlock()
 		intent := sessionstore.ControlIntent{ID: "relay-recovery:" + c.id, Token: randomEpisodeToken(), Kind: relayIntentKindUnsupported, Started: detected, Lease: lease}
 		if capable {
-			seq, err := p.relaySeq(ctx, c)
-			if err != nil {
-				return nil, err
+			var rec sessionstore.RelayConfirmation
+			if _, ok := p.store.(sessionstore.RelayConfirmations); ok {
+				_, saved, err := p.relayConfirmationOrClear(ctx, c)
+				if err != nil {
+					return nil, err
+				}
+				rec = saved
 			}
 			c.stateMu.Lock()
 			capable = c.relayCapable // an invalid record was cleared to mode none
 			c.stateMu.Unlock()
 			if capable {
+				if planned != nil && !rec.Episode.Open() && (rec.Episode == nil || rec.Episode.Outcome != sessionstore.RelayEpisodeEnded) {
+					t := rec.Attempt
+					if t == nil || t.Generation != planned.Generation+1 || t.Slot != planned.Pending || t.Kind != "planned" {
+						return nil, sessionstore.ErrRelayConflict
+					}
+					if t.Phase == sessionstore.RelayPhaseConfirmed {
+						return nil, nil
+					}
+				}
+				var seq uint64
+				if rec.Episode != nil {
+					seq = rec.Episode.Seq
+				}
 				intent.Kind, intent.Seq = relayIntentKind, seq+1
 			}
 		}
@@ -162,19 +188,6 @@ func deleteRelayProposal(ctx context.Context, journal sessionstore.ControlStore,
 		return err
 	}
 	return nil
-}
-
-// relaySeq reads the call's decision counter.
-func (p *Plane) relaySeq(ctx context.Context, c *call) (uint64, error) {
-	_, ok := p.store.(sessionstore.RelayConfirmations)
-	if !ok {
-		return 0, nil
-	}
-	_, rec, err := p.relayConfirmationOrClear(ctx, c)
-	if err != nil || rec.Episode == nil {
-		return 0, err
-	}
-	return rec.Episode.Seq, nil
 }
 
 func (p *Plane) callGone(c *call) bool {

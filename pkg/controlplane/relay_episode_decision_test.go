@@ -11,9 +11,242 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
+
+// settlementAbortGate holds the switched reply while caller confirmation lands.
+type settlementAbortGate struct {
+	*relayProtocolWorker
+	held, release chan struct{}
+}
+
+func (w *settlementAbortGate) AbortRelayRestart(ctx context.Context, _ string, _ uint64) error {
+	close(w.held)
+	select {
+	case <-w.release:
+		return mediaworker.ErrRelaySwitched
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestPlannedSettlementAfterConfirmationKeepsCall(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, worker, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		gate := &settlementAbortGate{relayProtocolWorker: worker, held: make(chan struct{}), release: make(chan struct{})}
+		p.workers["a"].worker = gate
+		// Let a proposed episode finish begin before settlement completes. This
+		// pins the losing order from #464 instead of racing completion's fence.
+		hook := func(from *call, name string) {
+			if from == c && name == "settlement-confirmed" {
+				c.relayEpisodeMu.Lock()
+				e := c.relayEpisode
+				c.relayEpisodeMu.Unlock()
+				if e != nil {
+					select {
+					case <-e.armed:
+					case <-e.done:
+					}
+				}
+			}
+		}
+		relayWatchHooks.Store(&hook)
+		t.Cleanup(func() { relayWatchHooks.Store(nil) })
+		result := make(chan error, 1)
+		go func() { result <- p.ChangeRelay(context.Background(), id, "r2") }()
+		lease, pending := waitRelayPending(t, store, id)
+		var oldDeadline time.Time
+		require.Eventually(t, func() bool {
+			c.stateMu.Lock()
+			defer c.stateMu.Unlock()
+			if c.relayEvent == nil {
+				return false
+			}
+			oldDeadline = c.relayEvent.Deadline.Add(relayRecoveryLimit)
+			c.relayRejected = true
+			return true
+		}, 5*time.Second, time.Millisecond)
+		select {
+		case <-gate.held:
+		case <-time.After(5 * time.Second):
+			t.Fatal("settlement never reached abort")
+		}
+		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
+		server := httptest.NewServer(p.Handler())
+		defer server.Close()
+		require.Equal(t, http.StatusNoContent, postProgress(t, server.URL+"/calls/"+id+"/media-progress", "application/json", `{"generation":1,"decoded_mids":["0"]}`).StatusCode)
+		require.Equal(t, sessionstore.RelayPhaseConfirmed, attemptOf(t, store, id).Attempt.Phase)
+		close(gate.release)
+		select {
+		case err = <-result:
+		case <-time.After(5 * time.Second):
+			t.Fatal("planned settlement never returned")
+		}
+		<-time.After(time.Until(oldDeadline) + 100*time.Millisecond)
+		t.Logf("past planned episode deadline: settlement=%v, end=%q", err, endReason(c))
+		require.Empty(t, endReason(c), "confirmation must keep the healthy call past the old deadline")
+		require.NoError(t, err, "the planned operation settles")
+		require.False(t, episodeOf(t, store, id).Open(), "no effective planned-settlement episode opens")
+		require.Empty(t, episodeOf(t, store, id).Token)
+		records, err := store.(sessionstore.ControlStore).ControlIntents(context.Background())
+		require.NoError(t, err)
+		require.Empty(t, records)
+	})
+}
+
+func TestPlannedSettlementBeginsBeforeConfirmation(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		c.mu.Lock() // planned settlement owns the operator lock
+		defer c.mu.Unlock()
+		now := time.Now()
+		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
+			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
+		e, err := p.relayRecoveryEpisodeFor(context.Background(), c, now, &pending)
+		require.NoError(t, err)
+		require.NotNil(t, e)
+		select {
+		case <-e.armed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("planned episode never armed")
+		}
+		require.Equal(t, e.proposal().Token, attemptOf(t, store, id).Attempt.Episode)
+		server := httptest.NewServer(p.Handler())
+		defer server.Close()
+		require.Equal(t, http.StatusNoContent, postProgress(t, server.URL+"/calls/"+id+"/media-progress", "application/json", `{"generation":1,"decoded_mids":["0"]}`).StatusCode)
+		require.Equal(t, sessionstore.RelayEpisodeCompleted, episodeOf(t, store, id).Outcome)
+		require.NoError(t, p.completeRelayEpisode(context.Background(), c, e))
+		awaitDone(t, e)
+		require.Empty(t, endReason(c))
+	})
+}
+
+type settlementStore interface {
+	sessionstore.Store
+	sessionstore.RelayConfirmations
+	sessionstore.ControlStore
+	Clock(context.Context, string) (time.Time, error)
+}
+
+// settlementReadGate returns the unconfirmed snapshot only after confirmation
+// lands. A second seq read would incorrectly rebase the proposal past success.
+type settlementReadGate struct {
+	settlementStore
+	hold          atomic.Bool
+	held, release chan struct{}
+}
+
+func (s *settlementReadGate) RelayConfirmation(ctx context.Context, id string) (sessionstore.RelayAssignment, sessionstore.RelayConfirmation, error) {
+	a, rec, err := s.settlementStore.RelayConfirmation(ctx, id)
+	if s.hold.CompareAndSwap(true, false) {
+		close(s.held)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return a, rec, ctx.Err()
+		}
+	}
+	return a, rec, err
+}
+
+func TestPlannedSettlementProposalKeepsObservedSequence(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, _, _, id := relayFailurePlane(t, store, sessionstore.RelayConfirmDecode)
+		stopRelayRecoveries(t, p)
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		now := time.Now()
+		lease, pending := seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
+			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(10 * time.Second), StoreDeadline: now.Add(10 * time.Second)})
+		require.NoError(t, store.(sessionstore.RelayAssignments).CommitRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
+		gate := &settlementReadGate{settlementStore: store.(settlementStore), held: make(chan struct{}), release: make(chan struct{})}
+		p.store = gate
+		gate.hold.Store(true)
+		defer func() {
+			select {
+			case <-gate.release:
+			default:
+				close(gate.release)
+			}
+		}()
+		proposed := make(chan *relayEpisode, 1)
+		failed := make(chan error, 1)
+		go func() {
+			e, err := p.relayRecoveryEpisodeFor(context.Background(), c, now, &pending)
+			proposed <- e
+			failed <- err
+		}()
+		select {
+		case <-gate.held:
+		case <-time.After(5 * time.Second):
+			t.Fatal("planned proposal never read its attempt")
+		}
+		server := httptest.NewServer(p.Handler())
+		defer server.Close()
+		require.Equal(t, http.StatusNoContent, postProgress(t, server.URL+"/calls/"+id+"/media-progress", "application/json", `{"generation":1,"decoded_mids":["0"]}`).StatusCode)
+		close(gate.release)
+		e := <-proposed
+		require.NoError(t, <-failed)
+		require.NotNil(t, e)
+		awaitDone(t, e)
+		require.Equal(t, uint64(1), e.proposal().Seq, "the proposal keeps the unconfirmed read's seq + 1")
+		require.False(t, episodeOf(t, store, id).Open())
+		require.Empty(t, episodeOf(t, store, id).Token)
+		require.NoError(t, p.completeRelayEpisode(context.Background(), c, e))
+		require.Empty(t, endReason(c))
+	})
+}
+
+func TestLaterFaultKeepsItsEpisodeAfterPlannedConfirmation(t *testing.T) {
+	for _, fault := range []string{"target-relay-loss", "caller-stall"} {
+		t.Run(fault, func(t *testing.T) {
+			forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+				p, c := confirmedRelayCall(t, store)
+				c.mu.Lock() // hold recovery before it can replace the old attempt
+				defer c.mu.Unlock()
+				armed := onWatchEvents(t, c, "armed")
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if fault == "target-relay-loss" {
+					require.NoError(t, p.loseRelay(ctx, "r2"))
+				} else {
+					result := make(chan error, 1)
+					go func() { _, err := p.callerRelayRestart(ctx, c); result <- err }()
+					defer func() { cancel(); require.ErrorIs(t, <-result, context.Canceled) }()
+				}
+				select {
+				case <-armed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("later fault never opened its episode")
+				}
+				c.relayEpisodeMu.Lock()
+				e := c.relayEpisode
+				c.relayEpisodeMu.Unlock()
+				require.True(t, episodeOf(t, store, c.id).Open())
+				require.Equal(t, sessionstore.RelayPhaseConfirmed, attemptOf(t, store, c.id).Attempt.Phase)
+				require.Empty(t, attemptOf(t, store, c.id).Attempt.Episode)
+				server := httptest.NewServer(p.Handler())
+				defer server.Close()
+				require.Equal(t, http.StatusNoContent, postProgress(t, server.URL+"/calls/"+c.id+"/media-progress", "application/json", `{"generation":1,"decoded_mids":["0"]}`).StatusCode)
+				require.ErrorIs(t, p.completeRelayEpisode(ctx, c, e), ErrMoveInProgress)
+				require.Equal(t, relayEnded, p.endRelayEpisode(ctx, c, e.proposal().Token, "relay_change_failed", false), "old confirmation cannot win the later episode's end")
+				require.Equal(t, sessionstore.RelayEpisodeEnded, episodeOf(t, store, c.id).Outcome)
+				p.cleanupRelayEpisode(ctx, c, e)
+			})
+		})
+	}
+}
 
 // Tests for the durable episode decision (ADR 0016 §7): one compare-and-set on
 // the confirmation record decides ended or completed for an episode token.

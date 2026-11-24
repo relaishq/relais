@@ -774,6 +774,11 @@ These record choices the accepted text left open while building sections 5,
     adopted. New attempts carry the open token; a recovery attempt is written
     only while its own token is open, and its driver stops once that token
     completed.
+    Clarification 2026-11-23 (#464): planned settlement does not propose an
+    episode for its already-confirmed attempt; it reads that attempt and `seq`
+    together, so later confirmation fences the proposal (covered by
+    `TestPlannedSettlementAfterConfirmationKeepsCall` and
+    `TestPlannedSettlementProposalKeepsObservedSequence`).
   - Success needs proof, an outcome that is not `ended` and, while an episode
     is open, an attempt owned by it; otherwise the call belongs to the episode
     (`ErrMoveInProgress`). Every success advances `seq` and completes the open
