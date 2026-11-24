@@ -174,11 +174,16 @@ caller            signal/control              worker (owner)         relay R2   
    `g + 1` and the target slot. Control refuses an offer for any other
    generation.
 4. The worker checks that the offer keeps the session: same DTLS fingerprint,
-   same MIDs and BUNDLE group, same payload types and SSRCs. It refuses
-   anything else with a typed `restart_mismatch` outcome. It answers with the
-   original `a=setup` role and fingerprint, the new ufrag and password, and the
-   target slot's public address as the only candidate. It keeps generation `g`
-   credentials valid on the current path.
+   MIDs, BUNDLE group, media protocols, payload lists and order, payload
+   mappings, SSRCs and msid. Default-candidate transport fields may change on
+   ICE restart: each nonzero `m=` port and port count, session/media `c=`
+   connection data, and `a=rtcp` (RFC 8839 section 4.2.1.2). These fields are
+   ignored by the restart identity; a port of 0 (a rejected m-section) is not.
+   A change to the pinned session identity produces a typed
+   `restart_mismatch` outcome. It answers with the original `a=setup` role
+   and fingerprint, the new ufrag and password, and the target slot's public
+   address as the only candidate. It keeps generation `g` credentials valid
+   on the current path.
 5. The caller sends checks to R2. R2 routes the binding request by session ID,
    as today. It forwards it only if the assignment names R2 as current or
    pending (an extra field on the existing owner lookup).
@@ -774,6 +779,11 @@ These record choices the accepted text left open while building sections 5,
     adopted. New attempts carry the open token; a recovery attempt is written
     only while its own token is open, and its driver stops once that token
     completed.
+    Clarification 2026-11-23 (#464): planned settlement does not propose an
+    episode for its already-confirmed attempt; it reads that attempt and `seq`
+    together, so later confirmation fences the proposal (covered by
+    `TestPlannedSettlementAfterConfirmationKeepsCall` and
+    `TestPlannedSettlementProposalKeepsObservedSequence`).
   - Success needs proof, an outcome that is not `ended` and, while an episode
     is open, an attempt owned by it; otherwise the call belongs to the episode
     (`ErrMoveInProgress`). Every success advances `seq` and completes the open
@@ -825,6 +835,18 @@ results do not establish the decoded-media target in section 9.
 | 7 | Decryption | Worker SRTP and SRTCP authentication failures; Chrome `inbound-rtp` decrypt errors where exposed; Pion caller counters | Zero in every row |
 | 8 | No duplicate media | Caller duplicate RTP count (existing standby metric); per-slot forwarded-packet counters for the call after switch plus 500 ms | Zero duplicates at the caller; zero worker-to-caller packets through the old slot after the switch |
 | 9 | Existing relay guarantees | ADR 0004 standby, ADR 0003 route restore, planned-move and crash gates with one slot | Unchanged, same thresholds |
+
+**CI evidence sources.** Rows 1 and 2 use `chrome-relay-change` for the real
+Chrome planned-change and active/standby SIGKILL trials. Row 2 also uses the
+`netns-crash-run` matrix's `relay-loss` lane: ten eight-call trials blackhole
+both addresses of a live relay using the shared namespace topology. The
+`relay-continuity` process lanes retain SIGKILL and SIGSTOP/SIGCONT evidence
+for rows 2 and 3. Gap tables are in the job summaries and driver logs; rows 7
+and 8 use the trials' decryption and duplicate checks. Chrome decryption
+counters are reported only where exposed. The namespace caller remains
+Pion; Chrome runs separately on loopback. Row 4's public-address-only fault
+is not covered by these lanes. These are evidence locations, not new measured
+results; the added CI lanes are NOT-RUN until their first completed run.
 
 **Chrome success signal.** With `media_progress`, the driver applies section 5's
 500 ms grace and sustained decode window on every required MID, then sends A.

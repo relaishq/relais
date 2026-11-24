@@ -90,6 +90,8 @@ type ReplayRelay interface {
 }
 
 type registration struct {
+	instanceMu       sync.Mutex
+	instance         string
 	rebindTarget     netip.AddrPort
 	operatorDraining bool
 	previousAddr     netip.AddrPort
@@ -224,6 +226,10 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 
 // Register names a worker by its unique private relay-leg address.
 func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error {
+	return p.register(name, addr, worker, "")
+}
+
+func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instance string) error {
 	if name == "" || !addr.IsValid() || worker == nil {
 		return errors.New("controlplane: worker needs name, address and interface")
 	}
@@ -250,7 +256,7 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	if err := p.configureWorkerRelays(ctx, worker); err != nil {
 		return err
 	}
-	err := p.saveRegistration(ctx, name, addr, worker)
+	err := p.saveRegistration(ctx, name, addr, worker, instance)
 	if err != nil {
 		return err
 	}
@@ -268,7 +274,7 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	}
 	observation := newWorkerObservation(time.Now(), p.bootstrap)
 	observation.linkDown = p.workerUsesLink(name, worker)
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: observation}
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: observation, instance: instance}
 	delete(p.pendingWorkers, name)
 	p.loadVersion++
 	p.observationChangedLocked()

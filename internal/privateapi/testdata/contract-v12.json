@@ -702,6 +702,7 @@
             "UnknownVersions": 1
           },
           "draining": true,
+          "instance": "fixture",
           "inventory": [
             {
               "epoch": 1,
@@ -933,6 +934,10 @@
           "draining": {
             "json_options": "",
             "type": "bool"
+          },
+          "instance": {
+            "json_options": ",omitempty",
+            "type": "string"
           },
           "inventory": {
             "json_options": "",
@@ -2787,14 +2792,6 @@
             "ready_at": "2026-10-23T00:00:00Z",
             "started": "2026-10-23T00:00:00Z"
           },
-          "relays": [
-            {
-              "call_count": 1,
-              "draining": true,
-              "lost": true,
-              "name": "fixture"
-            }
-          ],
           "session_store_keys": {
             "counts": {
               "1": 1
@@ -3121,29 +3118,6 @@
                 }
               }
             }
-          },
-          "relays": {
-            "json_options": ",omitempty",
-            "type": [
-              {
-                "call_count": {
-                  "json_options": "",
-                  "type": "int"
-                },
-                "draining": {
-                  "json_options": "",
-                  "type": "bool"
-                },
-                "lost": {
-                  "json_options": "",
-                  "type": "bool"
-                },
-                "name": {
-                  "json_options": "",
-                  "type": "string"
-                }
-              }
-            ]
           },
           "session_store_keys": {
             "json_options": "",
@@ -3598,6 +3572,7 @@
             "UnknownVersions": 1
           },
           "draining": true,
+          "instance": "fixture",
           "inventory": [
             {
               "epoch": 1,
@@ -3830,6 +3805,10 @@
             "json_options": "",
             "type": "bool"
           },
+          "instance": {
+            "json_options": ",omitempty",
+            "type": "string"
+          },
           "inventory": {
             "json_options": "",
             "type": [
@@ -3927,12 +3906,17 @@
       "request": {
         "json": {
           "address": "192.0.2.1:1234",
+          "instance": "fixture",
           "token": "fixture"
         },
         "shape": {
           "address": {
             "json_options": "",
             "type": "IP:port"
+          },
+          "instance": {
+            "json_options": ",omitempty",
+            "type": "string"
           },
           "token": {
             "json_options": ",omitempty",

@@ -37,7 +37,12 @@ serially to protect the media timing gates. It remains outside the `build` aggre
 
 Nightly at 08:00 UTC, pushes to `main`, and manual `workflow_dispatch` runs
 add the full race harness and timing gates on memory and Redis, benchmarks,
-and `make crash-run`. The `store-stall` job adds five trials per case on nightly/manual dispatch,
+and `make crash-run`. The crash-run job also runs three repeated worker crashes
+with `-worker-restart -runs=3 -after=1s`. Each cycle requires takeover before
+restart, automatic HTTP re-admission at the same address, ordinary new-call
+placement, and clean audio on both calls. This short drill does not replace
+the existing 60-second consent trials.
+The `store-stall` job adds five trials per case on nightly/manual dispatch,
 with failure logs and a 25-minute limit: live workers survive 5 s, 15 s and 29 s
 pauses with a waiting standby; 1.5 s crash resumes with scaled margins; 5 s crash
 counts checkpoint-unsafe loss; 35 s live pause counts `ownership_expired` loss.
@@ -63,6 +68,34 @@ Per-track gaps use ADR 0016's planned-change target, pooled across the 80
 changes, with zero decryption failures, RTP duplicates or reconnects. Run a
 local smoke with `make crash-run CRASH_FLAGS="-relay-drain -runs=1 -after=3s"`.
 The short observation does not prove the 60-second consent window.
+
+The `netns-crash-run` matrix adds a `relay-loss` lane on the same main,
+nightly and manual triggers as its `worker-crash` lane. It runs
+`crash-run -topology=netns -relay-loss-netns -runs=10 -after=60s` using the
+existing namespace topology, shipped control and workers, and a second relay.
+Each trial blackholes all input and output in the lost relay's namespace.
+This blocks its public media, private legs, HTTP and store renewal while the
+process stays alive. Eight affected calls must recover within 5 s with zero
+worker/caller decryption failures and zero duplicate caller RTP. Per-call
+recovery gaps and per-trial tables appear in the job summary. Failed runs
+retain process logs; every outcome checks namespace and link cleanup.
+The separate `netns-network-profiles` matrix still runs only nightly/manual.
+
+The `chrome-relay-change` job runs `TestChromeRelayChange` on main, nightly
+and manual runs. It uses the Chrome already supplied by `ubuntu-24.04`,
+records the exact runner image and browser version, and adds no browser
+download source. There is no separate Chrome version pin in this repository;
+the browser version follows the runner image. Its summary reports audio and
+video p50/p95/max gaps for ten planned changes and eight calls after active
+and standby relay SIGKILL. On this shared runner the planned-change p95 is
+reported against the ADR 0016 row 1 target and fails only past twice that
+target (`RELAIS_CHROME_TIMING=shared-runner`); without it the test enforces
+the target, for a run on a quiet host. Otherwise the test verdict remains
+authoritative. Missing
+rows and unavailable browser decryption counters stay explicit. These are
+fake-media browser and namespace trials; new timing results remain NOT-RUN
+until CI runs the changed revision.
+
 To run manually, select **Actions → CI → Run workflow** on the desired branch.
 
 ## Redis in tests

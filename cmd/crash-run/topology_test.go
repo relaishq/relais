@@ -94,3 +94,28 @@ func TestPairTopologyEndpointsBindTogether(t *testing.T) {
 		bind("tcp", addr)
 	}
 }
+
+func TestRelayLossFaultRequiresMatchingTopology(t *testing.T) {
+	for _, tc := range []struct {
+		inProcess, processes, blackhole bool
+		topology                        string
+		valid                           bool
+	}{
+		{false, false, false, "netns", true},
+		{true, false, false, "loopback", true},
+		{false, true, false, "loopback", true},
+		{false, false, true, "netns", true},
+		{false, false, true, "loopback", false},
+		{true, false, false, "netns", false},
+		{false, true, false, "netns", false},
+		{true, true, false, "loopback", false},
+		{false, true, true, "netns", false},
+	} {
+		err := validateRelayLossTopology(tc.inProcess, tc.processes, tc.blackhole, tc.topology)
+		if tc.valid {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err)
+		}
+	}
+}

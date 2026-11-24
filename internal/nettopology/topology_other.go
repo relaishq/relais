@@ -24,3 +24,7 @@ func OpenManagedWorkers(context.Context, func(string, ...any), func(func()) erro
 	return nil, errLinux
 }
 func CallerSocketInNamespace(string, netip.AddrPort) (net.PacketConn, error) { return nil, errLinux }
+
+func OpenManagedRelayLoss(context.Context, func(string, ...any), func(func()) error) (*Topology, error) {
+	return nil, errLinux
+}

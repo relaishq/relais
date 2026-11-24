@@ -144,6 +144,9 @@ Start control with at least two named, live relay slots, using repeated
 Callers must support the relay-change event stream and ICE restart
 ([ADR 0016](adr/0016-relay-change-ice-restart.md)). Keep the other relay and
 the media workers running throughout the upgrade.
+With only two relay slots, draining one leaves no backup relay while the
+drain and replacement run. Keep the remaining relay healthy until the
+drained slot is back in service.
 
 1. Send `POST /relays/r1/drain` to control's **private** HTTP listener. The
    route has no `/private` prefix, like `POST /workers/{name}/drain`. It is

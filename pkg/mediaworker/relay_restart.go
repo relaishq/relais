@@ -219,21 +219,35 @@ func (w *Worker) initialRelay(id string) *RelaySlot {
 	return nil
 }
 
-// The signature permits changed ICE credentials/candidates, origin version,
-// and omitted unnegotiated extensions/feedback. It pins SSRCs, MIDs,
-// payload mappings, BUNDLE and fingerprint. parseOffer separately validates
-// the caller's setup role; the worker keeps its original passive answer role.
+// The signature permits changed ICE credentials/candidates, nonzero m-line
+// ports and port counts, session/media connection data, and a=rtcp default candidates.
+// Those transport fields can change on ICE restart (RFC 8839 section 4.2.1.2).
+// It also permits origin version changes and omitted extensions/feedback.
+// SSRCs, MIDs, protocols, payload lists/order/mappings, BUNDLE, fingerprint
+// and msid stay pinned. parseOffer separately validates the caller's setup
+// role; the worker keeps its original passive answer role.
 func restartIdentity(raw string) (string, error) {
+	data, err := normalizeRestartOffer(raw)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+// normalizeRestartOffer supplies the bytes for the persisted identity hash
+// and the credential-free input to opt-in restart diagnostics.
+func normalizeRestartOffer(raw string) ([]byte, error) {
 	var d sdp.SessionDescription
 	if err := d.UnmarshalString(raw); err != nil {
-		return "", ErrRestartMismatch
+		return nil, ErrRestartMismatch
 	}
 	d.Origin.SessionVersion = 0
+	d.ConnectionInformation = nil
 	strip := func(attrs []sdp.Attribute) []sdp.Attribute {
 		out := make([]sdp.Attribute, 0, len(attrs))
 		for _, a := range attrs {
 			switch a.Key {
-			case "ice-ufrag", "ice-pwd", "candidate", "end-of-candidates", "setup", "extmap", "extmap-allow-mixed", "rtcp-fb":
+			case "ice-ufrag", "ice-pwd", "candidate", "end-of-candidates", "rtcp", "setup", "extmap", "extmap-allow-mixed", "rtcp-fb":
 			default:
 				out = append(out, a)
 			}
@@ -242,13 +256,14 @@ func restartIdentity(raw string) (string, error) {
 	}
 	d.Attributes = strip(d.Attributes)
 	for _, m := range d.MediaDescriptions {
+		// Port 0 rejects the m-section (RFC 3264 section 6); keep that pinned.
+		if m.MediaName.Port.Value != 0 {
+			m.MediaName.Port = sdp.RangedPort{Value: 9}
+		}
+		m.ConnectionInformation = nil
 		m.Attributes = strip(m.Attributes)
 	}
-	data, err := d.Marshal()
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+	return d.Marshal()
 }
 
 func (w *Worker) RestartSession(ctx context.Context, id string, req RestartRequest) (string, error) {
@@ -282,11 +297,12 @@ func (w *Worker) RestartRelaySession(ctx context.Context, id string, req Restart
 	}
 	identity, err := restartIdentity(req.Offer)
 	if err != nil {
+		traceRestartOffer("worker-restart-refused/identity_parse", id, "")
 		return RestartReply{}, err
 	}
 	offer, err := parseOffer(req.Offer)
 	if err != nil {
-		return RestartReply{}, ErrRestartMismatch
+		return RestartReply{}, restartMismatch(id, "offer_parse", "")
 	}
 	params := s.answerParams()
 	pwd, err := randomString(icePwdLength)
@@ -306,13 +322,22 @@ func (w *Worker) RestartRelaySession(ctx context.Context, id string, req Restart
 	if s.fenced.Load() || s.lease.Epoch != lease.Epoch || s.lease.Worker != lease.Worker {
 		return RestartReply{}, sessionstore.ErrLeaseLost
 	}
-	if s.componentMode || s.state.Agent.V2 != nil || identity != s.state.RestartIdentity || s.state.ICE.Relay == nil || s.state.ICE.Relay.ID != a.Slot {
-		return RestartReply{}, ErrRestartMismatch
+	switch {
+	case s.componentMode:
+		return RestartReply{}, restartMismatch(id, "component_mode", "")
+	case s.state.Agent.V2 != nil:
+		return RestartReply{}, restartMismatch(id, "agent_v2", "")
+	case identity != s.state.RestartIdentity:
+		return RestartReply{}, restartMismatch(id, "identity", req.Offer)
+	case s.state.ICE.Relay == nil:
+		return RestartReply{}, restartMismatch(id, "missing_relay", "")
+	case s.state.ICE.Relay.ID != a.Slot:
+		return RestartReply{}, restartMismatch(id, "relay_slot", "")
 	}
 	if s.pendingRestart != nil {
 		if s.pendingRestart.from == a {
 			if s.pendingRestart.ice.RemoteUfrag != offer.iceUfrag || s.pendingRestart.ice.RemotePwd != offer.icePwd {
-				return RestartReply{}, ErrRestartMismatch
+				return RestartReply{}, restartMismatch(id, "pending_credentials", "")
 			}
 			return RestartReply{Answer: s.pendingRestart.answer, Required: slices.Clone(s.pendingRestart.required)}, nil
 		}
@@ -322,7 +347,7 @@ func (w *Worker) RestartRelaySession(ctx context.Context, id string, req Restart
 	if req.Required != nil {
 		for _, mid := range req.Required {
 			if mid == "" || mid != s.state.Audio.MID && mid != s.state.Video.MID {
-				return RestartReply{}, ErrRestartMismatch
+				return RestartReply{}, restartMismatch(id, "required_mid", "")
 			}
 		}
 		required = slices.Clone(req.Required)

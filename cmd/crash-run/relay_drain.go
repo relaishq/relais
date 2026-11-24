@@ -31,7 +31,7 @@ func runRelayDrainTrials(ctx context.Context, manager *clusterprocess.Manager, b
 			return err
 		}
 		bounded, cancel := context.WithTimeout(ctx, after+35*time.Second)
-		err := relayContinuityTrial(bounded, manager, bin, trialDir, key, addr, after, false, true, &samples)
+		err := relayContinuityTrial(bounded, manager, bin, trialDir, key, addr, after, false, true, &samples, nil, "")
 		cancel()
 		if err != nil {
 			return fmt.Errorf("relay drain trial %d: %w (logs %s)", i+1, err, trialDir)

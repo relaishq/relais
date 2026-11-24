@@ -3,6 +3,7 @@ Description=Relais preview worker
 After=network-online.target relais-prepare.service
 Wants=network-online.target
 Requires=relais-prepare.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -11,7 +12,9 @@ Group=relais-worker
 EnvironmentFile=/etc/relais/node.env
 EnvironmentFile=/run/relais/worker.env
 ExecStart=/opt/relais/boot/run.sh worker
-Restart=no
+Restart=on-failure
+RestartPreventExitStatus=243 78
+RestartSec=5s
 TimeoutStopSec=15s
 UMask=0077
 NoNewPrivileges=yes

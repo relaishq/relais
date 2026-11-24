@@ -82,6 +82,7 @@ package mediaworker
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -265,6 +266,7 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
+	instance    string
 	relaySlots  map[string]RelaySlot
 	byRelayPath map[relayPath]*session
 	splitLimits SnapshotLimits
@@ -404,6 +406,7 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 		mediaAddr = cfg.Relay.PublicAddr
 	}
 	worker := &Worker{
+		instance:      rand.Text(),
 		cfg:           cfg,
 		splitLimits:   cfg.splitLimits,
 		log:           cfg.LoggerFactory.NewLogger("mediaworker"),
@@ -545,6 +548,7 @@ func (w *Worker) createSession(ctx context.Context, offerSDP, slotID string, pla
 			sess.close()
 			return "", "", err
 		}
+		traceRestartOffer("worker-restart-initial", sess.id, offerSDP)
 	}
 	answer, err := buildAnswer(offer, sess.answerParams())
 	if err != nil {

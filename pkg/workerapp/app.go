@@ -214,7 +214,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 			return err
 		}
 	} else {
-		worker.StartHeartbeats(&controlplane.RemoteHeartbeats{URL: *control, Name: *name})
+		worker.StartHeartbeats(&controlplane.RemoteHeartbeats{URL: *control, Name: *name, Instance: worker.StatusSnapshot().Instance})
 	}
 	processrun.Ready(ready)
 	select {

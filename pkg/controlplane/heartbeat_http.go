@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/netip"
@@ -11,8 +12,9 @@ import (
 )
 
 type HeartbeatRequest struct {
-	Address netip.AddrPort `json:"address"`
-	Token   string         `json:"token,omitempty"`
+	Instance string         `json:"instance,omitempty"`
+	Address  netip.AddrPort `json:"address"`
+	Token    string         `json:"token,omitempty"`
 }
 type HeartbeatReply struct {
 	DeathCycle uint64 `json:"death_cycle,omitempty"`
@@ -22,7 +24,10 @@ type HeartbeatReply struct {
 // remoteHeartbeat never accepts an ordinary heartbeat as a rejoin ACK.
 // A token belongs to one registration and one death/recovery cycle. Recovery
 // must settle first, then the worker must fence/drop before echoing the token.
-func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatReply, error) {
+func (p *Plane) remoteHeartbeat(ctx context.Context, name string, req HeartbeatRequest) (HeartbeatReply, error) {
+	if err := p.observeHTTPInstance(ctx, name, req.Address, req.Instance, req.Token); err != nil {
+		return HeartbeatReply{}, err
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	w := p.workers[name]
@@ -83,7 +88,7 @@ func (p *Plane) ProcessHandler() http.Handler {
 		if !privateapi.Read(w, r, &req) {
 			return
 		}
-		reply, err := p.remoteHeartbeat(r.PathValue("name"), req)
+		reply, err := p.remoteHeartbeat(r.Context(), r.PathValue("name"), req)
 		if err != nil {
 			privateapi.Error(w, err, nil)
 			return

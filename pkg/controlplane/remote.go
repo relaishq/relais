@@ -181,6 +181,7 @@ func (r *RemoteRelay) Status(ctx context.Context) (relay.RelayStatus, error) {
 // The worker serializes calls to Heartbeat.
 type RemoteHeartbeats struct {
 	URL, Name string
+	Instance  string
 	Client    *http.Client
 	cycle     *atomic.Uint64
 	token     string
@@ -190,7 +191,7 @@ func (h *RemoteHeartbeats) Heartbeat(addr netip.AddrPort) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	var reply HeartbeatReply
-	err := privateapi.Do(ctx, remoteClient(h.Client), h.URL, http.MethodPost, "/private/workers/"+url.PathEscape(h.Name)+"/heartbeat", HeartbeatRequest{Address: addr, Token: h.token}, &reply, nil)
+	err := privateapi.Do(ctx, remoteClient(h.Client), h.URL, http.MethodPost, "/private/workers/"+url.PathEscape(h.Name)+"/heartbeat", HeartbeatRequest{Address: addr, Token: h.token, Instance: h.Instance}, &reply, nil)
 	if err != nil {
 		return err
 	}

@@ -1066,6 +1066,16 @@ This closes #94's residual; it does not fix #51.
 | [#31 soak row][spec] and [soak policy][soak] / [#85 first result][soak-fail] | The first run met the row's listed checks for decryption, lost calls, memory and sessions. The soak policy also fails on event rows and saturation. | The soak policy governs. The first run failed it; the [passing run][soak-pass] meets both the row and the policy. |
 | [#85 passing result][soak-pass] and [#138][report-fields] | The soak verdict is `pass`, but the report's raw nested `run.outcome` reads `inconclusive` because of one 20.1 ms generator sample. | The soak verdict governs; its judge tolerates an isolated sample under twice the limit. The nested field is a known report mismatch. |
 
+## Relay address change evidence
+
+[ADR 0016](adr/0016-relay-change-ice-restart.md#measurement) records the relay
+address change targets. The `chrome-relay-change` CI job supplies planned
+and unplanned browser gap tables. The `netns-crash-run` matrix's `relay-loss`
+lane supplies live-relay network blackhole trials with eight Pion calls,
+using the existing namespace topology. Job summaries and retained logs are
+the evidence sources. The new lanes are NOT-RUN until CI runs the changed
+revision; no new timing numbers or guarantee status are asserted here.
+
 ## Explicit non-guarantees
 
 | Excluded claim | Source |
