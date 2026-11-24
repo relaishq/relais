@@ -52,7 +52,7 @@ func TestCreateReconciliationStatusFailureKeepsWorkerLive(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorIs(t, p.finishCreate(ctx, key, a, "", privateapi.Uncertain(errors.New("request timed out"))), privateapi.ErrUncertain)
 	// Worker a keeps heartbeating; only one status read fails.
-	_, err = p.remoteHeartbeat("a", HeartbeatRequest{Address: addrA})
+	_, err = p.remoteHeartbeat(context.Background(), "a", HeartbeatRequest{Address: addrA})
 	require.NoError(t, err)
 	statusFails.Store(true)
 	reconcileErr := p.reconcileCreates(ctx)
@@ -60,7 +60,7 @@ func TestCreateReconciliationStatusFailureKeepsWorkerLive(t *testing.T) {
 	dead := a.observation.knowledge().dead
 	p.mu.Unlock()
 	t.Logf("reconcile=%v dead=%t", reconcileErr, dead)
-	_, hbErr := p.remoteHeartbeat("a", HeartbeatRequest{Address: addrA})
+	_, hbErr := p.remoteHeartbeat(context.Background(), "a", HeartbeatRequest{Address: addrA})
 	t.Logf("next heartbeat from the live worker: %v", hbErr)
 	require.False(t, dead, "a live, heartbeating worker was marked dead by one failed status read")
 	require.NoError(t, reconcileErr)

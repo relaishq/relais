@@ -27,8 +27,9 @@ STORE = dict(owners=dict(w1=0), transfers=0)
 
 
 class Transcript:
-    def __init__(self):
+    def __init__(self, restart="on-failure"):
         self.calls = []
+        self.restart = restart
         self.pids = {"relais-relay.service": "111", "relais-relay-standby.service": "222"}
         self.default = "333"
 
@@ -46,6 +47,13 @@ class Transcript:
         if args[1] == "start":
             self.pids[args[-1]] = "222"
         if args[1] == "show":
+            if args[-2] == "Restart":
+                return "no" if host.WORKER_RESTART_OVERRIDE.is_file() else self.restart
+            if args[-2] == "DropInPaths":
+                paths = ["/etc/systemd/system/relais-worker.service.d/preview.conf"]
+                if host.WORKER_RESTART_OVERRIDE.is_file():
+                    paths.append(str(host.WORKER_RESTART_OVERRIDE))
+                return " ".join(paths)
             return self.pids.get(args[-1], self.default)
         return ""
 
@@ -73,6 +81,45 @@ class Transcript:
 
 
 class ProcessTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        override = patch.object(host, "WORKER_RESTART_OVERRIDE", Path(temporary.name) / "worker-fault.conf")
+        override.start()
+        self.addCleanup(override.stop)
+
+    def test_worker_fault_keeps_restart_disabled_until_explicit_start(self):
+        for restart in ("no", "on-failure"):
+            with self.subTest(restart=restart):
+                _, t = self.run_step("worker-down", Transcript(restart))
+                self.assertEqual(host.WORKER_RESTART_OVERRIDE.read_text(), "[Service]\nRestart=no\n")
+                disabled = t.calls.index(["systemctl", "show", "--value", "-p", "Restart", "relais-worker.service"])
+                killed = t.calls.index(["signal", 333, host.signal.SIGKILL])
+                self.assertLess(disabled, killed)
+                self.run_step("worker-start", t)
+                self.assertFalse(host.WORKER_RESTART_OVERRIDE.is_file())
+                self.assertEqual(t.pids["relais-worker.service"], "222")
+                restored = t.calls.index(["systemctl", "show", "--value", "-p", "DropInPaths", "relais-worker.service"])
+                self.assertLess(restored, t.calls.index(["systemctl", "start", "relais-worker.service"]))
+                self.assertEqual(t.command(["systemctl", "show", "--value", "-p", "Restart", "relais-worker.service"]), restart)
+
+    def test_unconfirmed_restart_disable_never_signals(self):
+        t = Transcript()
+        original = t.command
+        t.command = lambda args: "on-failure" if args[1] == "show" and args[-2] == "Restart" else original(args)
+        with self.assertRaisesRegex(ValueError, "restart policy unconfirmed"):
+            self.run_step("worker-down", t)
+        self.assertNotIn("signal", [x[0] for x in t.calls])
+        self.assertEqual(t.calls.count(["systemctl", "daemon-reload"]), 1)
+
+    def test_unconfirmed_restart_restore_never_starts_worker(self):
+        _, t = self.run_step("worker-down")
+        original = t.command
+        t.command = lambda args: str(host.WORKER_RESTART_OVERRIDE) if args[1] == "show" and args[-2] == "DropInPaths" else original(args)
+        with self.assertRaisesRegex(ValueError, "restart policy unconfirmed"):
+            self.run_step("worker-start", t)
+        self.assertNotIn(["systemctl", "start", "relais-worker.service"], t.calls)
+
     def test_service_journals_bounded_private_tail(self):
         popen = subprocess.Popen
         commands = []

@@ -310,6 +310,9 @@ jobs:
       - name: Run twenty interleaved SIGKILL trials (ten per mode)
         if: ${{ !cancelled() && steps.install-packages.outcome == 'success' }}
         run: make crash-run
+      - name: Verify repeated worker restart and re-admission
+        if: ${{ !cancelled() && steps.install-packages.outcome == 'success' }}
+        run: make crash-run CRASH_FLAGS="-worker-restart -runs=3 -after=1s"
       - name: Upload crash-run failure logs
         if: failure()
         uses: actions/upload-artifact@v7

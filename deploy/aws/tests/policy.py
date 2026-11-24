@@ -71,18 +71,35 @@ def check_time_sync(install):
     assert restart < tail.index('enable --now "relais-'), 'chronyd must restart before any component starts'
 
 
+def check_restart(role, text):
+    from configparser import ConfigParser
+    unit = ConfigParser(interpolation=None, strict=False)
+    unit.read_string(text)
+    service = unit['Service']
+    if role in ('worker', 'control', 'signal'):
+        assert service['Restart'] == 'on-failure', role + ' must restart failures only'
+        assert service['RestartSec'] == '5s', role + ' must delay each retry'
+        assert service['RestartPreventExitStatus'] == '243 78', role + ' must stop credential and launcher refusals'
+        assert unit['Unit']['StartLimitIntervalSec'] == '0', role + ' must keep retrying'
+    else:
+        assert service['Restart'] == 'no', role + ' must preserve standby fencing'
+
+
 def check(template):
     for role in ('relay', 'relay-standby', 'worker', 'control', 'signal'):
         text = (ROOT / 'units' / ('relais-' + role + '.service')).read_text()
         fields = [line for line in text.splitlines() if line and not line.startswith('[')]
         identity = 'relay' if role == 'relay-standby' else role
         required = {'User=relais-' + identity, 'Group=relais-' + identity,
-                    'ExecStart=/opt/relais/boot/run.sh ' + role, 'Restart=no',
+                    'ExecStart=/opt/relais/boot/run.sh ' + role,
                     'EnvironmentFile=/etc/relais/node.env', 'NoNewPrivileges=yes',
                     'ProtectSystem=strict', 'ProtectHome=yes', 'CapabilityBoundingSet=',
                     'IPAddressDeny=169.254.169.254/32', 'UMask=0077'}
         assert required <= set(fields), role + ' unit weakened'
-        for key in ('User', 'Group', 'ExecStart', 'Restart', 'NoNewPrivileges', 'ProtectSystem', 'ProtectHome', 'CapabilityBoundingSet', 'IPAddressDeny', 'UMask'):
+        check_restart(role, text)
+        for key in ('User', 'Group', 'ExecStart', 'Restart', 'RestartPreventExitStatus', 'NoNewPrivileges', 'ProtectSystem', 'ProtectHome', 'CapabilityBoundingSet', 'IPAddressDeny', 'UMask'):
+            if key == 'RestartPreventExitStatus' and role in ('relay', 'relay-standby'):
+                continue
             assert sum(line.startswith(key + '=') for line in fields) == 1, role + ' duplicate ' + key
         expected_files = ['EnvironmentFile=/etc/relais/node.env']
         if role != 'signal':
@@ -107,6 +124,8 @@ def check(template):
     assert not re.search(r'(?i)(password|token|secret_access_key)\s*[:=]\s*["\']?[A-Za-z0-9+/]{24,}', encoded)
     assert not re.search(r'RELAIS_(?:SESSIONSTORE_KEY|REDIS_PASSWORD)\s*=', encoded), 'literal credential assignment'
     resources = template['Resources']
+    assert resources['WorkerRecoveryTemplate']['Properties']['LaunchTemplateData'] == {
+        'MaintenanceOptions': {'AutoRecovery': 'default'}}, 'worker recovery must be enabled'
     assert 'Transform' not in template, 'native CloudFormation only'
     assert len((ROOT / 'preview.yaml').read_bytes()) < 1024 * 1024
     import importlib.util
@@ -142,7 +161,8 @@ def check(template):
     assert template['Outputs']['RelayIPv4']['Value'] == {'Ref': 'RelayAddress'}
     assert template['Outputs']['SignalLoadBalancer']['Value'] == {'Fn::GetAtt': ['SignalAlb', 'DNSName']}
     assert template['Outputs']['StoreConfigurationEndpoint']['Value'] == {'Fn::GetAtt': ['Store', 'ConfigurationEndPoint.Address']}
-    assert not any('AutoScaling' in r['Type'] or 'LifecycleHook' in r['Type'] for r in resources.values())
+    assert not any('AutoScaling' in r['Type'] or 'LifecycleHook' in r['Type'] or
+        r['Type'] in ('AWS::EC2::EC2Fleet', 'AWS::EC2::SpotFleet') for r in resources.values())
     for name, resource in resources.items():
         if name in RETAINED:
             assert resource.get('DeletionPolicy') == 'RetainExceptOnCreate', name
@@ -205,6 +225,9 @@ def check(template):
                     assert set(instance['Metadata']['RelaisFiles']) == {'/etc/relais/node.json', '/etc/relais/node.env'}
                     node = json.loads(instance['Metadata']['RelaisFiles']['/etc/relais/node.json']['content'])
                     role = dict((t['Key'], t['Value']) for t in v['Tags'])['RelaisRole']
+                    if role == 'worker':
+                        assert v['LaunchTemplate'] == {'LaunchTemplateId': 'WorkerRecoveryTemplate',
+                            'Version': 'WorkerRecoveryTemplate.LatestVersionNumber'}, name + ' must recover in place'
                     assert set(node['secrets'].values()) == SECRET_SCOPE[role.title()]
                     assert v['IamInstanceProfile'] == role.title() + 'InstanceProfile'
                     assert node['components'] == (['control', 'signal'] if role == 'shared' else [role])
@@ -308,6 +331,9 @@ def regression_tests(template):
              'single_inline_role_policy','no_secret_output','host_uses_own_role']
     mutations = list(zip(names, mutations))
     mutations += [
+        ('no_scaling', lambda t: t['Resources'].update(ScalingPool={'Type': 'AWS::AutoScaling::AutoScalingGroup', 'Properties': {}})),
+        ('no_fleet', lambda t: t['Resources'].update(FleetPool={'Type': 'AWS::EC2::EC2Fleet', 'Properties': {}})),
+        ('no_spot_fleet', lambda t: t['Resources'].update(SpotPool={'Type': 'AWS::EC2::SpotFleet', 'Properties': {}})),
         ('no_managed_role_policy', lambda t: t['Resources']['WorkerRole']['Properties'].update(ManagedPolicyArns=['AdministratorAccess'])),
         ('store_role_group_attached', lambda t: t['Resources']['Store']['Properties'].pop('UserGroupIds')),
         ('no_extra_embedded_secret_file', lambda t: t['Resources']['BootFiles']['Metadata']['RelaisFiles'].update({'/etc/extra': {'content': 'RELAIS_SESSIONSTORE_KEY=literal', 'mode':'000600'}})),
@@ -324,6 +350,30 @@ def regression_tests(template):
         ('store_not_in_host_group', lambda t: t['Resources']['Store']['Properties']['SecurityGroupIds'].append({'Ref': 'HostGroup'})),
         ('every_host_in_host_group', lambda t: t['Resources']['WorkerTwo']['Properties']['SecurityGroupIds'].remove({'Ref': 'HostGroup'})),
     ]
+    for worker in ('WorkerOne', 'WorkerTwo', 'WorkerThree'):
+        mutations += [
+            (worker + '_recovery_required', lambda t, worker=worker: t['Resources'][worker]['Properties'].pop('LaunchTemplate')),
+            (worker + '_recovery_template', lambda t, worker=worker: t['Resources'][worker]['Properties']['LaunchTemplate'].update(LaunchTemplateId='OtherTemplate')),
+        ]
+    mutations += [
+        ('worker_recovery_enabled', lambda t: t['Resources']['WorkerRecoveryTemplate']['Properties']['LaunchTemplateData']['MaintenanceOptions'].update(AutoRecovery='disabled')),
+        ('worker_recovery_explicit', lambda t: t['Resources']['WorkerRecoveryTemplate']['Properties']['LaunchTemplateData'].pop('MaintenanceOptions')),
+    ]
+    for role in ('worker', 'control', 'signal', 'relay', 'relay-standby'):
+        text = (ROOT / 'units' / ('relais-' + role + '.service')).read_text()
+        bad = [text.replace('Restart=on-failure', 'Restart=always'),
+               text.replace('RestartSec=5s', 'RestartSec=0'),
+               text.replace('RestartPreventExitStatus=243 78\n', ''),
+               text.replace('RestartPreventExitStatus=243 78', 'RestartPreventExitStatus=242 78'),
+               text.replace('RestartPreventExitStatus=243 78', 'RestartPreventExitStatus=243'),
+               text.replace('StartLimitIntervalSec=0', 'StartLimitIntervalSec=60')] if role in ('worker', 'control', 'signal') else [text.replace('Restart=no', 'Restart=on-failure')]
+        for changed in bad:
+            try:
+                check_restart(role, changed)
+            except (AssertionError, KeyError):
+                continue
+            raise AssertionError('restart mutation escaped detection: ' + role)
+    print('PASS: 20 unsafe service restart mutations refused')
     for token in ('allcommands','allkeys','%RW~*','~relais:*','+flushall'):
         mutations.append(('relay_rejects_' + token, lambda t, token=token: t['Resources']['RelayStoreUser']['Properties'].update(AccessString=t['Resources']['RelayStoreUser']['Properties']['AccessString']+' '+token)))
     for token in ('+@admin','+flushall +config'):

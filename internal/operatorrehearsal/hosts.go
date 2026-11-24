@@ -124,7 +124,7 @@ func (t *Topology) Units(slot string) ([]Unit, error) {
 					}
 					u.Credentials = append(u.Credentials, value)
 					u.Sources = append(u.Sources, source)
-				case "Type", "Group", "ExecStart", "Restart", "TimeoutStopSec", "StandardOutput", "StandardError":
+				case "Type", "Group", "ExecStart", "Restart", "RestartSec", "RestartPreventExitStatus", "TimeoutStopSec", "StandardOutput", "StandardError":
 				default:
 					u.Sandbox = append(u.Sandbox, line)
 				}
