@@ -48,7 +48,7 @@ func TestPendingRelayOnlyAnswersChecksUntilNomination(t *testing.T) {
 		w, err := New(Config{Relay: &RelayConfig{Owners: store, Addr: slots[0].Leg, PublicAddr: slots[0].Public}})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
-		require.NoError(t, w.ConfigureRelays(ctx, slots))
+		require.NoError(t, w.ConfigureRelays(ctx, relayEnrollment(slots, 1)))
 		offer := testOffer(testOfferAttrs{audio: []string{"a=ssrc:123 cname:caller"}})
 		id, answer, err := w.CreateSession(ctx, offer)
 		require.NoError(t, err)

@@ -23,6 +23,31 @@ type takeoverWorker struct {
 	rtcpMargin uint32
 }
 
+// This pins control's target selection through a fake resume boundary. A real
+// target rejects the snapshot once its relay slot is cut off; this does not
+// prove end-to-end recovery after simultaneous worker and relay loss.
+func TestControlSelectsTakeoverTargetWhileCallRelayIsLost(t *testing.T) {
+	p, _, baseB, id := relayFailurePlane(t, sessionstore.NewMemory())
+	stopRelayRecoveries(t, p)
+	b := &takeoverWorker{fakeWorker: baseB}
+	p.workers["b"].worker = b
+	lease, err := p.store.Get(t.Context(), id)
+	require.NoError(t, err)
+	require.NoError(t, p.store.PutState(t.Context(), lease, takeoverSnapshot(t, id, 0)))
+	binding := p.relaySet["r1"]
+	binding.lost, binding.pending = true, true
+	p.relaySet["r1"] = binding
+	source := p.workers["a"]
+	expireObservedWorker(t, source)
+	p.recovery.recover(t.Context(), source, lease, time.Now())
+	status, err := p.Status(t.Context())
+	require.NoError(t, err)
+	require.Len(t, status.Takeovers, 1)
+	require.False(t, status.Takeovers[0].Lost, "control selection must still offer a target to the fake resume boundary")
+	require.True(t, b.runs(id))
+	require.Equal(t, "b", status.Calls[0].Owner)
+}
+
 func (w *takeoverWorker) ResumeSession(data []byte, opts mediaworker.ResumeOptions) (string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

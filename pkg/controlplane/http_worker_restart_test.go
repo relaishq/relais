@@ -39,7 +39,7 @@ func TestHTTPWorkerReplacementRebuildBeforeFirstHeartbeat(t *testing.T) {
 	first := New(&fakeRelay{}, store)
 	authorizeLongControl(t, first)
 	first.SetRelayReady(true)
-	require.NoError(t, first.register("a", oldAddr, &RemoteWorker{URL: server.URL}, "predecessor"))
+	require.NoError(t, first.register("a", oldAddr, &RemoteWorker{URL: server.URL}, "predecessor", true))
 	expireObservedWorker(t, first.workers["a"])
 	first.workers["a"].observation.recoveryFinished(true)
 	require.NoError(t, first.Replace("a", newAddr, &RemoteWorker{URL: server.URL}))

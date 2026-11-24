@@ -135,7 +135,7 @@ func TestLostSlotPreservesRecoveryAlreadyTargetingLiveSlot(t *testing.T) {
 				return c.relayEpisode == nil || c.relayEpisode.completed.Load()
 			}, time.Second, time.Millisecond)
 		}()
-		require.NoError(t, p.loseRelay(context.Background(), "r1"))
+		require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
 		require.False(t, cancelled.Load(), "loss and caller triggers must join the same live-target attempt")
 	})
 }

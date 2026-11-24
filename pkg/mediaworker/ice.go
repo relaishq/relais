@@ -105,6 +105,9 @@ func (s *session) answerBindingRequest(msg *stun.Message, localUfrag, remoteUfra
 	creds := &s.state.ICE
 	p := s.pendingRestart
 	pending := p != nil && localUfrag == p.ice.LocalUfrag && localUfrag != creds.LocalUfrag
+	if s.revokedRelayLegs[leg] && (!pending || !s.relayRestartAllowed(p)) {
+		return ErrRelayUnsupported
+	}
 	if pending {
 		creds = &p.ice
 	}

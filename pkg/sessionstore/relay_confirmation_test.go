@@ -33,7 +33,7 @@ func TestRelayConfirmationLifecycle(t *testing.T) {
 
 		pending := RelayAssignment{Slot: "r1", Pending: "r2"}
 		require.NoError(t, store.CASRelay(ctx, lease, current, pending))
-		attempt := RelayAttempt{Generation: 1, Slot: "r2", Phase: RelayPhasePending, Required: []string{"0", "1"}, Kind: "planned", Tried: []string{"r2"}}
+		attempt := RelayAttempt{Generation: 1, Slot: "r2", Phase: RelayPhasePending, Required: []string{"0", "1"}, Kind: "planned", From: "r1", Tried: []string{"r2"}}
 		withAttempt := RelayConfirmation{Mode: RelayConfirmDecode, Attempt: &attempt}
 		// A write that names a stale assignment is refused.
 		require.ErrorIs(t, store.CASRelayConfirmation(ctx, lease.SessionID, current, mode, withAttempt, time.Time{}, time.Time{}), ErrRelayConflict)
@@ -138,7 +138,7 @@ func TestRelayConfirmationCommitRules(t *testing.T) {
 		// A real switch commit after the outer deadline never confirms.
 		pending = RelayAssignment{Slot: "r1", Generation: 1, Pending: "r2"}
 		require.NoError(t, store.CASRelay(ctx, lease, retired, pending))
-		late := RelayAttempt{Generation: 2, Slot: "r2", Phase: RelayPhasePending, Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", PlannedDeadline: time.Now().Add(20 * time.Millisecond), StoreDeadline: time.Now().Add(20 * time.Millisecond)}
+		late := RelayAttempt{Generation: 2, Slot: "r2", Phase: RelayPhasePending, Required: []string{"0"}, Decoded: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: time.Now().Add(20 * time.Millisecond), StoreDeadline: time.Now().Add(20 * time.Millisecond)}
 		_, rec, err = store.RelayConfirmation(ctx, lease.SessionID)
 		require.NoError(t, err)
 		require.NoError(t, store.CASRelayConfirmation(ctx, lease.SessionID, pending, rec, RelayConfirmation{Mode: RelayConfirmDecode, Attempt: &late}, time.Time{}, time.Time{}))

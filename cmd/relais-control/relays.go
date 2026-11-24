@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
@@ -44,16 +42,7 @@ func configureRelaySet(ctx context.Context, plane *controlplane.Plane, relays []
 	}
 	bindings := make([]controlplane.RelayBinding, 0, len(relays))
 	for _, entry := range relays {
-		bounded, cancel := context.WithTimeout(ctx, time.Second)
-		status, err := entry.remote.Status(bounded)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("relay %s bootstrap: %w", entry.id, err)
-		}
-		if !status.Private.IsValid() || status.Private.Port() == 0 || !status.Public.IsValid() || status.Public.Port() == 0 {
-			return fmt.Errorf("relay %s must advertise leg and public UDP addresses", entry.id)
-		}
-		bindings = append(bindings, controlplane.RelayBinding{Slot: mediaworker.RelaySlot{ID: entry.id, Leg: status.Private, Public: status.Public}, Relay: entry.remote})
+		bindings = append(bindings, controlplane.RelayBinding{Slot: mediaworker.RelaySlot{ID: entry.id}, Relay: entry.remote})
 	}
 	return plane.ConfigureRelaySet(ctx, bindings)
 }

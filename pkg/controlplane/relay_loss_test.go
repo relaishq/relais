@@ -11,6 +11,87 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type observedRelayReads struct {
+	*sessionstore.Memory
+	reads chan struct{}
+}
+
+type oneFailedLossJournal struct {
+	*sessionstore.Memory
+	fail   atomic.Bool
+	failed chan struct{}
+}
+
+func (s *oneFailedLossJournal) ControlIntents(ctx context.Context) ([]sessionstore.ControlIntent, error) {
+	if s.fail.CompareAndSwap(true, false) {
+		close(s.failed)
+		return nil, sessionstore.ErrTransient
+	}
+	return s.Memory.ControlIntents(ctx)
+}
+
+func TestRelayLossObserverRetriesRecoveryAfterJournalFailure(t *testing.T) {
+	store := &oneFailedLossJournal{Memory: sessionstore.NewMemory(), failed: make(chan struct{})}
+	p, _, _, id := relayFailurePlane(t, store, "")
+	stopRelayRecoveries(t, p)
+	delete(p.relaySet, "r2") // Observe only the call's stale slot in this fixture.
+	_, err := store.ClaimRelay(t.Context(), "r1", sessionstore.RelayProcess{Owner: "r1", PID: 1, Start: "test", Host: "test", Namespace: "test", Executable: "test"}, time.Hour)
+	require.NoError(t, err)
+	store.fail.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); p.runRelayLoss(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	awaitAdmission(t, store.failed)
+	p.mu.Lock()
+	cutoffDone := p.relaySet["r1"].cutoffDone
+	c := p.calls[id]
+	p.mu.Unlock()
+	require.True(t, cutoffDone, "the journal failed after workers acknowledged cutoff")
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return c.terminal
+	}, 8*time.Second, time.Millisecond, "the next observer pass must apply the relay-loss end rule")
+}
+
+func (s *observedRelayReads) GetRelay(ctx context.Context, id string) (sessionstore.RelayLease, error) {
+	lease, err := s.Memory.GetRelay(ctx, id)
+	select {
+	case s.reads <- struct{}{}:
+	default:
+	}
+	return lease, err
+}
+
+func TestRelayLossObserverCutsOffEachStaleEpochOnce(t *testing.T) {
+	store := sessionstore.NewMemory()
+	relays := newAdmissionRelays(t, store)[:1]
+	observed := &observedRelayReads{Memory: store, reads: make(chan struct{}, 128)}
+	p := New(relays[0], observed)
+	configureAdmission(t, p, relays)
+	w := registerAdmissionWorker(t, p, store, relays[0].slot)
+	require.NoError(t, syncAdmission(t.Context(), p, relays[0]))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); p.runRelayLoss(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	for epoch := int64(1); epoch <= 2; epoch++ {
+		require.Eventually(t, func() bool { return w.cutoffs.Load() >= epoch }, 8*time.Second, time.Millisecond)
+		// Drain old observations, then cross ten real observer polls without sleeps.
+		for len(observed.reads) > 0 {
+			<-observed.reads
+		}
+		for range 10 {
+			awaitAdmission(t, observed.reads)
+		}
+		require.Equal(t, epoch, w.cutoffs.Load(), "a successful stale-epoch cutoff must not repeat")
+		if epoch == 1 {
+			replaceAdmissionRelay(t, store, relays[0])
+		}
+	}
+}
+
 func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
 		p, a, _, id := relayFailurePlane(t, store)
@@ -42,7 +123,7 @@ func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 		p.relaySet["r1"] = binding
 		p.mu.Unlock()
 		ctx := context.Background()
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		c.relayEpisodeMu.Lock()
 		episode := c.relayEpisode
 		c.relayEpisodeMu.Unlock()
@@ -50,7 +131,7 @@ func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 		require.Equal(t, binding.lostAt.Add(relayRecoveryLimit), episode.deadline)
 		require.Equal(t, "relay-recovery-unsupported", episode.proposal().Kind)
 		require.True(t, a.runs(id), "failed cut-off must not end the call before its deadline")
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		c.relayEpisodeMu.Lock()
 		again := c.relayEpisode
 		c.relayEpisodeMu.Unlock()
@@ -77,7 +158,7 @@ func TestRelayLossUnsupportedDeadlineWhileCutoffFails(t *testing.T) {
 			return c.relayEpisode == nil
 		}, time.Second, time.Millisecond, "terminal episode must finish journal cleanup")
 		// Further failed cut-offs must not start a second terminal episode.
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		p.mu.Lock()
 		losses := p.lossesByCause["relay_lost"]
 		replaceable := b.observation.canReplace(b.reserved)
@@ -126,7 +207,7 @@ func TestRelayLossUnsupportedEndsAfterCutoff(t *testing.T) {
 					b.worker = &unavailableRelayWorker{original}
 					expireObservedWorker(t, b)
 					p.mu.Unlock()
-					require.ErrorIs(t, p.loseRelay(context.Background(), "r1"), mediaworker.ErrClosed)
+					require.ErrorIs(t, p.loseRelay(context.Background(), "r1", 0), mediaworker.ErrClosed)
 					c.relayEpisodeMu.Lock()
 					first = c.relayEpisode
 					c.relayEpisodeMu.Unlock()
@@ -138,7 +219,7 @@ func TestRelayLossUnsupportedEndsAfterCutoff(t *testing.T) {
 				func() {
 					c.mu.Lock() // Inspect initialization before the recovery driver can end the call.
 					defer c.mu.Unlock()
-					require.NoError(t, p.loseRelay(context.Background(), "r1"))
+					require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
 					c.relayEpisodeMu.Lock()
 					episode := c.relayEpisode
 					c.relayEpisodeMu.Unlock()
@@ -232,8 +313,8 @@ func TestRelayLossExpiredOwnerLeaseRetriesAfterTakeover(t *testing.T) {
 		counted.missingOwner.Store(true)
 		counted.owners.Store(0)
 		counted.lists.Store(0)
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		p.mu.Lock()
 		detected := p.relaySet["r1"].lostAt
 		p.mu.Unlock()
@@ -251,7 +332,7 @@ func TestRelayLossExpiredOwnerLeaseRetriesAfterTakeover(t *testing.T) {
 		_, assignment, err := store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
 		require.NoError(t, err)
 		require.Equal(t, "r1", assignment.Slot)
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		c.relayEpisodeMu.Lock()
 		episode := c.relayEpisode
 		c.relayEpisodeMu.Unlock()
@@ -260,7 +341,7 @@ func TestRelayLossExpiredOwnerLeaseRetriesAfterTakeover(t *testing.T) {
 		require.Equal(t, a.addr, episode.proposal().Lease.Worker)
 		require.EqualValues(t, 3, counted.owners.Load(), "retry missing ownership until takeover restores it")
 		for range 3 {
-			require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+			require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		}
 		require.EqualValues(t, 3, counted.owners.Load(), "store work must stop once the restored call is armed")
 		require.EqualValues(t, 3, counted.lists.Load())
@@ -289,7 +370,7 @@ func TestRelayLossFailedIntentWriteRetriesOriginalDeadline(t *testing.T) {
 		counted.lists.Store(0)
 		counted.puts.Store(0)
 		counted.failNextPut.Store(true)
-		err = p.loseRelay(ctx, "r1")
+		err = p.loseRelay(ctx, "r1", 0)
 		require.ErrorIs(t, err, mediaworker.ErrClosed)
 		require.ErrorIs(t, err, sessionstore.ErrTransient)
 		c.relayEpisodeMu.Lock()
@@ -299,7 +380,7 @@ func TestRelayLossFailedIntentWriteRetriesOriginalDeadline(t *testing.T) {
 		records, err := store.(sessionstore.ControlStore).ControlIntents(ctx)
 		require.NoError(t, err)
 		require.Empty(t, records)
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		records, err = store.(sessionstore.ControlStore).ControlIntents(ctx)
 		require.NoError(t, err)
 		require.Len(t, records, 1, "retry must persist the original episode before cut-off succeeds")
@@ -311,7 +392,7 @@ func TestRelayLossFailedIntentWriteRetriesOriginalDeadline(t *testing.T) {
 		require.Same(t, episode, again)
 		require.Equal(t, binding.lostAt.Add(relayRecoveryLimit), again.deadline)
 		for range 3 {
-			require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+			require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		}
 		require.EqualValues(t, 2, counted.owners.Load())
 		require.EqualValues(t, 2, counted.lists.Load())
@@ -345,12 +426,12 @@ func TestRelayLossFailedCutoffStopsStoreWorkAfterFirstPass(t *testing.T) {
 		counted.owners.Store(0)
 		counted.lists.Store(0)
 		counted.puts.Store(0)
-		require.ErrorIs(t, p.loseRelay(context.Background(), "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(context.Background(), "r1", 0), mediaworker.ErrClosed)
 		require.EqualValues(t, 17, counted.owners.Load(), "inspect only the 17 non-capable calls once")
 		require.EqualValues(t, 1, counted.lists.Load(), "share the first journal snapshot")
 		require.EqualValues(t, 9, counted.puts.Load(), "arm only the nine calls on the lost slot")
 		for range 5 {
-			require.ErrorIs(t, p.loseRelay(context.Background(), "r1"), mediaworker.ErrClosed)
+			require.ErrorIs(t, p.loseRelay(context.Background(), "r1", 0), mediaworker.ErrClosed)
 		}
 		require.EqualValues(t, 17, counted.owners.Load(), "armed and unaffected calls must not repeat assignment reads")
 		require.EqualValues(t, 1, counted.lists.Load(), "steady-state retries must not list the journal")
@@ -377,7 +458,7 @@ func TestRelayLossUnsupportedDeadOwnerDeadline(t *testing.T) {
 		binding.lostAt = time.Now().Add(-relayRecoveryLimit + 2*time.Second)
 		p.relaySet["r1"] = binding
 		p.mu.Unlock()
-		require.ErrorIs(t, p.loseRelay(context.Background(), "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(context.Background(), "r1", 0), mediaworker.ErrClosed)
 		c.relayEpisodeMu.Lock()
 		episode := c.relayEpisode
 		c.relayEpisodeMu.Unlock()
@@ -415,7 +496,7 @@ func TestRelayLossUnsupportedDeadlineSurvivesSuccessorRebuild(t *testing.T) {
 		p.relaySet["r1"] = binding
 		p.mu.Unlock()
 		ctx := context.Background()
-		require.ErrorIs(t, p.loseRelay(ctx, "r1"), mediaworker.ErrClosed)
+		require.ErrorIs(t, p.loseRelay(ctx, "r1", 0), mediaworker.ErrClosed)
 		c.relayEpisodeMu.Lock()
 		episode := c.relayEpisode
 		c.relayEpisodeMu.Unlock()

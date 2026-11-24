@@ -342,7 +342,7 @@ func (p *Plane) adoptDurableEpisode(ctx context.Context, c *call, e *relayEpisod
 		if rec.Attempt != nil {
 			tried = rec.Attempt.Tried
 		}
-		_ = p.startRelayRecoveryFrom(ctx, c, false, adopted.proposal().Started, tried)
+		_ = p.startRelayRecoveryFrom(ctx, c, false, adopted.proposal().Started, tried, "")
 	}
 	return relayStandDown
 }
@@ -793,7 +793,7 @@ func (p *Plane) standDownRelayEpisode(c *call, e *relayEpisode) {
 }
 
 func (p *Plane) startRelayRecovery(ctx context.Context, c *call, sameSlot bool) error {
-	return p.startRelayRecoveryFrom(ctx, c, sameSlot, time.Now(), nil)
+	return p.startRelayRecoveryFrom(ctx, c, sameSlot, time.Now(), nil, "")
 }
 
 // startRelayRecoveryFrom starts or joins the call's loss episode. seed names
@@ -801,7 +801,7 @@ func (p *Plane) startRelayRecovery(ctx context.Context, c *call, sameSlot bool) 
 // episode waits for an untried live slot or its fixed deadline (ADR 0016 §7).
 // Only an ended call refuses; a completed episode permits a later recovery,
 // and an unarmed or expired-but-open one is joined (its watcher decides).
-func (p *Plane) startRelayRecoveryFrom(ctx context.Context, c *call, sameSlot bool, detected time.Time, seed []string) error {
+func (p *Plane) startRelayRecoveryFrom(ctx context.Context, c *call, sameSlot bool, detected time.Time, seed []string, rollbackFrom string) error {
 	c.stateMu.Lock()
 	reason := c.relayEndReason
 	c.stateMu.Unlock()
@@ -835,7 +835,7 @@ func (p *Plane) startRelayRecoveryFrom(ctx context.Context, c *call, sameSlot bo
 			tried[slot] = true
 		}
 		for recovery.Err() == nil {
-			err := p.recoverRelay(recovery, c, sameSlot, tried, e)
+			err := p.recoverRelay(recovery, c, sameSlot, tried, e, rollbackFrom)
 			if err == nil {
 				_ = p.completeRelayEpisode(recovery, c, e)
 				return
@@ -928,7 +928,7 @@ func (p *Plane) callerRelayRestart(ctx context.Context, c *call) (RelayEvent, er
 // recoverRelay runs one attempt of the episode. Completion is the mode's
 // confirmation plus the matching fenced commit on an attempt owned by the
 // episode (ADR 0016 section 7); a commit alone never ends the episode.
-func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried map[string]bool, e *relayEpisode) error {
+func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried map[string]bool, e *relayEpisode, rollbackFrom string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := c.lockOperatorCancel(ctx, false, cancel, true); err != nil {
@@ -952,6 +952,17 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 		return err
 	}
 	c.rememberLease(lease)
+	original := ""
+	if rollbackFrom != "" {
+		_, rec, readErr := p.store.(sessionstore.RelayConfirmations).RelayConfirmation(ctx, c.id)
+		if readErr != nil {
+			return readErr
+		}
+		t := rec.Attempt
+		if t != nil && t.Kind == "planned" && t.From == rollbackFrom && (t.Phase == sessionstore.RelayPhasePending || t.Phase == sessionstore.RelayPhaseSwitched) && !rec.Aborted() {
+			original = t.From
+		}
+	}
 	if from.Pending != "" {
 		from, err = p.abortRelayPending(ctx, lease, from)
 		if err != nil {
@@ -976,17 +987,22 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 		// with its saved bound, not superseded.
 		if adopted, err := p.adoptRelayAttempt(ctx, c, from, opt); adopted || err != nil {
 			tried[from.Slot] = true
-			return err
+			if original == "" || !errors.Is(err, errRelayUnconfirmed) {
+				return err
+			}
 		}
 	}
 	target := ""
 	p.mu.Lock()
-	if sameSlot && !p.relaySet[from.Slot].lost && !tried[from.Slot] {
+	if original != "" && !tried[original] && p.callRelayPairLocked(c, original) {
+		target = original
+	}
+	if sameSlot && !p.relaySet[from.Slot].lost && p.callRelayPairLocked(c, from.Slot) && !tried[from.Slot] {
 		target = from.Slot
 	}
 	if target == "" {
 		for id, b := range p.relaySet {
-			if !b.lost && !b.draining && id != from.Slot && !tried[id] {
+			if !b.lost && !b.draining && !b.pending && p.callRelayPairLocked(c, id) && id != from.Slot && !tried[id] {
 				target = id
 				break
 			}
@@ -1008,6 +1024,9 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 	bound := 4 * time.Second
 	if sameSlot && target == from.Slot {
 		bound = time.Second
+	}
+	if target == original && original != "" {
+		opt.kind, opt.from = "planned", original
 	}
 	opt.tried = slices.Sorted(maps.Keys(tried))
 	err = p.waitRelayChange(ctx, c, pending, bound, opt)

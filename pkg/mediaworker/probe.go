@@ -48,6 +48,20 @@ func (w *Worker) captureZombie(id string) (workerprobe.Sender, error) {
 
 	addr := s.state.ICE.RemoteAddr
 	leg := s.currentLeg()
+	if s.revokedRelayLegs[leg] {
+		return nil, ErrRelayUnsupported
+	}
+	slot, epoch := "", uint64(0)
+	if s.state.ICE.Relay != nil {
+		slot = s.state.ICE.Relay.ID
+		w.mu.Lock()
+		epoch = w.relayEpochs[slot]
+		cutoff := w.relayCutoffs[slot]
+		w.mu.Unlock()
+		if epoch == 0 || epoch <= cutoff {
+			return nil, ErrRelayUnsupported
+		}
+	}
 	seq := uint16(track.HighestSentIndex) //nolint:gosec // RTP sequence is the low 16 bits
 	timestamp := track.LastTimestamp
 	var mu sync.Mutex
@@ -68,6 +82,12 @@ func (w *Worker) captureZombie(id string) (workerprobe.Sender, error) {
 			return nil, err
 		}
 
+		w.mu.Lock()
+		cutoff := w.relayCutoffs[slot]
+		w.mu.Unlock()
+		if slot != "" && epoch <= cutoff {
+			return nil, ErrRelayUnsupported
+		}
 		_, err = w.sendVia(encrypted, addr, leg)
 		return encrypted, err
 	}, nil

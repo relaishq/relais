@@ -307,6 +307,7 @@ func TestRelayDrainFailedRollbackRecoversOnThirdRelay(t *testing.T) {
 		w.committed = make(chan sessionstore.RelayAssignment, 4)
 		third := relayTestSlots()[1]
 		third.Slot.ID, third.draining = "r3", true
+		third = acknowledgedRelayFixture(p, third)
 		p.relaySet["r3"] = third
 		c, err := p.lookup(ids[0])
 		require.NoError(t, err)
@@ -527,6 +528,7 @@ func TestRelayDrainRepicksTarget(t *testing.T) {
 		w.failures.Store(1)
 		b := relayTestSlots()[1]
 		b.Slot.ID = "r3"
+		b = acknowledgedRelayFixture(p, b)
 		p.relaySet["r3"] = b
 		go func() { time.Sleep(500 * time.Millisecond); markLost(p, "r2") }()
 		result := drainHTTP(t, p, context.Background())
@@ -611,6 +613,7 @@ func TestRelayDrainRecoveryLeavesSlot(t *testing.T) {
 				p, w, ids := drainPlane(t, 1)
 				b := relayTestSlots()[1]
 				b.Slot.ID = "r3"
+				b = acknowledgedRelayFixture(p, b)
 				b.draining = true
 				p.relaySet["r3"] = b
 				stopRelayRecoveries(t, p)
@@ -1115,6 +1118,7 @@ func TestRelayDrainTargetLostBeforeAttemptRepicks(t *testing.T) {
 				extra := relayTestSlots()[1]
 				extra.Slot.ID = "r3"
 				extra.draining = true
+				extra = acknowledgedRelayFixture(p, extra)
 				p.relaySet["r3"] = extra
 				c, err := p.lookup(ids[0])
 				require.NoError(t, err)

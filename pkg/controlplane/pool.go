@@ -50,11 +50,11 @@ func (p *Plane) readyLocked() bool {
 	if !p.mutationReady() {
 		return false
 	}
-	if p.bootstrap && !p.relayReady {
+	if len(p.relaySet) == 0 && p.bootstrap && !p.relayReady {
 		return false
 	}
 	for _, w := range p.workers {
-		if w.observation.knowledge().eligible {
+		if w.observation.knowledge().eligible && p.workerRelayReadyLocked(w) {
 			return true
 		}
 	}
@@ -106,7 +106,11 @@ func (p *Plane) SamplePool(ctx context.Context) (err error) {
 			if sample.Cap > 0 {
 				sample.OverCapCalls += max(0, loads[w]-sample.Cap)
 			}
-			switch w.observation.knowledge().poolClass {
+			knowledge := w.observation.knowledge()
+			if knowledge.eligible && !p.workerRelayReadyLocked(w) {
+				knowledge.poolClass = workerPoolPending
+			}
+			switch knowledge.poolClass {
 			case workerPoolPending:
 				sample.Pending++
 			case workerPoolUnreachable:

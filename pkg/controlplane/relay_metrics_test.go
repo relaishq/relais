@@ -89,7 +89,7 @@ func confirmationTimes(t *testing.T, p *Plane, slot, mode string) float64 {
 func TestRecordRelayWriteTransitions(t *testing.T) {
 	committed := sessionstore.RelayAssignment{Slot: "r2", Generation: 1}
 	attempt := func(phase string, delivered, decoded []string) *sessionstore.RelayAttempt {
-		return &sessionstore.RelayAttempt{Generation: 1, Slot: "r2", Phase: phase, Kind: "planned", Required: []string{"0", "1"}, Delivered: delivered, Decoded: decoded, Episode: "e"}
+		return &sessionstore.RelayAttempt{Generation: 1, Slot: "r2", Phase: phase, Kind: "planned", From: "r1", Required: []string{"0", "1"}, Delivered: delivered, Decoded: decoded, Episode: "e"}
 	}
 	rec := func(a *sessionstore.RelayAttempt, outcome string) sessionstore.RelayConfirmation {
 		r := sessionstore.RelayConfirmation{Mode: sessionstore.RelayConfirmDecode, Attempt: a, Commit: sessionstore.RelayCommit{Switched: 1}}
@@ -237,7 +237,7 @@ func successorPlane(t *testing.T, store sessionstore.Store, a, b *fakeWorker) *P
 	next := New(&fakeRelay{}, store)
 	require.NoError(t, next.Register("a", a.addr, &relayProtocolWorker{fakeWorker: a}))
 	require.NoError(t, next.Register("b", b.addr, &relayProtocolWorker{fakeWorker: b}))
-	require.NoError(t, next.ConfigureRelaySet(context.Background(), relayTestSlots()))
+	configureRelayFixture(t, next, relayTestSlots())
 	return next
 }
 
@@ -301,8 +301,8 @@ func TestRelayMetricsCountLossDecisionOnce(t *testing.T) {
 		return relayMetric(t, p, "relais_control_relay_loss_decisions_total", map[string]string{"slot": slot})
 	}
 	require.Zero(t, losses("r1"))
-	require.NoError(t, p.loseRelay(context.Background(), "r1"))
-	require.NoError(t, p.loseRelay(context.Background(), "r1"))
+	require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
+	require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
 	require.Equal(t, float64(1), losses("r1"))
 	require.Zero(t, losses("r2"))
 }
@@ -340,7 +340,7 @@ func TestRelayMetricsLoserReadBackNotCounted(t *testing.T) {
 		stopRelayRecoveries(t, p)
 		now := time.Now()
 		seedAttempt(t, p, store, id, "r2", sessionstore.RelayConfirmDecode, sessionstore.RelayAttempt{
-			Required: []string{"0"}, Kind: "planned", PlannedDeadline: now.Add(time.Minute), StoreDeadline: now.Add(time.Minute)})
+			Required: []string{"0"}, Kind: "planned", From: "r1", PlannedDeadline: now.Add(time.Minute), StoreDeadline: now.Add(time.Minute)})
 		at, from, err := store.RelayConfirmation(context.Background(), id)
 		require.NoError(t, err)
 		to := from

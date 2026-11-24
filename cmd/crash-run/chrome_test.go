@@ -119,10 +119,7 @@ func TestChromeRelayChange(t *testing.T) {
 	defer stopTrace()
 	plane := controlplane.New(bindings[0].Relay, store)
 	require.NoError(t, plane.Register("0", worker.LocalAddr(), worker))
-	for _, binding := range bindings {
-		require.NoError(t, binding.Relay.(*controlplane.RemoteRelay).AddWorker(ctx, worker.LocalAddr()))
-	}
-	require.NoError(t, plane.ConfigureRelaySet(ctx, bindings))
+	require.NoError(t, configureCrashRelaySet(ctx, plane, bindings))
 	life, stop := context.WithCancel(ctx)
 	defer stop()
 	done := make(chan error, 1)

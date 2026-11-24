@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -73,6 +75,7 @@ func TestSingleRelayConfigurationKeepsLegacyBehavior(t *testing.T) {
 }
 
 func TestRelayListConfiguresNewWorkersWithDiscoveredAddresses(t *testing.T) {
+	store := sessionstore.NewMemory()
 	var entries []string
 	var want []mediaworker.RelaySlot
 	for i, id := range []string{"r1", "r2"} {
@@ -80,28 +83,44 @@ func TestRelayListConfiguresNewWorkersWithDiscoveredAddresses(t *testing.T) {
 		public := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(24780+i*2))
 		want = append(want, mediaworker.RelaySlot{ID: id, Leg: leg, Public: public})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			require.Equal(t, "/status", r.URL.Path)
-			privateapi.Write(w, relay.RelayStatus{Public: public, Private: leg})
+			if r.URL.Path == "/workers" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			privateapi.Write(w, relay.RelayStatus{Public: public, Private: leg, Instance: id, Continuity: &relay.ContinuityStatus{Epoch: 1}})
 		}))
 		t.Cleanup(server.Close)
 		entries = append(entries, id+"="+server.URL)
+		_, err := store.ClaimRelay(t.Context(), id, sessionstore.RelayProcess{Owner: id, PID: 1, Start: "test", Host: "test", Namespace: "test", Executable: "test"}, time.Hour)
+		require.NoError(t, err)
 	}
 	relays, err := parseRelays(entries)
 	require.NoError(t, err)
-	plane := controlplane.New(relays[0].remote, sessionstore.NewMemory())
+	plane := controlplane.New(relays[0].remote, store)
 	require.NoError(t, configureRelaySet(t.Context(), plane, relays))
-	var got mediaworker.RelaySetRequest
+	configured := make(chan mediaworker.RelaySetRequest, 3)
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/relays", r.URL.Path)
-		require.True(t, privateapi.Read(w, r, &got))
+		var req mediaworker.RelaySetRequest
+		require.True(t, privateapi.Read(w, r, &req))
+		configured <- req
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer worker.Close()
 	require.NoError(t, plane.Register("w", netip.MustParseAddrPort("127.0.0.1:24711"), &controlplane.RemoteWorker{URL: worker.URL}))
-	require.ElementsMatch(t, want, got.Slots)
+	require.Empty(t, (<-configured).Slots, "pending slots are not enrolled")
+	var got []mediaworker.RelaySlot
+	for _, entry := range relays {
+		registry := controlplane.RelayWorkerRegistry{Slot: entry.id}
+		require.NoError(t, registry.Sync(t.Context(), plane, entry.remote))
+		req := <-configured
+		require.EqualValues(t, 1, req.Epochs[entry.id])
+		got = append(got, req.Slots...)
+	}
+	require.ElementsMatch(t, want, got)
 }
 
-func TestRelayListRejectsUnavailableOrMissingAddresses(t *testing.T) {
+func TestRelayListKeepsUnavailableOrMissingAddressesPending(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if unavailable {
@@ -112,7 +131,35 @@ func TestRelayListRejectsUnavailableOrMissingAddresses(t *testing.T) {
 		}))
 		relays := []relayEndpoint{{id: "r1", remote: &controlplane.RemoteRelay{URL: server.URL}}, {id: "r2", remote: &controlplane.RemoteRelay{URL: server.URL}}}
 		plane := controlplane.New(relays[0].remote, sessionstore.NewMemory())
-		require.Error(t, configureRelaySet(context.Background(), plane, relays))
+		require.NoError(t, configureRelaySet(context.Background(), plane, relays))
+		registry := controlplane.RelayWorkerRegistry{Slot: "r1"}
+		require.Error(t, registry.Sync(t.Context(), plane, relays[0].remote))
 		server.Close()
 	}
+}
+
+// A down listed relay no longer prevents the control listener from starting.
+func TestRelaySetBootstrapLeavesUnreachableSlotsPending(t *testing.T) {
+	var probes atomic.Int32
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probes.Add(1)
+		privateapi.Write(w, relay.RelayStatus{
+			Private: netip.MustParseAddrPort("127.0.0.1:24781"),
+			Public:  netip.MustParseAddrPort("127.0.0.1:24780"),
+		})
+	}))
+	defer healthy.Close()
+	unreachable := httptest.NewServer(http.NotFoundHandler())
+	unreachable.Close()
+	relays, err := parseRelays([]string{"r1=" + healthy.URL, "r2=" + unreachable.URL})
+	require.NoError(t, err)
+	plane := controlplane.New(relays[0].remote, sessionstore.NewMemory())
+	require.NoError(t, configureRelaySet(t.Context(), plane, relays))
+	require.Zero(t, probes.Load(), "discovery belongs to the background registration loop")
+	status, err := plane.Status(t.Context())
+	require.NoError(t, err)
+	require.Len(t, status.Relays, 2)
+	require.True(t, status.Relays[0].Pending)
+	require.True(t, status.Relays[1].Pending)
+	require.False(t, status.Ready, "all-pending control serves management but refuses creates")
 }

@@ -41,10 +41,9 @@ func TestUnplannedRelayLossEightCalls(t *testing.T) {
 			}
 		})
 		leases := store.(sessionstore.RelayLeases)
-		identity := sessionstore.RelayProcess{Owner: "in-process-relay", PID: 42, Start: "start", Host: "host", Namespace: "namespace", Executable: "relay"}
-		old, err := leases.ClaimRelay(ctx, "r1", identity, time.Minute)
+		old, err := leases.GetRelay(ctx, "r1")
 		require.NoError(t, err)
-		live, err := leases.ClaimRelay(ctx, "r2", identity, time.Minute)
+		live, err := leases.GetRelay(ctx, "r2")
 		require.NoError(t, err)
 		var lost atomic.Bool
 		heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)

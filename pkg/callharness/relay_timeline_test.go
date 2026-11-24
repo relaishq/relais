@@ -113,9 +113,7 @@ func TestRelayRestartTimeline(t *testing.T) {
 		var relays []*relay.Relay
 		var bindings []controlplane.RelayBinding
 		for _, id := range []string{"r1", "r2"} {
-			r, err := relay.New(relay.Config{Owners: store, SlotID: id})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, r.Close()) })
+			r := newHarnessRelay(t, store, id)
 			relays = append(relays, r)
 			bindings = append(bindings, controlplane.RelayBinding{Slot: mediaworker.RelaySlot{ID: id, Leg: r.WorkerAddr(), Public: r.PublicAddr()}, Relay: r})
 		}
@@ -124,10 +122,7 @@ func TestRelayRestartTimeline(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		p := controlplane.New(relays[0], store)
 		require.NoError(t, p.Register("0", w.LocalAddr(), w))
-		for _, r := range relays {
-			r.AddWorker(w.LocalAddr())
-		}
-		require.NoError(t, p.ConfigureRelaySet(ctx, bindings))
+		configureHarnessRelaySet(t, ctx, p, bindings)
 		server := httptest.NewServer(p.Handler())
 		t.Cleanup(server.Close)
 		h, err := Start(Options{External: &ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: relays[0].PublicAddr(), CallerSocket: func() (net.PacketConn, error) {

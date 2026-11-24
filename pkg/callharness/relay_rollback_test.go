@@ -32,9 +32,7 @@ func relayChangeTopology(t *testing.T, store sessionstore.Store, refuse, drop bo
 	var bindings []controlplane.RelayBinding
 	drops := new(atomic.Uint64)
 	for _, id := range []string{"r1", "r2"} {
-		r, err := relay.New(relay.Config{Owners: store, SlotID: id})
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, r.Close()) })
+		r := newHarnessRelay(t, store, id)
 		relays = append(relays, r)
 		public := r.PublicAddr()
 		if drop && id == "r2" {
@@ -83,10 +81,7 @@ func relayChangeTopology(t *testing.T, store sessionstore.Store, refuse, drop bo
 	t.Cleanup(workerServer.Close)
 	p := controlplane.New(relays[0], store)
 	require.NoError(t, p.Register("0", w.LocalAddr(), &controlplane.RemoteWorker{URL: workerServer.URL}))
-	for _, r := range relays {
-		r.AddWorker(w.LocalAddr())
-	}
-	require.NoError(t, p.ConfigureRelaySet(ctx, bindings))
+	configureHarnessRelaySet(t, ctx, p, bindings)
 	server := httptest.NewServer(p.Handler())
 	t.Cleanup(server.Close)
 	h, err := Start(Options{External: &ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: relays[0].PublicAddr()}})

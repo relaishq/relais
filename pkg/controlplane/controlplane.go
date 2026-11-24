@@ -166,36 +166,38 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
-	relayPlacement  sync.RWMutex // orders create admission against relay drain
-	relaySet        map[string]RelayBinding
-	links           *WorkerLinks
-	recovery        *moveRecovery
-	restart         *restartState
-	inventory       keyInventoryCache
-	metrics         planeMetrics
-	relayMetrics    *relayMetrics
-	mu              sync.Mutex
-	relay           Relay
-	store           sessionstore.Store
-	workers         map[string]*registration
-	calls           map[string]*call
-	ttl             time.Duration
-	incomingChanged chan struct{}
-	workerChanged   chan struct{}
-	config          Config
-	events          [recentTakeoverLimit]MoveResult
-	eventNext       int
-	eventCount      int
-	lostCount       uint64
-	lossesByCause   map[string]uint64
-	running         bool
-	loadVersion     uint64 // invalidates lease listings when reservations settle
-	pool            *PoolSample
-	poolFailed      bool
-	pendingWorkers  map[string]bool
-	bootstrap       bool
-	relayReady      bool
-	refusals        map[string]uint64
+	relayPlacement      sync.RWMutex // orders create admission against relay drain
+	relaySet            map[string]RelayBinding
+	relayControlEpoch   uint64
+	ignoredRelayRecords map[string]bool
+	links               *WorkerLinks
+	recovery            *moveRecovery
+	restart             *restartState
+	inventory           keyInventoryCache
+	metrics             planeMetrics
+	relayMetrics        *relayMetrics
+	mu                  sync.Mutex
+	relay               Relay
+	store               sessionstore.Store
+	workers             map[string]*registration
+	calls               map[string]*call
+	ttl                 time.Duration
+	incomingChanged     chan struct{}
+	workerChanged       chan struct{}
+	config              Config
+	events              [recentTakeoverLimit]MoveResult
+	eventNext           int
+	eventCount          int
+	lostCount           uint64
+	lossesByCause       map[string]uint64
+	running             bool
+	loadVersion         uint64 // invalidates lease listings when reservations settle
+	pool                *PoolSample
+	poolFailed          bool
+	pendingWorkers      map[string]bool
+	bootstrap           bool
+	relayReady          bool
+	refusals            map[string]uint64
 }
 
 // New returns an empty control plane. Drive Run with the
@@ -226,10 +228,10 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 
 // Register names a worker by its unique private relay-leg address.
 func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error {
-	return p.register(name, addr, worker, "")
+	return p.register(name, addr, worker, "", true)
 }
 
-func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instance string) error {
+func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instance string, enroll bool) error {
 	if name == "" || !addr.IsValid() || worker == nil {
 		return errors.New("controlplane: worker needs name, address and interface")
 	}
@@ -253,8 +255,10 @@ func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instan
 	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := p.configureWorkerRelays(ctx, worker); err != nil {
-		return err
+	if enroll {
+		if err := p.configureWorkerRelays(ctx, worker); err != nil {
+			return err
+		}
 	}
 	err := p.saveRegistration(ctx, name, addr, worker, instance)
 	if err != nil {
@@ -272,7 +276,7 @@ func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instan
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	observation := newWorkerObservation(time.Now(), p.bootstrap)
+	observation := newWorkerObservation(time.Now(), p.bootstrap && len(p.relaySet) == 0)
 	observation.linkDown = p.workerUsesLink(name, worker)
 	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: observation, instance: instance}
 	delete(p.pendingWorkers, name)
@@ -313,6 +317,39 @@ func (p *Plane) pickExcluding(ctx context.Context, name string, excluded map[net
 // flight. Re-read after settlement; otherwise an old list can admit too much.
 // No registry lock spans store I/O. Retries have a fixed bound.
 func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[netip.AddrPort]bool, overflow bool, existingID string) (*registration, error) {
+	slot := ""
+	p.mu.Lock()
+	relaySet := len(p.relaySet) > 0
+	if c := p.calls[existingID]; c != nil {
+		c.stateMu.Lock()
+		slot = c.relaySlot
+		c.stateMu.Unlock()
+	}
+	p.mu.Unlock()
+	if relaySet && existingID != "" && slot == "" {
+		if store, ok := p.store.(sessionstore.RelayAssignments); ok {
+			_, assignment, err := store.RelayOwner(ctx, existingID)
+			if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
+				return nil, err
+			}
+			slot = assignment.Slot
+		}
+	}
+	return p.pickCapacityMatching(ctx, name, excluded, overflow, existingID, func(w *registration) bool {
+		return p.workerAtRelayLocked(w, slot)
+	})
+}
+
+// New placement requires the selected pair itself to be joined. Only moves
+// and takeover may use another joined slot while a call's slot is unavailable.
+func (p *Plane) pickCapacityAtRelay(ctx context.Context, name string, excluded map[netip.AddrPort]bool, slot string) (*registration, error) {
+	return p.pickCapacityMatching(ctx, name, excluded, false, "", func(w *registration) bool {
+		return len(p.relaySet) == 0 || p.relayPairLocked(w, slot)
+	})
+}
+
+// atRelay is checked under the registry lock, before and after store sampling.
+func (p *Plane) pickCapacityMatching(ctx context.Context, name string, excluded map[netip.AddrPort]bool, overflow bool, existingID string, atRelay func(*registration) bool) (*registration, error) {
 	for range 32 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -321,7 +358,7 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 		version := p.loadVersion
 		candidates := make([]*registration, 0, len(p.workers))
 		for _, w := range p.workers {
-			if (name == "" || w.name == name) && w.observation.knowledge().eligible && !excluded[w.addr] {
+			if (name == "" || w.name == name) && w.observation.knowledge().eligible && atRelay(w) && !excluded[w.addr] {
 				candidates = append(candidates, w)
 			}
 		}
@@ -354,7 +391,7 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 		var best *registration
 		load, ready := int(^uint(0)>>1), false
 		for _, w := range candidates {
-			if p.workers[w.name] != w || !w.observation.knowledge().eligible {
+			if p.workers[w.name] != w || !w.observation.knowledge().eligible || !atRelay(w) {
 				continue
 			}
 			ready = true
@@ -452,7 +489,7 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	}
 	p.relayPlacement.RLock()
 	defer p.relayPlacement.RUnlock()
-	slot, slotErr := p.pickRelay(ctx, "")
+	slot, slotErr := p.pickRelay(ctx, "", name)
 	if slotErr != nil {
 		return "", "", slotErr
 	}
@@ -462,7 +499,7 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	var placed sessionstore.Lease
 	for range attempts {
 		var err error
-		w, err = p.pickExcluding(ctx, name, excluded)
+		w, err = p.pickCapacityAtRelay(ctx, name, excluded, slot)
 		if err != nil {
 			return "", "", err
 		}
@@ -696,7 +733,7 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 		return MoveResult{}, err
 	}
 
-	target, err := p.pick(ctx, to, lease.Worker)
+	target, err := p.pickCapacity(ctx, to, map[netip.AddrPort]bool{lease.Worker: true}, false, id)
 	if err != nil {
 		return MoveResult{}, err
 	}
@@ -827,7 +864,7 @@ func (p *Plane) drain(ctx context.Context, name string, source *registration) (m
 			jobs = append(jobs, job{lease: lease, c: c, err: ErrMoveInProgress})
 			continue
 		}
-		target, pickErr := p.pick(ctx, "", w.addr)
+		target, pickErr := p.pickCapacity(ctx, "", map[netip.AddrPort]bool{w.addr: true}, false, lease.SessionID)
 		if pickErr != nil {
 			for _, j := range jobs {
 				if j.target != nil {
@@ -924,6 +961,8 @@ type RelayStatus struct {
 	Name     string `json:"name"`
 	Draining bool   `json:"draining"`
 	Lost     bool   `json:"lost"`
+	Pending  bool   `json:"pending"`
+	Error    string `json:"error,omitempty"`
 	Calls    int    `json:"call_count"`
 }
 
@@ -1019,7 +1058,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	status.Ready, status.Pool = p.readyLocked(), p.poolLocked(time.Now())
 	status.Takeovers, status.LostCount = p.recentTakeovers(), p.lostCount
 	for name, binding := range p.relaySet {
-		status.Relays = append(status.Relays, RelayStatus{Name: name, Draining: binding.draining, Lost: binding.lost})
+		status.Relays = append(status.Relays, RelayStatus{Name: name, Draining: binding.draining, Lost: binding.lost, Pending: binding.pending, Error: binding.admissionError})
 	}
 	p.mu.Unlock()
 	counts := make(map[string]int, len(status.Workers))

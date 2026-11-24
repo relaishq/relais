@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,12 +64,13 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
-	pendingRestart *pendingRestart
-	relayDelivery  *relayDelivery // C for the live generation; never exported
-	relayAborted   uint64         // fences an in-flight offer racing with rollback
-	previousRelay  relayPath
-	previousUntil  time.Time
-	checkpoint     sessionCheckpoint
+	pendingRestart   *pendingRestart
+	revokedRelayLegs map[netip.AddrPort]bool
+	relayDelivery    *relayDelivery // C for the live generation; never exported
+	relayAborted     uint64         // fences an in-flight offer racing with rollback
+	previousRelay    relayPath
+	previousUntil    time.Time
+	checkpoint       sessionCheckpoint
 
 	moveMu             sync.Mutex
 	moveReserved       int64

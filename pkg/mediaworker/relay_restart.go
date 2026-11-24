@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"time"
@@ -36,7 +37,9 @@ type RestartRequest struct {
 	Required []string `json:"required_mids,omitempty"`
 }
 type RelaySetRequest struct {
-	Slots []RelaySlot `json:"slots"`
+	Slots   []RelaySlot       `json:"slots"`
+	Epochs  map[string]uint64 `json:"epochs"`
+	Cutoffs map[string]uint64 `json:"cutoffs"`
 }
 type RestartReply struct {
 	Answer   string   `json:"answer"`
@@ -44,6 +47,7 @@ type RestartReply struct {
 }
 type relayPath struct{ leg, caller netip.AddrPort }
 type pendingRestart struct {
+	epoch    uint64 // relay enrollment that authorized this pending path
 	ice      iceState
 	receive  netip.AddrPort // authenticated pending receive path
 	from     sessionstore.RelayAssignment
@@ -94,6 +98,12 @@ func (w *Worker) AbortRelayRestart(ctx context.Context, id string, generation ui
 // acceptsRelayPath runs under the packet lock. Pending permission is RTP-only;
 // it neither nominates the address nor refreshes the current pair's consent.
 func (s *session) acceptsRelayPath(path relayPath, pendingRTP bool) bool {
+	if s.revokedRelayLegs[path.leg] {
+		p := s.pendingRestart
+		if !pendingRTP || p == nil || p.ice.Relay.Leg != path.leg || p.receive != path.caller || !s.relayRestartAllowed(p) {
+			return false
+		}
+	}
 	if c, ok := s.worker.conn.(*relayConn); ok && !c.allowed(path.leg) {
 		return false
 	}
@@ -112,9 +122,13 @@ func (s *session) acceptsRelayPath(path relayPath, pendingRTP bool) bool {
 // new path. Only authenticated checks or replay-checked SRTP call this method.
 func (s *session) switchRelayLocked(path relayPath) bool {
 	p := s.pendingRestart
+	if p != nil && s.revokedRelayLegs[path.leg] && !s.relayRestartAllowed(p) {
+		return false
+	}
 	if p == nil || s.state.ICE.LocalUfrag == p.ice.LocalUfrag || path.leg != p.ice.Relay.Leg || path.caller != p.receive || !p.receive.IsValid() {
 		return false
 	}
+	delete(s.revokedRelayLegs, path.leg)
 	s.previousRelay = relayPath{s.currentLeg(), s.state.ICE.RemoteAddr}
 	s.previousUntil = time.Now().Add(500 * time.Millisecond)
 	p.ice.RemoteAddr = path.caller
@@ -129,9 +143,9 @@ func (s *session) switchRelayLocked(path relayPath) bool {
 	return true
 }
 
-// ConfigureRelays bootstraps the set, then permits removal of lost slots only.
-// Dial-out's per-slot observed-address registration is a separate contract.
-func (w *Worker) ConfigureRelays(ctx context.Context, slots []RelaySlot) error {
+// ConfigureRelays adds acknowledged relay epochs and applies monotone cutoffs.
+// Epochs belong to leg enrollment, not to the per-call media snapshot.
+func (w *Worker) ConfigureRelays(ctx context.Context, req RelaySetRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -139,43 +153,71 @@ func (w *Worker) ConfigureRelays(ctx context.Context, slots []RelaySlot) error {
 	if !ok || w.cfg.Relay.DialOut || w.cfg.SplitCheckpoints {
 		return ErrRelayUnsupported
 	}
-	c.packetMu.Lock()
-	defer c.packetMu.Unlock()
-	known := make(map[string]RelaySlot, len(slots))
-	peers := make(map[netip.AddrPort]bool, len(slots))
-	for _, slot := range slots {
-		if slot.ID == "" || !slot.Leg.IsValid() || !slot.Public.IsValid() || known[slot.ID].ID != "" || peers[slot.Leg] {
+	seen := map[string]bool{}
+	for _, slot := range req.Slots {
+		if slot.ID == "" || !slot.Leg.IsValid() || slot.Leg.Port() == 0 || !slot.Public.IsValid() || slot.Public.Port() == 0 || seen[slot.ID] || req.Epochs[slot.ID] == 0 {
 			return ErrRelayUnsupported
 		}
-		known[slot.ID], peers[slot.Leg] = slot, true
+		seen[slot.ID] = true
 	}
+	if len(req.Epochs) != len(seen) {
+		return ErrRelayUnsupported
+	}
+	for id, epoch := range req.Cutoffs {
+		if id == "" || epoch == 0 {
+			return ErrRelayUnsupported
+		}
+	}
+	c.packetMu.Lock()
+	defer c.packetMu.Unlock()
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
 		return ErrClosed
 	}
-	if w.relaySlots == nil {
-		// A worker enrolled after a loss may start with one or zero live slots,
-		// and its constructor's bootstrap leg may already have been removed.
-		if len(w.sessions) > 0 {
+	if w.relaySlots == nil && len(w.sessions) > 0 {
+		w.mu.Unlock()
+		return ErrRelayUnsupported
+	}
+	known := maps.Clone(w.relaySlots)
+	if known == nil {
+		known = map[string]RelaySlot{}
+	}
+	epochs := maps.Clone(w.relayEpochs)
+	if epochs == nil {
+		epochs = map[string]uint64{}
+	}
+	cutoffs := maps.Clone(w.relayCutoffs)
+	if cutoffs == nil {
+		cutoffs = map[string]uint64{}
+	}
+	var removed []netip.AddrPort
+	for id, epoch := range req.Cutoffs {
+		cutoffs[id] = max(cutoffs[id], epoch)
+		if old, ok := known[id]; ok && epochs[id] <= epoch {
+			removed = append(removed, old.Leg)
+			delete(known, id)
+			delete(epochs, id)
+		}
+	}
+	for _, slot := range req.Slots {
+		epoch := req.Epochs[slot.ID]
+		old, enrolled := known[slot.ID]
+		if epoch <= cutoffs[slot.ID] || epoch < epochs[slot.ID] || enrolled && epoch == epochs[slot.ID] && old != slot {
 			w.mu.Unlock()
 			return ErrRelayUnsupported
 		}
-	} else {
-		for id, slot := range known {
-			if w.relaySlots[id] != slot {
-				w.mu.Unlock()
-				return ErrRelayUnsupported
-			}
-		}
+		known[slot.ID], epochs[slot.ID] = slot, epoch
 	}
-	var removed []netip.AddrPort
-	for _, old := range w.relaySlots {
-		if !peers[old.Leg] {
-			removed = append(removed, old.Leg)
+	peers := make(map[netip.AddrPort]bool, len(known))
+	for _, slot := range known {
+		if peers[slot.Leg] {
+			w.mu.Unlock()
+			return ErrRelayUnsupported
 		}
+		peers[slot.Leg] = true
 	}
-	w.relaySlots = known
+	w.relaySlots, w.relayEpochs, w.relayCutoffs = known, epochs, cutoffs
 	sessions := make([]*session, 0, len(w.sessions))
 	for _, s := range w.sessions {
 		sessions = append(sessions, s)
@@ -184,11 +226,25 @@ func (w *Worker) ConfigureRelays(ctx context.Context, slots []RelaySlot) error {
 	c.peers = peers
 	c.peersMu.Unlock()
 	w.mu.Unlock()
-	// Drain any admission already in progress. Packet authorization rechecks
-	// the set under the session lock; writes hold peersMu through the syscall.
-	// Returning is the cut-off, including queued pre-key media and old grace.
+	// Returning acknowledges cutoff, including in-flight admission and grace.
 	for _, s := range sessions {
 		s.mu.Lock()
+		tracked := func(leg netip.AddrPort) bool {
+			return leg == s.currentLeg() || leg == s.previousRelay.leg || s.pendingRestart != nil && leg == s.pendingRestart.ice.Relay.Leg
+		}
+		for leg := range s.revokedRelayLegs {
+			if !tracked(leg) {
+				delete(s.revokedRelayLegs, leg)
+			}
+		}
+		for _, leg := range removed {
+			if tracked(leg) {
+				if s.revokedRelayLegs == nil {
+					s.revokedRelayLegs = map[netip.AddrPort]bool{}
+				}
+				s.revokedRelayLegs[leg] = true
+			}
+		}
 		kept := s.earlyPackets[:0]
 		for _, packet := range s.earlyPackets {
 			if !packet.path.leg.IsValid() || c.allowed(packet.path.leg) {
@@ -291,6 +347,7 @@ func (w *Worker) RestartRelaySession(ctx context.Context, id string, req Restart
 	}
 	w.mu.Lock()
 	slot, known := w.relaySlots[req.Slot]
+	epoch := w.relayEpochs[req.Slot]
 	w.mu.Unlock()
 	if !known || a.Pending != req.Slot || req.Generation != a.Generation+1 {
 		return RestartReply{}, sessionstore.ErrRelayConflict
@@ -352,7 +409,7 @@ func (w *Worker) RestartRelaySession(ctx context.Context, id string, req Restart
 		}
 		required = slices.Clone(req.Required)
 	}
-	p := &pendingRestart{ice: iceState{LocalUfrag: params.iceUfrag, LocalPwd: pwd, RemoteUfrag: offer.iceUfrag, RemotePwd: offer.icePwd, Relay: &slot}, from: a, answer: answer, required: required, switched: make(chan struct{}), aborted: make(chan struct{})}
+	p := &pendingRestart{epoch: epoch, ice: iceState{LocalUfrag: params.iceUfrag, LocalPwd: pwd, RemoteUfrag: offer.iceUfrag, RemotePwd: offer.icePwd, Relay: &slot}, from: a, answer: answer, required: required, switched: make(chan struct{}), aborted: make(chan struct{})}
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
@@ -417,7 +474,17 @@ func (s *session) currentLeg() netip.AddrPort {
 	}
 	return netip.AddrPort{}
 }
+func (s *session) relayRestartAllowed(p *pendingRestart) bool {
+	s.worker.mu.Lock()
+	cutoff := s.worker.relayCutoffs[p.ice.Relay.ID]
+	s.worker.mu.Unlock()
+	return p.epoch > cutoff
+}
+
 func (s *session) send(pkt []byte, to netip.AddrPort) (int, error) {
+	if s.revokedRelayLegs[s.currentLeg()] {
+		return 0, ErrRelayUnsupported
+	}
 	n, err := s.worker.sendVia(pkt, to, s.currentLeg())
 	if err == nil && relaytrace.Enabled() {
 		relaytrace.Emit("worker-output", s.currentLeg().String(), pkt)

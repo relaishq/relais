@@ -412,6 +412,10 @@ func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
 	if p.restart == nil {
 		return errors.New("controlplane: EnableRestart required")
 	}
+	lossCtx, stopLoss := context.WithCancel(ctx)
+	lossDone := make(chan struct{})
+	go func() { defer close(lossDone); p.runRelayLoss(lossCtx) }()
+	defer func() { stopLoss(); <-lossDone }()
 	renewCtx, stopRenew := context.WithCancel(context.WithoutCancel(ctx))
 	renewDone := make(chan struct{})
 	fatal := make(chan error, 1)
@@ -605,7 +609,9 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	if saved != nil {
 		instance = saved.Instance
 	}
-	if err := p.register(fixed.Name, address, worker, instance); err != nil {
+	// A down saved registration is metadata for death detection. It has no
+	// eligible relay pair until the returning process acknowledges enrollment.
+	if err := p.register(fixed.Name, address, worker, instance, !down); err != nil {
 		return err
 	}
 	log.Printf("worker bootstrap name=%s attempt=1 result=registered", fixed.Name)
@@ -640,6 +646,9 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	}
 	records, err := p.restart.store.ControlRecords(ctx, lease)
 	if err != nil {
+		return err
+	}
+	if err := p.restoreRelayCutoffs(records); err != nil {
 		return err
 	}
 	saved := map[string]FixedWorker{}
@@ -715,7 +724,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		}
 	}
 	p.mu.Unlock()
-	if !relayReady {
+	if len(p.relaySet) == 0 && !relayReady {
 		return fmt.Errorf("controlplane: relay workers not registered: %w", ErrNotReady)
 	}
 	observations := map[string]mediaworker.InstalledSession{}
@@ -871,7 +880,23 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			p.restartOutcome("drain", worker.name, "partial", "interrupted")
 		}
 	}
+	p.mu.Lock()
+	cutoffs := map[string]uint64{}
+	for id, b := range p.relaySet {
+		if b.lost && b.cutoff > 0 {
+			cutoffs[id] = b.cutoff
+		}
+	}
+	p.mu.Unlock()
+	for id, epoch := range cutoffs {
+		if err := p.loseRelay(ctx, id, epoch); err != nil {
+			p.restartLog("relay-cutoff:"+id, "relay cutoff pending slot=%s error=%v", id, err)
+		}
+	}
 	p.resumeRelayAttempts(ctx)
+	p.mu.Lock()
+	p.relayControlEpoch = lease.Epoch
+	p.mu.Unlock()
 	return nil
 }
 func (p *Plane) rebuildCall(lease sessionstore.Lease) *call {
