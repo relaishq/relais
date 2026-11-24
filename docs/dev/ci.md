@@ -74,7 +74,11 @@ records the exact runner image and browser version, and adds no browser
 download source. There is no separate Chrome version pin in this repository;
 the browser version follows the runner image. Its summary reports audio and
 video p50/p95/max gaps for ten planned changes and eight calls after active
-and standby relay SIGKILL. The test verdict remains authoritative. Missing
+and standby relay SIGKILL. On this shared runner the planned-change p95 is
+reported against the ADR 0016 row 1 target and fails only past twice that
+target (`RELAIS_CHROME_TIMING=shared-runner`); without it the test enforces
+the target, for a run on a quiet host. Otherwise the test verdict remains
+authoritative. Missing
 rows and unavailable browser decryption counters stay explicit. These are
 fake-media browser and namespace trials; new timing results remain NOT-RUN
 until CI runs the changed revision.

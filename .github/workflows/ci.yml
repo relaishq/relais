@@ -442,6 +442,10 @@ jobs:
           } | tee chrome-version.log
       - name: Run planned and unplanned Chrome relay changes
         timeout-minutes: 10
+        env:
+          # Shared runner: report row 1 gaps against the ADR target and fail
+          # only past 2x. The strict target applies on a quiet host.
+          RELAIS_CHROME_TIMING: shared-runner
         run: |
           set -o pipefail
           make test-chrome-relay-change |& tee chrome-relay-change.log

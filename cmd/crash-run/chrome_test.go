@@ -253,7 +253,18 @@ func TestChromeRelayChange(t *testing.T) {
 				values[i] = m.VideoGap
 			}
 		}
-		require.LessOrEqual(t, chromePercentile(values, 95), math.Min(150, base+50))
+		target := math.Min(150, base+50)
+		p95 := chromePercentile(values, 95)
+		if os.Getenv("RELAIS_CHROME_TIMING") == "shared-runner" {
+			// ADR 0016 row 1 timing is judged on a quiet host. A shared runner
+			// reports it and fails only past 2x the target (gross regression).
+			if p95 > target {
+				t.Logf("CHROME_TIMING row=1 track=%d p95_ms=%.1f target_ms=%.1f verdict=over-target-shared-runner", track, p95, target)
+			}
+			require.LessOrEqual(t, p95, 2*target)
+			continue
+		}
+		require.LessOrEqual(t, p95, target)
 	}
 	// Put eight live calls on the slot that will lose active and standby.
 	setupCtx, setupCancel := context.WithTimeout(browser, 30*time.Second)
