@@ -24,6 +24,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/relaytrace"
 	"github.com/relaishq/relais/pkg/callharness"
@@ -63,37 +64,47 @@ func (p *lossProbe) replay(a net.Addr) error {
 	return nil
 }
 
-func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bin, dir, key, addr string, runs int, after time.Duration, shipped bool) error {
+func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bin, dir, key, addr string, runs int, after time.Duration, shipped bool, topology *nettopology.Topology, password string) error {
+	modes := []bool{true, false}
+	if topology != nil {
+		modes = []bool{false}
+	}
 	for i := range runs {
-		for _, freeze := range []bool{true, false} {
+		for _, freeze := range modes {
 			mode := "SIGKILL"
 			if freeze {
 				mode = "SIGSTOP-SIGCONT"
+			}
+			if topology != nil {
+				mode = "netns-blackhole"
 			}
 			trialDir := filepath.Join(dir, fmt.Sprintf("relay-loss-%s-%02d", mode, i+1))
 			if err := os.Mkdir(trialDir, 0700); err != nil {
 				return err
 			}
 			bounded, cancel := context.WithTimeout(ctx, after+35*time.Second)
-			err := relayLossTrial(bounded, manager, bin, trialDir, key, addr, after, freeze, shipped)
+			err := relayLossTrial(bounded, manager, bin, trialDir, key, addr, after, freeze, shipped, topology, password)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("relay loss %s trial %d: %w (logs %s)", mode, i+1, err, trialDir)
 			}
 		}
 	}
-	fmt.Printf("PASS: %d interleaved trials per relay-loss mode; 8 calls per trial\n", runs)
+	fmt.Printf("PASS: %d trials per relay-loss mode; modes=%d; 8 calls per trial\n", runs, len(modes))
 	return nil
 }
 
-func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool) (trialErr error) {
+func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, topology *nettopology.Topology, password string) (trialErr error) {
 	prefix := fmt.Sprintf("relais:slot-loss:%s:", filepath.Base(dir))
 	env := processEnv(keyHex, addr, prefix)
+	if topology != nil {
+		env = append(env, "RELAIS_PRIVATE_NETS="+topology.Plan.PrivateNets(), "RELAIS_REDIS_PASSWORD="+password)
+	}
 	key, err := hex.DecodeString(keyHex)
 	if err != nil {
 		return err
 	}
-	store, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: addr, Prefix: prefix}, key)
+	store, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: addr, Prefix: prefix, Password: password}, key)
 	if err != nil {
 		return err
 	}
@@ -120,7 +131,20 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		if name == "control" || strings.HasPrefix(name, "worker-") {
 			childEnv = env
 		}
-		child, e := manager.Start(dir, name, childEnv, args...)
+		role := name
+		switch name {
+		case "r1":
+			role = "relay"
+		case "r2":
+			role = "relay-spare"
+		}
+		var child *clusterprocess.Child
+		var e error
+		if topology == nil {
+			child, e = manager.Start(dir, name, childEnv, args...)
+		} else {
+			child, e = manager.StartInNamespace(dir, name, topology.Plan.Roles[role].Namespace, childEnv, args...)
+		}
 		if e != nil {
 			return nil, clusterprocess.Ready{}, e
 		}
@@ -132,7 +156,11 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	var active *clusterprocess.Child
 	var first clusterprocess.Ready
 	for _, id := range []string{"r1", "r2"} {
-		child, ready, e := start(id, filepath.Join(bin, "relais-relay"), "-buffer-off", "-relay-lease", id, "-relay-slot", id, "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0")
+		role := "relay"
+		if id == "r2" {
+			role = "relay-spare"
+		}
+		child, ready, e := start(id, filepath.Join(bin, "relais-relay"), "-buffer-off", "-relay-lease", id, "-relay-slot", id, "-media", roleBind(topology, role, true), "-leg", roleBind(topology, role, false), "-http", roleBind(topology, role, false))
 		if e != nil {
 			return e
 		}
@@ -143,17 +171,20 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	}
 	// A waiting standby emits no READY, because it binds no sockets. Keep its
 	// real child handle; pausing/killing both prevents same-slot takeover.
-	standby, err := manager.Start(dir, "standby-r1", withoutKey(env), filepath.Join(bin, "relais-relay"), "-standby", "-buffer-off", "-relay-lease", "r1", "-relay-slot", "r1", "-media", first.Media, "-leg", first.Leg, "-http", strings.TrimPrefix(first.HTTP, "http://"))
-	if err != nil {
-		return err
+	var standby *clusterprocess.Child
+	if topology == nil {
+		standby, err = manager.Start(dir, "standby-r1", withoutKey(env), filepath.Join(bin, "relais-relay"), "-standby", "-buffer-off", "-relay-lease", "r1", "-relay-slot", "r1", "-media", first.Media, "-leg", first.Leg, "-http", strings.TrimPrefix(first.HTTP, "http://"))
+		if err != nil {
+			return err
+		}
+		children = append(children, standby)
 	}
-	children = append(children, standby)
 	var p *controlplane.Plane
 	var workers []*mediaworker.Worker
 	var workerURLs []string
 	var signalingURL string
 	if shipped {
-		controlAddr, e := clusterprocess.FreeTCP()
+		controlAddr, e := controlAddress(topology)
 		if e != nil {
 			return e
 		}
@@ -164,7 +195,7 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		}
 		for i := range 2 {
 			name := fmt.Sprint(i)
-			_, ready, e := start("worker-"+name, filepath.Join(bin, "relais-worker"), "-name", name, "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-control", signalingURL, "-relay-leg", first.Leg, "-relay-media", first.Media, "-agent", "echo")
+			_, ready, e := start("worker-"+name, filepath.Join(bin, "relais-worker"), "-name", name, "-media", roleBind(topology, "worker-"+name, false), "-http", roleBind(topology, "worker-"+name, false), "-control", signalingURL, "-relay-leg", first.Leg, "-relay-media", first.Media, "-agent", "echo")
 			if e != nil {
 				return e
 			}
@@ -216,9 +247,20 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		defer server.Close()
 		signalingURL = server.URL
 	}
+	if topology != nil {
+		if err := topology.AllowMedia(ctx, bindings[0].Slot.Public, bindings[1].Slot.Public); err != nil {
+			return err
+		}
+	}
 	var probes []*lossProbe
 	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: signalingURL + "/calls", RelayAddr: bindings[0].Slot.Public, CallerSocket: func() (net.PacketConn, error) {
-		socket, e := net.ListenPacket("udp4", "127.0.0.1:0")
+		var socket net.PacketConn
+		var e error
+		if topology == nil {
+			socket, e = net.ListenPacket("udp4", "127.0.0.1:0")
+		} else {
+			socket, e = topology.CallerSocket()
+		}
 		if e != nil {
 			return nil, e
 		}
@@ -345,15 +387,26 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	defer stopTrace()
 	fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=baseline\n", freeze)
 	fault := time.Now()
-	signal := syscall.SIGKILL
-	if freeze {
-		signal = syscall.SIGSTOP
-	}
-	if err = standby.Signal(signal); err != nil {
-		return err
-	}
-	if err = active.Signal(signal); err != nil {
-		return err
+	if topology != nil {
+		if err = topology.BlackholeRelay(ctx, true); err != nil {
+			return fmt.Errorf("phase=blackhole: %w", err)
+		}
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			trialErr = errors.Join(trialErr, topology.BlackholeRelay(cleanup, false))
+		}()
+	} else {
+		signal := syscall.SIGKILL
+		if freeze {
+			signal = syscall.SIGSTOP
+		}
+		if err = standby.Signal(signal); err != nil {
+			return err
+		}
+		if err = active.Signal(signal); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=fault\n", freeze)
 	recoveryCtx, stopRecovery := context.WithDeadline(ctx, fault.Add(5*time.Second))
@@ -365,18 +418,21 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 			return e == nil && a.Slot == "r2" && a.Pending == ""
 		}); err != nil {
 			_, a, readErr := store.RelayOwner(context.WithoutCancel(ctx), c.SessionID())
-			return fmt.Errorf("assignment progress: %w; assignment=%+v read=%v; %s", err, a, readErr, c.RelaySnapshot().Summary())
+			report := c.RelaySnapshot()
+			return relayLossCallError(c.SessionID(), "assignment", relayLossObservedGap(report, time.Now()), fmt.Errorf("%w; assignment=%+v read=%v; recovery unobserved; caller media: %s", err, a, readErr, report.Summary()))
 		}
 		fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=committed\n", freeze)
 		observed := time.Now()
 		var gap time.Duration
 		if err = lossWait(recoveryCtx, func() bool { gap = c.RelayRecoveryGap(fault, observed); return gap > 0 }); err != nil {
-			return fmt.Errorf("decoded progress: %w; %s", err, c.RelaySnapshot().Summary())
+			report := c.RelaySnapshot()
+			return relayLossCallError(c.SessionID(), "decoded-progress", relayLossObservedGap(report, time.Now()), fmt.Errorf("%w; decoded recovery unobserved; caller media: %s", err, report.Summary()))
 		}
 		if gap > 5*time.Second {
-			return fmt.Errorf("recovery exceeded 5s: %s", gap)
+			return relayLossCallError(c.SessionID(), "recovery", gap, errors.New("exceeded 5s"))
 		}
 		gaps = append(gaps, gap)
+		fmt.Printf("RELAY_LOSS_CALL call=%s phase=recovered gap=%s\n", c.SessionID(), gap)
 	}
 	if !shipped && !cutoff.Load() {
 		return fmt.Errorf("worker cut-off boundary missing")
@@ -428,19 +484,25 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	case <-time.After(after):
 	}
 	for _, endpoint := range workerURLs {
+		var callIDs []string
+		var maxGap time.Duration
+		for index, c := range calls {
+			callIDs = append(callIDs, c.SessionID())
+			maxGap = max(maxGap, gaps[index])
+		}
 		values, _, e := scrapeMetrics(ctx, http.DefaultClient, endpoint+"/metrics")
 		if e != nil {
-			return e
+			return relayLossCallError(strings.Join(callIDs, ","), "worker-decryption-evidence", maxGap, e)
 		}
 		failures, ok := values["relais_worker_decryption_failures_total"]
 		if !ok || failures != 0 {
-			return fmt.Errorf("worker decryption evidence missing or nonzero: present=%t failures=%g", ok, failures)
+			return relayLossCallError(strings.Join(callIDs, ","), "worker-decryption", maxGap, fmt.Errorf("worker=%s present=%t failures=%g; counter is worker-wide", endpoint, ok, failures))
 		}
 	}
-	for _, c := range calls {
+	for index, c := range calls {
 		lease, e := store.Get(ctx, c.SessionID())
 		if e != nil {
-			return e
+			return relayLossCallError(c.SessionID(), "post-recovery-lease", gaps[index], e)
 		}
 		var failures uint64
 		for _, worker := range workers {
@@ -452,15 +514,20 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 			}
 		}
 		if failures != 0 {
-			return fmt.Errorf("worker auth failures: %d", failures)
+			return relayLossCallError(c.SessionID(), "worker-decryption", gaps[index], fmt.Errorf("failures=%d", failures))
 		}
 		report := c.RelaySnapshot()
+		if topology != nil {
+			if err := relayLossMediaProgress(c.SessionID(), report, time.Now()); err != nil {
+				return err
+			}
+		}
 		if report.DecryptionFailures.Total() != 0 {
-			return fmt.Errorf("caller auth failure")
+			return relayLossCallError(c.SessionID(), "caller-decryption", gaps[index], errors.New("authentication failure"))
 		}
 		for _, t := range report.Tracks {
 			if t.DuplicatePackets != 0 {
-				return fmt.Errorf("duplicate caller RTP")
+				return relayLossCallError(c.SessionID(), "duplicates", gaps[index], fmt.Errorf("track=%s duplicates=%d", t.Kind, t.DuplicatePackets))
 			}
 		}
 	}
@@ -468,7 +535,14 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		return fmt.Errorf("old slot oldInput=%d oldOutput=%d cutoff=%t", oldInput.Load(), oldOutput.Load(), cutoff.Load())
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
-	if shipped {
+	if topology != nil {
+		select {
+		case <-active.Done():
+			return errors.New("phase=post-recovery: blackholed relay exited; live-process loss not proven")
+		default:
+		}
+		fmt.Printf("RELAY_LOSS_NETNS n=8 decoded_upper_bounds p50=%s p95=%s max=%s samples=%v auth=0 duplicates=0 relay_alive=true\n", gaps[3], gaps[7], gaps[7], gaps)
+	} else if shipped {
 		fmt.Printf("RELAY_LOSS_PROCESSES freeze=%t n=8 decoded_upper_bounds p50=%s p95=%s max=%s samples=%v auth=0 duplicates=0\n", freeze, gaps[3], gaps[7], gaps[7], gaps)
 	} else {
 		fmt.Printf("RELAY_LOSS freeze=%t n=8 decoded_upper_bounds p50=%s p95=%s max=%s samples=%v old_accepted=0 old_sent=0 auth=0 duplicates=0\n", freeze, gaps[3], gaps[7], gaps[7], gaps)
@@ -520,4 +594,33 @@ func lossWait(ctx context.Context, ready func() bool) error {
 		case <-tick.C:
 		}
 	}
+}
+
+func relayLossCallError(call, phase string, gap time.Duration, err error) error {
+	return fmt.Errorf("call=%s phase=%s gap=%s: %w", call, phase, gap, err)
+}
+
+// Keep the network trial's full observation honest: a short recovery followed
+// by another freeze must fail, including a freeze with no final packet.
+func relayLossMediaProgress(call string, report *callharness.Report, now time.Time) error {
+	if len(report.Tracks) != 2 {
+		return relayLossCallError(call, "post-recovery", 0, errors.New("audio/video evidence missing"))
+	}
+	for _, track := range report.Tracks {
+		gap := max(track.MediaGap, now.Sub(report.StartedAt)-track.LastArrival)
+		if track.Packets == 0 || gap > 5*time.Second {
+			return relayLossCallError(call, "post-recovery-"+track.Kind, gap, errors.New("media stopped or gap exceeded 5s"))
+		}
+	}
+	return nil
+}
+
+// On a timeout there is no completed recovery gap. Report the caller's
+// measured packet gap, including trailing silence, rather than fault age.
+func relayLossObservedGap(report *callharness.Report, now time.Time) time.Duration {
+	var gap time.Duration
+	for _, track := range report.Tracks {
+		gap = max(gap, track.MediaGap, now.Sub(report.StartedAt)-track.LastArrival)
+	}
+	return gap
 }

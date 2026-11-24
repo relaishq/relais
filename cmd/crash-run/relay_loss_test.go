@@ -9,6 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/stretchr/testify/require"
 )
@@ -73,4 +74,36 @@ func TestRelayLossBaselinePreservesStatusErrorAndCancellation(t *testing.T) {
 		return relay.RelayStatus{}, nil
 	})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRelayLossFailureNamesCallPhaseAndGap(t *testing.T) {
+	cause := errors.New("no decoded progress")
+	err := relayLossCallError("call-8", "decoded-progress", 5*time.Second, cause)
+	require.ErrorIs(t, err, cause)
+	require.EqualError(t, err, "call=call-8 phase=decoded-progress gap=5s: no decoded progress")
+}
+
+func TestRelayLossObservationRejectsSecondAndTrailingFreeze(t *testing.T) {
+	started := time.Unix(1000, 0)
+	good := func() *callharness.Report {
+		return &callharness.Report{StartedAt: started, Tracks: []callharness.TrackReport{
+			{Kind: "audio", Packets: 100, LastArrival: 10 * time.Second, MediaGap: 3 * time.Second},
+			{Kind: "video", Packets: 100, LastArrival: 10 * time.Second, MediaGap: 3 * time.Second},
+		}}
+	}
+	now := started.Add(10 * time.Second)
+	require.NoError(t, relayLossMediaProgress("call-8", good(), now))
+	require.Equal(t, 3*time.Second, relayLossObservedGap(good(), now))
+	for _, track := range []int{0, 1} {
+		secondFreeze := good()
+		secondFreeze.Tracks[track].MediaGap = 6 * time.Second
+		require.ErrorContains(t, relayLossMediaProgress("call-8", secondFreeze, now), "call=call-8 phase=post-recovery-"+secondFreeze.Tracks[track].Kind+" gap=6s")
+		trailingFreeze := good()
+		trailingFreeze.Tracks[track].LastArrival = 4 * time.Second
+		require.Equal(t, 6*time.Second, relayLossObservedGap(trailingFreeze, now))
+		require.ErrorContains(t, relayLossMediaProgress("call-8", trailingFreeze, now), "gap=6s")
+	}
+	missing := good()
+	missing.Tracks = missing.Tracks[:1]
+	require.ErrorContains(t, relayLossMediaProgress("call-8", missing, now), "evidence missing")
 }

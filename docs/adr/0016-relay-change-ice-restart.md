@@ -826,6 +826,18 @@ results do not establish the decoded-media target in section 9.
 | 8 | No duplicate media | Caller duplicate RTP count (existing standby metric); per-slot forwarded-packet counters for the call after switch plus 500 ms | Zero duplicates at the caller; zero worker-to-caller packets through the old slot after the switch |
 | 9 | Existing relay guarantees | ADR 0004 standby, ADR 0003 route restore, planned-move and crash gates with one slot | Unchanged, same thresholds |
 
+**CI evidence sources.** Rows 1 and 2 use `chrome-relay-change` for the real
+Chrome planned-change and active/standby SIGKILL trials. Row 2 also uses the
+`netns-crash-run` matrix's `relay-loss` lane: ten eight-call trials blackhole
+both addresses of a live relay using the shared namespace topology. The
+`relay-continuity` process lanes retain SIGKILL and SIGSTOP/SIGCONT evidence
+for rows 2 and 3. Gap tables are in the job summaries and driver logs; rows 7
+and 8 use the trials' decryption and duplicate checks. Chrome decryption
+counters are reported only where exposed. The namespace caller remains
+Pion; Chrome runs separately on loopback. Row 4's public-address-only fault
+is not covered by these lanes. These are evidence locations, not new measured
+results; the added CI lanes are NOT-RUN until their first completed run.
+
 **Chrome success signal.** With `media_progress`, the driver applies section 5's
 500 ms grace and sustained decode window on every required MID, then sends A.
 Audio uses non-concealed sample progress; video uses new decoded frames. If a

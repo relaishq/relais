@@ -56,6 +56,29 @@ process lane also checks worker and caller decryption counters and caller
 RTP duplicates. Run a local smoke with
 `make crash-run CRASH_FLAGS="-relay-loss-processes -runs=1 -after=3s"`;
 the CI lane keeps ten trials per mode and 60 s observation.
+The `netns-crash-run` matrix adds a `relay-loss` lane on the same main,
+nightly and manual triggers as its `worker-crash` lane. It runs
+`crash-run -topology=netns -relay-loss-netns -runs=10 -after=60s` using the
+existing namespace topology, shipped control and workers, and a second relay.
+Each trial blackholes all input and output in the lost relay's namespace.
+This blocks its public media, private legs, HTTP and store renewal while the
+process stays alive. Eight affected calls must recover within 5 s with zero
+worker/caller decryption failures and zero duplicate caller RTP. Per-call
+recovery gaps and per-trial tables appear in the job summary. Failed runs
+retain process logs; every outcome checks namespace and link cleanup.
+The separate `netns-network-profiles` matrix still runs only nightly/manual.
+
+The `chrome-relay-change` job runs `TestChromeRelayChange` on main, nightly
+and manual runs. It uses the Chrome already supplied by `ubuntu-24.04`,
+records the exact runner image and browser version, and adds no browser
+download source. There is no separate Chrome version pin in this repository;
+the browser version follows the runner image. Its summary reports audio and
+video p50/p95/max gaps for ten planned changes and eight calls after active
+and standby relay SIGKILL. The test verdict remains authoritative. Missing
+rows and unavailable browser decryption counters stay explicit. These are
+fake-media browser and namespace trials; new timing results remain NOT-RUN
+until CI runs the changed revision.
+
 To run manually, select **Actions → CI → Run workflow** on the desired branch.
 
 ## Redis in tests

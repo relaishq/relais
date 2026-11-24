@@ -30,20 +30,20 @@ func (t *Topology) execute(ctx context.Context, commands []Command) error {
 	}
 	return nil
 }
-func (t *Topology) AllowMedia(ctx context.Context, addr netip.AddrPort) error {
+func (t *Topology) AllowMedia(ctx context.Context, addr ...netip.AddrPort) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return errors.New("topology is closed")
 	}
-	commands, err := t.Plan.MediaCommands(addr)
+	commands, err := t.Plan.MediaCommands(addr...)
 	if err != nil {
 		return err
 	}
 	if err := t.execute(ctx, commands); err != nil {
 		return err
 	}
-	t.media = addr
+	t.media = addr[0]
 	return nil
 }
 

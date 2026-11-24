@@ -33,6 +33,15 @@ func OpenManaged(ctx context.Context, logf func(string, ...any), register func(f
 }
 
 func OpenManagedWorkers(ctx context.Context, logf func(string, ...any), register func(func()) error, workers int) (*Topology, error) {
+	return openManaged(ctx, logf, register, workers, false)
+}
+
+// OpenManagedRelayLoss adds a spare relay to the existing owned topology.
+func OpenManagedRelayLoss(ctx context.Context, logf func(string, ...any), register func(func()) error) (*Topology, error) {
+	return openManaged(ctx, logf, register, 2, true)
+}
+
+func openManaged(ctx context.Context, logf func(string, ...any), register func(func()) error, workers int, spare bool) (*Topology, error) {
 	if os.Geteuid() != 0 {
 		return nil, errors.New("netns topology requires root on Linux: build first, then run sudo -E ./bin/crash-run -topology=netns -profile=lan")
 	}
@@ -61,6 +70,9 @@ func OpenManagedWorkers(ctx context.Context, logf func(string, ...any), register
 		p, err := NewPlan(os.Getuid(), os.Getpid(), hex.EncodeToString(token[:]), workers)
 		if err != nil {
 			return nil, err
+		}
+		if spare {
+			p.addSpareRelay()
 		}
 		if overlapsRoutes(p, routes) {
 			continue

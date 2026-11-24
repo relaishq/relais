@@ -33,7 +33,7 @@ type Plan struct {
 }
 
 var tokenPattern = regexp.MustCompile(`^[0-9a-f]{10}$`)
-var ownedNamespace = regexp.MustCompile(`^relais-net-([0-9]+)-([1-9][0-9]*)-([0-9a-f]{10})-(relay|control|store|caller|fabric|worker-[0-9]+)$`)
+var ownedNamespace = regexp.MustCompile(`^relais-net-([0-9]+)-([1-9][0-9]*)-([0-9a-f]{10})-(relay|relay-spare|control|store|caller|fabric|worker-[0-9]+)$`)
 var linkSuffix = regexp.MustCompile(`^[hp][0-9a-f]{2}$`)
 
 // OwnedLink includes veths interrupted before either end enters a namespace.
@@ -107,7 +107,7 @@ func (p Plan) SetupCommands() []Command {
 		ns := p.Roles[link.Role].Namespace
 		if !seen[ns] {
 			commands = append(commands, Command{"ip", "netns", "add", ns}, Command{"ip", "-n", ns, "link", "set", "lo", "up"})
-			if link.Role == "caller" || link.Role == "relay" {
+			if p.Roles[link.Role].Public.IsValid() {
 				commands = append(commands, Command{"ip", "netns", "exec", ns, "sysctl", "-q", "-w", "net.ipv6.conf.all.disable_ipv6=1", "net.ipv6.conf.default.disable_ipv6=1"})
 			}
 			seen[ns] = true
@@ -135,21 +135,38 @@ func (p Plan) SetupCommands() []Command {
 			Command{"ip", "-n", ns, "addr", "add", link.Address.String(), "dev", link.PeerLink},
 			Command{"ip", "-n", ns, "link", "set", link.PeerLink, "up"})
 	}
-	commands = append(commands, Command{"ip", "netns", "exec", p.Roles["relay"].Namespace, "sysctl", "-q", "-w", "net.ipv4.ip_forward=0"})
+	for _, name := range []string{"relay", "relay-spare"} {
+		if role, ok := p.Roles[name]; ok {
+			commands = append(commands, Command{"ip", "netns", "exec", role.Namespace, "sysctl", "-q", "-w", "net.ipv4.ip_forward=0"})
+		}
+	}
 	for _, chain := range []string{"INPUT", "OUTPUT", "FORWARD"} {
 		commands = append(commands, Command{"ip", "netns", "exec", p.Roles["caller"].Namespace, "iptables", "-w", "2", "-P", chain, "DROP"})
 	}
 	return commands
 }
-func (p Plan) MediaCommands(media netip.AddrPort) ([]Command, error) {
-	if media.Addr() != p.Roles["relay"].Public || media.Port() == 0 || media.Port() == 6379 {
-		return nil, errors.New("media endpoint must use the relay's caller-side address and a dedicated port")
+func (p Plan) MediaCommands(media ...netip.AddrPort) ([]Command, error) {
+	if len(media) == 0 {
+		return nil, errors.New("at least one media endpoint is required")
 	}
 	ns := p.Roles["caller"].Namespace
-	return []Command{
+	commands := []Command{
 		{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-F", "OUTPUT"},
 		{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-F", "INPUT"},
-		{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-A", "OUTPUT", "-p", "udp", "-d", media.Addr().String(), "--dport", strconv.Itoa(int(media.Port())), "-j", "ACCEPT"},
-		{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-A", "INPUT", "-p", "udp", "-s", media.Addr().String(), "--sport", strconv.Itoa(int(media.Port())), "-j", "ACCEPT"},
-	}, nil
+	}
+	for _, endpoint := range media {
+		valid := false
+		for _, name := range []string{"relay", "relay-spare"} {
+			role, ok := p.Roles[name]
+			valid = valid || ok && endpoint.Addr() == role.Public
+		}
+		if !valid || endpoint.Port() == 0 || endpoint.Port() == 6379 {
+			return nil, errors.New("media endpoint must use a relay's caller-side address and a dedicated port")
+		}
+		port := strconv.Itoa(int(endpoint.Port()))
+		commands = append(commands,
+			Command{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-A", "OUTPUT", "-p", "udp", "-d", endpoint.Addr().String(), "--dport", port, "-j", "ACCEPT"},
+			Command{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-A", "INPUT", "-p", "udp", "-s", endpoint.Addr().String(), "--sport", port, "-j", "ACCEPT"})
+	}
+	return commands, nil
 }

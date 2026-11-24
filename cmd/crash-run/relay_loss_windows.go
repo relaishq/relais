@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
-	"github.com/relaishq/relais/internal/clusterprocess"
-	"github.com/relaishq/relais/internal/processidentity"
 	"time"
+
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/processidentity"
 )
 
-func runRelayLossTrials(context.Context, *clusterprocess.Manager, string, string, string, string, int, time.Duration, bool) error {
+func runRelayLossTrials(context.Context, *clusterprocess.Manager, string, string, string, string, int, time.Duration, bool, *nettopology.Topology, string) error {
 	return processidentity.ErrUnsupported
 }
