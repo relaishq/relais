@@ -364,8 +364,9 @@ jobs:
             bin/dial-out-process-*
             bin/dial-out-activation-*
 
-  # Each lane runs twenty 60 s trials on an awake Linux runner. The driver
-  # and relay children run as the same ordinary user; fencing reads /proc.
+  # Restart, standby and loss lanes run twenty 60 s trials; drain runs ten.
+  # The driver and relay children use the same ordinary user; fencing reads
+  # /proc.
   relay-continuity:
     permissions:
       contents: read
@@ -375,7 +376,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [relay-restart, relay-standby, relay-loss, relay-loss-processes]
+        mode: [relay-restart, relay-standby, relay-loss, relay-loss-processes, relay-drain]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -400,6 +401,7 @@ jobs:
       # compares ten SIGKILL and ten SIGSTOP trials. Redis is driver-owned.
       # Both loss lanes reuse the eight-call drill; processes uses shipped
       # control and workers through the repeated -relay flag path.
+      # Drain uses that topology for eight planned changes per trial.
       - name: Run relay continuity acceptance
         shell: bash
         run: |

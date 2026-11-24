@@ -1,6 +1,9 @@
 package callharness
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // RelayRecoveryGap measures last caller media before loss to decoded caller video after observed commit.
 // Audio RTP must also advance after the observation. This upper-bounds the first decoded frame after the actual worker switch and
@@ -36,3 +39,11 @@ func (c *Call) RelayRecoveryGap(fault, observedCommit time.Time) time.Duration {
 
 // RelaySnapshot is a bounded caller observation; it does not change completion.
 func (c *Call) RelaySnapshot() *Report { return c.rec.report() }
+
+// RelayDTLSStates reports transport continuity across ICE restarts. ICE can
+// return to checking during a planned change without reconnecting DTLS.
+func (c *Call) RelayDTLSStates() []StateChange {
+	c.dialMu.Lock()
+	defer c.dialMu.Unlock()
+	return slices.Clone(c.dtlsStates)
+}

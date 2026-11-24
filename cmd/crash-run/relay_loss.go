@@ -95,6 +95,12 @@ func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bi
 }
 
 func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, topology *nettopology.Topology, password string) (trialErr error) {
+	return relayContinuityTrial(ctx, manager, bin, dir, keyHex, addr, after, freeze, shipped, nil, topology, password)
+}
+
+// Both drills share the shipped two-relay topology and eight live callers.
+// A drain uses the operator API before any relay-loss fault is injected.
+func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, drainSamples *[]relayDrainSample, topology *nettopology.Topology, password string) (trialErr error) {
 	prefix := fmt.Sprintf("relais:slot-loss:%s:", filepath.Base(dir))
 	env := processEnv(keyHex, addr, prefix)
 	if topology != nil {
@@ -172,7 +178,7 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	// A waiting standby emits no READY, because it binds no sockets. Keep its
 	// real child handle; pausing/killing both prevents same-slot takeover.
 	var standby *clusterprocess.Child
-	if topology == nil {
+	if drainSamples == nil && topology == nil {
 		standby, err = manager.Start(dir, "standby-r1", withoutKey(env), filepath.Join(bin, "relais-relay"), "-standby", "-buffer-off", "-relay-lease", "r1", "-relay-slot", "r1", "-media", first.Media, "-leg", first.Leg, "-http", strings.TrimPrefix(first.HTTP, "http://"))
 		if err != nil {
 			return err
@@ -369,6 +375,11 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		}
 		return true
 	}); err != nil {
+		return err
+	}
+	if drainSamples != nil {
+		samples, err := relayDrainCalls(ctx, signalingURL, workerURLs, store, h, calls, after)
+		*drainSamples = append(*drainSamples, samples...)
 		return err
 	}
 	var cutoff atomic.Bool

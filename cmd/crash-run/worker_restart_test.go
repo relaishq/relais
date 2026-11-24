@@ -106,7 +106,7 @@ func TestWorkerRestartSupervisorCancellationStopsRetry(t *testing.T) {
 }
 
 func TestWorkerRestartFlagsRefuseOtherFaultModes(t *testing.T) {
-	for _, name := range []string{"runs", "after", "bin", "redis", "redis-server", "worker-restart", "relay-restart", "worker-stop", "scenario", "release-pair"} {
+	for _, name := range []string{"runs", "after", "bin", "redis", "redis-server", "worker-restart", "relay-restart", "worker-stop", "scenario", "release-pair", "relay-drain", "relay-loss-netns"} {
 		flags := flag.NewFlagSet("restart", flag.ContinueOnError)
 		flags.String(name, "", "")
 		require.NoError(t, flags.Parse([]string{"-" + name + "=test"}))

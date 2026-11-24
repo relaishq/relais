@@ -137,6 +137,51 @@ The rejoin handshake fences old sessions before placement resumes. Adding a new
 registration is not a general production autoscaling interface; the dynamic
 registration routes below are test-only.
 
+## Upgrade a named relay
+
+Start control with at least two named, live relay slots, using repeated
+`-relay r1=http://relay-one:25700 -relay r2=http://relay-two:25700` flags.
+Callers must support the relay-change event stream and ICE restart
+([ADR 0016](adr/0016-relay-change-ice-restart.md)). Keep the other relay and
+the media workers running throughout the upgrade.
+With only two relay slots, draining one leaves no backup relay while the
+drain and replacement run. Keep the remaining relay healthy until the
+drained slot is back in service.
+
+1. Send `POST /relays/r1/drain` to control's **private** HTTP listener. The
+   route has no `/private` prefix, like `POST /workers/{name}/drain`. It is
+   not exposed by the public signaling frontend. Control refuses an unknown
+   slot with HTTP 404, or a drain with no other live, non-draining slot with
+   HTTP 409. A refused request does not mark the slot draining.
+2. Control marks r1 draining before it selects calls. New calls use another
+   slot. Existing calls use planned relay change, with at most eight changes
+   running at once. The response contains `moves` with `id`, `from`, `to`
+   and any `error` or `not_movable` result, plus a `not_movable` count.
+   HTTP 200 carries per-call outcomes, including partial failures. Read every
+   result. A failed move can leave a live call on r1 after rollback; retry
+   the drain after addressing its reported failure.
+3. Check private `GET /status`: `relays` lists each slot's `name`, `draining`,
+   `lost` and `call_count`. Wait until r1 is draining with `call_count: 0`,
+   and every selected call has a successful result. Keep the old relay alive
+   while any call remains. Only then replace or upgrade that relay process.
+4. Rejoin the replacement before draining another relay. This last step has
+   a current limitation: control restores worker allowlist entries when a
+   configured relay restarts at its configured URL, but does not clear that
+   slot's draining or lost mark. There is no relay undrain or late-admission
+   API in a running control. Relay rejoin and late admission are #545's
+   scope. A replacement staying healthy does not make it eligible again;
+   stop the rolling sequence at this gate until rejoin is supported.
+
+The shipped-binary drill is
+`make crash-run CRASH_FLAGS="-relay-drain -runs=10 -after=60s"`. Each trial
+drains eight live audio/video calls from r1 to r2 through this API, checks
+that new calls avoid r1, and requires zero decryption failures, RTP
+duplicates and reconnects. It grades per-track gaps against ADR 0016's
+planned-change target: at most one above the lower of same-run baseline p95
+plus 50 ms and 150 ms per full 20 changes, pooled across trials. A local
+`-runs=1 -after=3s` smoke has no gap-outlier allowance and does not establish
+the full 60-second consent observation.
+
 ## Managed Redis
 
 `relais-relay`, `relais-worker`, and `relais-control` use the same Redis

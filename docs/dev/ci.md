@@ -61,6 +61,14 @@ process lane also checks worker and caller decryption counters and caller
 RTP duplicates. Run a local smoke with
 `make crash-run CRASH_FLAGS="-relay-loss-processes -runs=1 -after=3s"`;
 the CI lane keeps ten trials per mode and 60 s observation.
+The `relay-drain` lane reuses that shipped two-relay setup. Each of ten
+trials drains eight live calls through `POST /relays/r1/drain`, checks empty
+draining status and subsequent placement, and observes media for 60 s.
+Per-track gaps use ADR 0016's planned-change target, pooled across the 80
+changes, with zero decryption failures, RTP duplicates or reconnects. Run a
+local smoke with `make crash-run CRASH_FLAGS="-relay-drain -runs=1 -after=3s"`.
+The short observation does not prove the 60-second consent window.
+
 The `netns-crash-run` matrix adds a `relay-loss` lane on the same main,
 nightly and manual triggers as its `worker-crash` lane. It runs
 `crash-run -topology=netns -relay-loss-netns -runs=10 -after=60s` using the
