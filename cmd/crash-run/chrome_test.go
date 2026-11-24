@@ -93,14 +93,22 @@ func TestChromeRelayChange(t *testing.T) {
 	var traceStart time.Time
 	var serverTimeline []chromeServerEvent
 	seenTrace := make(map[string]bool)
-	stopTrace := relaytrace.Observe(func(at time.Time, name, path string, _ []byte) {
+	restartTrace := chromeRestartDiagnostics{initial: make(map[string]string), logf: t.Logf}
+	stopTrace := relaytrace.Observe(func(at time.Time, name, path string, data []byte) {
 		switch name {
 		case "worker-answer", "worker-check", "use-candidate", "worker-switch", "worker-input", "worker-output", "worker-reject":
 		default:
-			return
+			if name != "worker-restart-initial" && !strings.HasPrefix(name, "worker-restart-refused/") {
+				return
+			}
 		}
 		traceMu.Lock()
 		defer traceMu.Unlock()
+		// Refusal diagnostics must run even before a planned trial starts and
+		// before require.NoError can terminate it.
+		if restartTrace.observe(name, path, data) {
+			return
+		}
 		key := name + ":" + path
 		if traceStart.IsZero() || seenTrace[key] {
 			return
