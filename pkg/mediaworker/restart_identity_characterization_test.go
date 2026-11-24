@@ -18,6 +18,7 @@ func TestRestartIdentityCurrentNormalization(t *testing.T) {
 	base = strings.Replace(base, "SAVPF 96\r\n", "SAVPF 96 97\r\n", 1)
 	want, err := restartIdentity(base)
 	require.NoError(t, err)
+	require.Equal(t, "3dd8d076f7c00a7c4c698df7c963321b3b71935794b4d70c222817e3ede16249", want, "workers of one release must agree on the persisted identity bytes")
 	for _, tc := range []struct {
 		name, from, to string
 		accepted       bool
