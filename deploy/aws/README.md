@@ -34,6 +34,7 @@ Both profiles use two AZs. These resources exist with **zero calls**:
 | Security groups | 7 | 7 | Relay, worker, control, signaling, ALB, store; one host group for the clock probe |
 | Store role users / user group / subnet group | 3 / 1 / 1 | 3 / 1 / 1 | Valkey disables default user automatically |
 | Explicit subnet address reservations / metadata handle | 6 / 1 | 6 / 1 | No interfaces or running compute |
+| Worker recovery launch template | 1 | 1 | No running compute |
 | IAM instance roles / instance profiles | 5 / 5 | 5 / 5 | Only the profile's hosts use them |
 
 NAT provides egress to GitHub release artifacts, AWS APIs and
@@ -304,16 +305,67 @@ failure. One surviving worker leaves no destination for a further move.
 Demo/test registration and SRTP diagnostics are disabled. Boot and service logs
 record outcomes; there is no ALB access log or WAF sampled-body log in this slice.
 
-Services use `Restart=no`. For relay and standby this follows ADR 0004's bounded
-same-host process model: the waiting standby fences and takes over once; systemd
-does not race it with a restarted plain primary or invent standby replenishment.
-After takeover, redundancy needs deliberate operator recovery. Control can be
-restarted against live calls after its predecessor exits, with the same fixed
-worker endpoints, store namespace and encryption key. It waits for its store
-lease and rebuilds before accepting mutations; see [control restart](../../docs/deploy.md#control-restart).
-Services still use deliberate operator restart. Boot on host restart starts
-enabled services. This local restart evidence does not validate AWS host boot,
-managed-store failover or paid preview acceptance.
+The service restart policy is deliberately different by role:
+
+| Unit | Failure policy | Reason |
+| --- | --- | --- |
+| Worker | `Restart=on-failure`, five-second delay | Restore the fixed endpoint after a process crash or failed startup store check. |
+| Control | `Restart=on-failure`, five-second delay | Its predecessor has exited. The successor waits for its store lease and reconciles saved state before accepting mutations. |
+| Signaling | `Restart=on-failure`, five-second delay | Restore the frontend. Call ownership and recovery remain with control. |
+| Relay and standby | `Restart=no` | Preserve ADR 0004's bounded same-host fencing and takeover model. |
+
+The three restarting units disable the start-rate limit. Every retry waits
+five seconds; a temporary store outage must not exhaust retries and leave
+the service down. This is a fixed five-second delay with unlimited retries.
+The explicit `ImageId` parameter does not pin a minimum systemd version of 254,
+so the units do not use `RestartSteps` or `RestartMaxDelaySec`. A flapping
+worker is re-admitted each cycle; there is no quarantine.
+`RestartPreventExitStatus=243 78` keeps credential and launcher refusals failed
+for operator repair. Code 243 is the service manager's `EXIT_CREDENTIALS`:
+credential setup failed before the application started. Code 78 (`EX_CONFIG`)
+is the launcher's explicit unknown-component refusal. The launcher uses this
+distinct code because code 2 also covers Go panics and argument errors. Codes
+1 and 2 remain retryable; code 1 includes temporary startup store failures.
+Boot-only download, preparation and readiness scripts have their own failures;
+their exit codes are not application-unit restart exclusions.
+A clean exit or explicit service stop stays stopped. Enabled services start
+again on host boot after credential preparation succeeds.
+During store failover, worker/control exits restart; takeover stays visible.
+
+The waiting relay standby fences and takes over once. An automatic primary
+restart would race that standby; automatically restarting a former standby
+would also invent standby replenishment. After takeover, relay redundancy
+still needs deliberate operator recovery. Control restarts keep the same fixed
+worker endpoints, store namespace and encryption key. They use the existing
+[control restart](../../docs/deploy.md#control-restart) reconciliation gates.
+Worker recovery does not wait for a restarted worker: calls on the dead worker
+follow the existing crash takeover path. After that recovery settles, a fresh
+worker at the same name and address rejoins automatically and receives new
+calls. The existing rejoin challenge fences any stale installed sessions.
+HTTP status and heartbeats identify each worker process. A changed instance
+starts crash takeover even if control missed the outage. The new process stays
+ineligible until recovery and the existing rejoin acknowledgement finish.
+
+Automatic machine recovery is the platform default for all hosts on supported
+instance types. All worker machines reference `WorkerRecoveryTemplate`, which
+makes `MaintenanceOptions.AutoRecovery=default` explicit for workers. It
+recovers an underlying machine/system failure. Recovery keeps the instance
+identity, private addresses and any assigned public addresses. Preview workers
+have private addresses only;
+recovery does not add public addresses. The original enabled services start
+on the recovered machine. Recovery is subject to platform detection, supported
+failure conditions and available capacity; it has no fixed completion bound.
+Custom instance types must support this recovery mode.
+Changing a worker's launch template on an existing stack requires replacement,
+which the fixed private addresses block; this setting applies to new stacks.
+
+This covers worker process crashes and supported failed-machine recovery.
+It does not replace a deleted machine, replace a terminated instance, or
+recover a lost zone; those require pool replenishment (#542). It does not add
+scaling. Offline template checks establish configuration only. Host recovery,
+service startup on a recovered host and deployed acceptance need separate
+runtime evidence.
+
 Choose `Profile` at creation; changing it later is unsupported because host IPs
 are fixed. This template is for **initial creation**: changing release metadata does not
 implement a worker drain, safe replacement, cloud-init replay, or rollback.
@@ -322,6 +374,47 @@ and relay address stable. Snapshot-key rotation requires compatible migration;
 signaling-token rotation requires a coordinated signaling restart. There is no
 rotation implemented by stack updates. Use the offline release gate below for an
 operator-controlled live rollout; it does not automate the CloudFormation change.
+
+### Local repeated-crash drill
+
+Build the existing binaries, then use a dedicated loopback test store:
+
+```sh
+make build
+./bin/crash-run -worker-restart -runs=3 -after=1s \
+  -redis=127.0.0.1:16453
+```
+
+This uses a local child-process supervisor, with the same five-second failure
+delay and clean-exit stop policy as the worker unit. It requires no systemd.
+The same worker is crashed repeatedly at fixed HTTP and media addresses.
+Each cycle requires takeover to the surviving worker before the restart delay
+ends, automatic re-admission, ordinary new-call placement on the returning
+worker, and clean audio on both calls after the crash. The supervisor observes
+only child exit; it never sends a replace request or coordinates with control.
+`WORKER_RESTART` rows record each cycle's process IDs and audio packet counts.
+The final `PASS` requires every cycle. A short drill does not prove the existing
+60-second consent gate, systemd behavior or machine recovery.
+
+Preview HTTP workers rejoin through the heartbeat token acknowledgement.
+`TestHTTPWorkerRestartDuringControlDowntimeRequiresTakeover` covers a missed
+crash, takeover and that HTTP rejoin path. The separate
+`TestReturningWorkerAtSameAddressReceivesNewCallsAfterTakeover` pins the
+dial-out `Replace` path.
+`TestWorkerRestartSupervisorRetriesFailureAndStopsOnCleanExit` checks failure
+retry and clean-stop behavior. The opt-in `TestWorkerRestartProcessDrill` runs
+two real-process cycles with `RELAIS_TEST_WORKER_RESTART=1` and a dedicated
+`RELAIS_TEST_REDIS_ADDR` after building the binaries.
+
+The operator rehearsal's deliberate worker faults test takeover while the
+worker stays down. Before SIGKILL, the driver installs a runtime-only
+`Restart=no` drop-in and verifies the effective policy. It keeps that override
+through takeover and consent checks. Explicit `worker-start` removes only that
+drop-in, verifies its absence from `DropInPaths`, and starts the worker with
+the installed unit's restart policy. An unconfirmed fault does not trigger
+automatic restoration. This preserves the crash signal
+and its timing bracket; it does not turn the fault into a graceful drain. Normal
+service operation and the repeated-crash drill retain automatic restart.
 
 ### Compatibility gate before upgrade or rollback
 
@@ -509,9 +602,9 @@ measured hosted result.
 
 The template job lints both regional schemas, checks public/private paths,
 IAM scope, secrets, IMDSv2, disks, retention and synchronous durability. It
-resolves both profiles, both architectures and SSM off/on. Thirty-seven named unsafe
-mutations must fail. Embedded boot-file parity, shell lint and unit verification
-are separate checks.
+resolves both profiles, both architectures and SSM off/on. Named unsafe template
+and restart-policy mutations must fail. Embedded boot-file parity, shell lint
+and unit verification are separate checks.
 
 The boot job installs no Redis system service. Six owned local Redis Cluster
 processes use free client/bus ports, avoiding 6379, 7000–7005, 9101 and 9201.

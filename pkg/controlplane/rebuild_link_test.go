@@ -152,7 +152,7 @@ func rebuildAwaitingHeartbeat(t *testing.T, heartbeatAt int) (Status, int, *fake
 		p.observationChangedLocked()
 		p.mu.Unlock()
 		if waits == heartbeatAt {
-			_, err := p.remoteHeartbeat("b", HeartbeatRequest{Address: b.addr})
+			_, err := p.remoteHeartbeat(context.Background(), "b", HeartbeatRequest{Address: b.addr})
 			require.NoError(t, err)
 		}
 		return nil

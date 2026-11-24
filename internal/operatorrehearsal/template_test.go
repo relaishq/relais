@@ -292,6 +292,11 @@ func TestCredentialAndClockScriptsUseActualSandbox(t *testing.T) {
 	if strings.Contains(probe, "cat ") {
 		t.Fatal("probe prints credentials")
 	}
+	for _, setting := range []string{"Restart=", "RestartSec=", "RestartPreventExitStatus="} {
+		if strings.Contains(probe, setting) {
+			t.Fatal("credential probe inherits application lifecycle: " + setting)
+		}
+	}
 	script, err := topology.SetupScript("shared")
 	if err != nil {
 		t.Fatal(err)

@@ -695,6 +695,7 @@ func run() (err error) {
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
 	pauseWorker := flag.Bool("worker-stop", false, "SIGSTOP the owning worker; prove heartbeat takeover without waiting for lease expiry")
+	workerRestart := flag.Bool("worker-restart", false, "repeated worker crashes with automatic same-address restart and new-call placement")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	relayLoss := flag.Bool("relay-loss", false, "eight-call relay-slot loss: interleaved SIGSTOP/SIGCONT and SIGKILL of active plus standby")
 	relayLossNetns := flag.Bool("relay-loss-netns", false, "eight-call network blackhole of a live relay; requires -topology=netns")
@@ -722,6 +723,14 @@ func run() (err error) {
 	flag.DurationVar(&pair.Settle, "pair-settle", 5*time.Second, "media observation after each replacement step")
 	selectedWorker.Flags(flag.CommandLine)
 	flag.Parse()
+	if *workerRestart {
+		if err := validateWorkerRestartFlags(flag.CommandLine); err != nil {
+			return err
+		}
+		if *runs < 2 {
+			return errors.New("worker-restart requires at least two crashes")
+		}
+	}
 	if err := validateRelayLossTopology(*relayLoss, *relayLossProcesses, *relayLossNetns, *topologyOption); err != nil {
 		return err
 	}
@@ -906,6 +915,9 @@ func run() (err error) {
 	}
 	if *after < 60*time.Second {
 		fmt.Println("DEVELOPMENT RUN: 60 s post-takeover consent acceptance NOT-RUN")
+	}
+	if *workerRestart {
+		return workerRestartDrill(ctx, manager, bin, dir, processEnv(hex.EncodeToString(key[:]), addr, "relais:restart:"+filepath.Base(dir)+":"), *runs, *after)
 	}
 	if *storeStall != "" {
 		return runStoreStallTrials(ctx, manager, ownedRedis, bin, dir, hex.EncodeToString(key[:]), addr, *storeStall, *stallDuration, *runs, *after, *verbose)

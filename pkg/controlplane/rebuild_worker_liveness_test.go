@@ -68,7 +68,7 @@ func TestRebuildSlowStatusWorkerKeepsHeartbeats(t *testing.T) {
 							exists := p.workers[worker.Name] != nil
 							p.mu.Unlock()
 							if exists {
-								if _, err := p.remoteHeartbeat(worker.Name, HeartbeatRequest{Address: worker.Address}); err != nil {
+								if _, err := p.remoteHeartbeat(context.Background(), worker.Name, HeartbeatRequest{Address: worker.Address}); err != nil {
 									heartbeatFailures.Add(1)
 								}
 							}
@@ -125,7 +125,7 @@ func TestRebuildUnknownWorkerWaitsForHeartbeatBeforePlacement(t *testing.T) {
 	status, err := p.Status(context.Background())
 	require.NoError(t, err)
 	require.True(t, status.Workers[0].LivenessUnknown)
-	_, err = p.remoteHeartbeat("a", HeartbeatRequest{Address: source, Token: "prior-completed-token"})
+	_, err = p.remoteHeartbeat(context.Background(), "a", HeartbeatRequest{Address: source, Token: "prior-completed-token"})
 	require.NoError(t, err, "a slow status response must not reject the worker's prior heartbeat token")
 	worker, err := p.pick(context.Background(), "a", netip.AddrPort{})
 	require.NoError(t, err)
@@ -163,7 +163,10 @@ func TestRebuildHeartbeatDoesNotRepeatFailedCreateObservation(t *testing.T) {
 	p.SetRelayReady(true)
 	require.NoError(t, p.controlRecord(context.Background(), "worker:a", FixedWorker{Name: "a", URL: worker.URL, Address: addr}))
 	require.NoError(t, p.controlRecord(context.Background(), "create:interrupted", createIntent{Worker: "a"}))
-	store.heartbeat = func() { _, err := p.remoteHeartbeat("a", HeartbeatRequest{Address: addr}); require.NoError(t, err) }
+	store.heartbeat = func() {
+		_, err := p.remoteHeartbeat(context.Background(), "a", HeartbeatRequest{Address: addr})
+		require.NoError(t, err)
+	}
 	started := time.Now()
 	require.NoError(t, p.rebuild(context.Background(), []FixedWorker{{Name: "a", URL: worker.URL}}))
 	elapsed := time.Since(started)

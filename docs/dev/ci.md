@@ -37,7 +37,12 @@ serially to protect the media timing gates. It remains outside the `build` aggre
 
 Nightly at 08:00 UTC, pushes to `main`, and manual `workflow_dispatch` runs
 add the full race harness and timing gates on memory and Redis, benchmarks,
-and `make crash-run`. The `store-stall` job adds five trials per case on nightly/manual dispatch,
+and `make crash-run`. The crash-run job also runs three repeated worker crashes
+with `-worker-restart -runs=3 -after=1s`. Each cycle requires takeover before
+restart, automatic HTTP re-admission at the same address, ordinary new-call
+placement, and clean audio on both calls. This short drill does not replace
+the existing 60-second consent trials.
+The `store-stall` job adds five trials per case on nightly/manual dispatch,
 with failure logs and a 25-minute limit: live workers survive 5 s, 15 s and 29 s
 pauses with a waiting standby; 1.5 s crash resumes with scaled margins; 5 s crash
 counts checkpoint-unsafe loss; 35 s live pause counts `ownership_expired` loss.
