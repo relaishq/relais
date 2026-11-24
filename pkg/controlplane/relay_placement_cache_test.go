@@ -20,11 +20,14 @@ func (s *assignmentReadCount) RelayOwner(ctx context.Context, id string) (sessio
 }
 func TestRelayPlacementReusesKnownAssignment(t *testing.T) {
 	store := &assignmentReadCount{Memory: sessionstore.NewMemory()}
-	p, _, _, _ := relayFailurePlane(t, store)
+	p, _, _, id := relayFailurePlane(t, store)
 	before := store.reads.Load()
-	_, err := p.pickRelay(context.Background(), "")
+	_, err := p.pickRelay(context.Background(), "", "")
 	require.NoError(t, err)
 	require.Equal(t, before, store.reads.Load(), "placement must not read every existing assignment")
+	_, err = p.pickCapacity(context.Background(), "b", nil, true, id)
+	require.NoError(t, err)
+	require.Equal(t, before, store.reads.Load(), "takeover target selection must reuse the known slot")
 }
 
 func TestRelayPlacementDistributesNewCallsAcrossLiveRelays(t *testing.T) {

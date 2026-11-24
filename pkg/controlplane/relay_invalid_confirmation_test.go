@@ -189,7 +189,7 @@ func testRelayLossInvalidConfirmation(t *testing.T, backing sessionstore.Store, 
 	func() {
 		bad.mu.Lock() // Force the watchdog to publish before a driver can end the call.
 		defer bad.mu.Unlock()
-		require.NoError(t, p.loseRelay(ctx, "r1"), "an invalid call must not force per-tick cut-off retries")
+		require.NoError(t, p.loseRelay(ctx, "r1", 0), "an invalid call must not force per-tick cut-off retries")
 		require.Eventually(t, func() bool {
 			bad.relayEpisodeMu.Lock()
 			defer bad.relayEpisodeMu.Unlock()

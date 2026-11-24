@@ -166,37 +166,38 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
-	relayPlacement    sync.RWMutex // orders create admission against relay drain
-	relaySet          map[string]RelayBinding
-	relayControlEpoch uint64
-	links             *WorkerLinks
-	recovery          *moveRecovery
-	restart           *restartState
-	inventory         keyInventoryCache
-	metrics           planeMetrics
-	relayMetrics      *relayMetrics
-	mu                sync.Mutex
-	relay             Relay
-	store             sessionstore.Store
-	workers           map[string]*registration
-	calls             map[string]*call
-	ttl               time.Duration
-	incomingChanged   chan struct{}
-	workerChanged     chan struct{}
-	config            Config
-	events            [recentTakeoverLimit]MoveResult
-	eventNext         int
-	eventCount        int
-	lostCount         uint64
-	lossesByCause     map[string]uint64
-	running           bool
-	loadVersion       uint64 // invalidates lease listings when reservations settle
-	pool              *PoolSample
-	poolFailed        bool
-	pendingWorkers    map[string]bool
-	bootstrap         bool
-	relayReady        bool
-	refusals          map[string]uint64
+	relayPlacement      sync.RWMutex // orders create admission against relay drain
+	relaySet            map[string]RelayBinding
+	relayControlEpoch   uint64
+	ignoredRelayRecords map[string]bool
+	links               *WorkerLinks
+	recovery            *moveRecovery
+	restart             *restartState
+	inventory           keyInventoryCache
+	metrics             planeMetrics
+	relayMetrics        *relayMetrics
+	mu                  sync.Mutex
+	relay               Relay
+	store               sessionstore.Store
+	workers             map[string]*registration
+	calls               map[string]*call
+	ttl                 time.Duration
+	incomingChanged     chan struct{}
+	workerChanged       chan struct{}
+	config              Config
+	events              [recentTakeoverLimit]MoveResult
+	eventNext           int
+	eventCount          int
+	lostCount           uint64
+	lossesByCause       map[string]uint64
+	running             bool
+	loadVersion         uint64 // invalidates lease listings when reservations settle
+	pool                *PoolSample
+	poolFailed          bool
+	pendingWorkers      map[string]bool
+	bootstrap           bool
+	relayReady          bool
+	refusals            map[string]uint64
 }
 
 // New returns an empty control plane. Drive Run with the
@@ -227,10 +228,10 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 
 // Register names a worker by its unique private relay-leg address.
 func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error {
-	return p.register(name, addr, worker, "")
+	return p.register(name, addr, worker, "", true)
 }
 
-func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instance string) error {
+func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instance string, enroll bool) error {
 	if name == "" || !addr.IsValid() || worker == nil {
 		return errors.New("controlplane: worker needs name, address and interface")
 	}
@@ -254,8 +255,10 @@ func (p *Plane) register(name string, addr netip.AddrPort, worker Worker, instan
 	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := p.configureWorkerRelays(ctx, worker); err != nil {
-		return err
+	if enroll {
+		if err := p.configureWorkerRelays(ctx, worker); err != nil {
+			return err
+		}
 	}
 	err := p.saveRegistration(ctx, name, addr, worker, instance)
 	if err != nil {
@@ -317,11 +320,16 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 	slot := ""
 	p.mu.Lock()
 	relaySet := len(p.relaySet) > 0
+	if c := p.calls[existingID]; c != nil {
+		c.stateMu.Lock()
+		slot = c.relaySlot
+		c.stateMu.Unlock()
+	}
 	p.mu.Unlock()
-	if relaySet && existingID != "" {
+	if relaySet && existingID != "" && slot == "" {
 		if store, ok := p.store.(sessionstore.RelayAssignments); ok {
 			_, assignment, err := store.RelayOwner(ctx, existingID)
-			if err != nil {
+			if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
 				return nil, err
 			}
 			slot = assignment.Slot

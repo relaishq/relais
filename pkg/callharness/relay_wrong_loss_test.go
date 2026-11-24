@@ -33,10 +33,9 @@ func TestWrongRelayLossKeepsLiveCall(t *testing.T) {
 		p, w, h, _, _ := relayChangeTopology(t, view, false, false)
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
-		identity := sessionstore.RelayProcess{Owner: "live-relay", PID: 42, Start: "start", Host: "host", Namespace: "namespace", Executable: "relay"}
-		first, err := view.ClaimRelay(ctx, "r1", identity, time.Minute)
+		first, err := view.GetRelay(ctx, "r1")
 		require.NoError(t, err)
-		second, err := view.ClaimRelay(ctx, "r2", identity, time.Minute)
+		second, err := view.GetRelay(ctx, "r2")
 		require.NoError(t, err)
 		view.frozen = first
 		call, err := h.Dial(ctx, CallOptions{Video: true, RelayChange: true})

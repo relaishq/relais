@@ -23,6 +23,28 @@ type takeoverWorker struct {
 	rtcpMargin uint32
 }
 
+func TestTakeoverMovesCallWhileItsRelayIsLost(t *testing.T) {
+	p, _, baseB, id := relayFailurePlane(t, sessionstore.NewMemory())
+	stopRelayRecoveries(t, p)
+	b := &takeoverWorker{fakeWorker: baseB}
+	p.workers["b"].worker = b
+	lease, err := p.store.Get(t.Context(), id)
+	require.NoError(t, err)
+	require.NoError(t, p.store.PutState(t.Context(), lease, takeoverSnapshot(t, id, 0)))
+	binding := p.relaySet["r1"]
+	binding.lost, binding.pending = true, true
+	p.relaySet["r1"] = binding
+	source := p.workers["a"]
+	expireObservedWorker(t, source)
+	p.recovery.recover(t.Context(), source, lease, time.Now())
+	status, err := p.Status(t.Context())
+	require.NoError(t, err)
+	require.Len(t, status.Takeovers, 1)
+	require.False(t, status.Takeovers[0].Lost, "relay recovery must follow worker takeover")
+	require.True(t, b.runs(id))
+	require.Equal(t, "b", status.Calls[0].Owner)
+}
+
 func (w *takeoverWorker) ResumeSession(data []byte, opts mediaworker.ResumeOptions) (string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

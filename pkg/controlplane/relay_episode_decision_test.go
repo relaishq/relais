@@ -219,7 +219,7 @@ func TestLaterFaultKeepsItsEpisodeAfterPlannedConfirmation(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				if fault == "target-relay-loss" {
-					require.NoError(t, p.loseRelay(ctx, "r2"))
+					require.NoError(t, p.loseRelay(ctx, "r2", 0))
 				} else {
 					result := make(chan error, 1)
 					go func() { _, err := p.callerRelayRestart(ctx, c); result <- err }()
@@ -1160,7 +1160,7 @@ func TestCompletedEpisodeDriverStartsNoAttempt(t *testing.T) {
 		require.NoError(t, confirmations(store).CASRelayConfirmation(context.Background(), id, a, rec, done, time.Time{}, time.Time{}))
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
-		err = p.recoverRelay(ctx, c, false, map[string]bool{}, e)
+		err = p.recoverRelay(ctx, c, false, map[string]bool{}, e, "")
 		require.ErrorIs(t, err, errRelayEpisodeClosed)
 		_, after, err := confirmations(store).RelayConfirmation(context.Background(), id)
 		require.NoError(t, err)
@@ -1187,7 +1187,7 @@ func TestShutdownReleasesEpisodeDriver(t *testing.T) {
 	c.relayEpisodeMu.Lock()
 	c.relayEpisode = newRelayEpisode(sessionstore.ControlIntent{ID: "relay-recovery:" + id, Token: randomEpisodeToken(), Kind: relayIntentKind, Started: time.Now(), Lease: lease, Seq: 1})
 	c.relayEpisodeMu.Unlock()
-	require.NoError(t, p.startRelayRecoveryFrom(ctx, c, false, time.Now(), nil))
+	require.NoError(t, p.startRelayRecoveryFrom(ctx, c, false, time.Now(), nil, ""))
 	c.relayEpisodeMu.Lock()
 	e := c.relayEpisode
 	running := e.running
@@ -1304,7 +1304,7 @@ func TestImmediateEndFollowsCompletedEpisode(t *testing.T) {
 		p.mu.Lock()
 		p.workers["a"].worker = worker
 		p.mu.Unlock()
-		require.NoError(t, p.startRelayRecoveryFrom(context.Background(), c, false, time.Now(), nil))
+		require.NoError(t, p.startRelayRecoveryFrom(context.Background(), c, false, time.Now(), nil, ""))
 		awaitDone(t, e)
 		require.Eventually(t, func() bool {
 			c.relayEpisodeMu.Lock()

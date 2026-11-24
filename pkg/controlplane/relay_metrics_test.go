@@ -301,8 +301,8 @@ func TestRelayMetricsCountLossDecisionOnce(t *testing.T) {
 		return relayMetric(t, p, "relais_control_relay_loss_decisions_total", map[string]string{"slot": slot})
 	}
 	require.Zero(t, losses("r1"))
-	require.NoError(t, p.loseRelay(context.Background(), "r1"))
-	require.NoError(t, p.loseRelay(context.Background(), "r1"))
+	require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
+	require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
 	require.Equal(t, float64(1), losses("r1"))
 	require.Zero(t, losses("r2"))
 }

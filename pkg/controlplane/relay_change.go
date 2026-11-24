@@ -48,7 +48,7 @@ type RelayBinding struct {
 	joinedEpoch    uint64
 	admissionError string
 	Slot           mediaworker.RelaySlot
-	Epoch          uint64
+	epoch          uint64
 	instance       string
 	pending        bool
 	cutoff         uint64
@@ -122,14 +122,11 @@ func (p *Plane) ConfigureRelaySet(ctx context.Context, bindings []RelayBinding) 
 func (p *Plane) configureWorkerRelays(ctx context.Context, worker Worker) error {
 	p.mu.Lock()
 	enabled := len(p.relaySet) > 0
-	req := mediaworker.RelaySetRequest{Epochs: map[string]uint64{}, Cutoffs: map[string]uint64{}}
+	req := mediaworker.RelaySetRequest{Epochs: map[string]uint64{}, Cutoffs: p.relayCutoffsLocked()}
 	for id, b := range p.relaySet {
-		if b.cutoff > 0 {
-			req.Cutoffs[id] = b.cutoff
-		}
-		if !b.lost && b.Epoch > b.cutoff && b.Slot.Leg.IsValid() {
+		if !b.lost && b.epoch > b.cutoff && b.Slot.Leg.IsValid() {
 			req.Slots = append(req.Slots, b.Slot)
-			req.Epochs[id] = b.Epoch
+			req.Epochs[id] = b.epoch
 		}
 	}
 	p.mu.Unlock()
@@ -185,8 +182,6 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) (changeErr e
 	capable := mode == sessionstore.RelayConfirmDelivery || mode == sessionstore.RelayConfirmDecode
 	p.mu.Lock()
 	b, known := p.relaySet[target]
-	p.mu.Unlock()
-	p.mu.Lock()
 	pair := p.callRelayPairLocked(c, target)
 	p.mu.Unlock()
 	if !capable || !known || b.draining || b.lost || b.pending || !pair {
@@ -438,7 +433,7 @@ func (p *Plane) rollbackRelay(ctx context.Context, c *call, lease sessionstore.L
 	if firstOuter.Before(detected) {
 		detected = firstOuter
 	}
-	if e := p.startRelayRecoveryFrom(ctx, c, false, detected, tried); e != nil {
+	if e := p.startRelayRecoveryFrom(ctx, c, false, detected, tried, ""); e != nil {
 		return errors.Join(err, e)
 	}
 	return errors.Join(errRelayUnconfirmed, err)
@@ -722,7 +717,7 @@ func (w *RemoteWorker) CreateSessionAtRelay(ctx context.Context, offer, slot str
 // pickRelay keeps one-slot placement unchanged. Reads happen outside registry
 // and packet locks. Known assignments are local placement hints; authorization
 // and all relay transitions still use the authoritative store.
-func (p *Plane) pickRelay(ctx context.Context, exclude string, names ...string) (string, error) {
+func (p *Plane) pickRelay(ctx context.Context, exclude, name string) (string, error) {
 	p.mu.Lock()
 	if len(p.relaySet) == 0 {
 		p.mu.Unlock()
@@ -736,8 +731,8 @@ func (p *Plane) pickRelay(ctx context.Context, exclude string, names ...string) 
 		}
 		for _, w := range p.workers {
 			eligible := w.observation.knowledge().eligible
-			if len(names) > 0 && names[0] != "" {
-				eligible = w.name == names[0] && w.observation.knowledge().relayEligible
+			if name != "" {
+				eligible = w.name == name && w.observation.knowledge().relayEligible
 			}
 			if eligible && p.relayPairLocked(w, id) {
 				slots = append(slots, id)
@@ -840,7 +835,7 @@ func (p *Plane) drainRelay(ctx context.Context, slot string) (RelayDrainResult, 
 		p.relayPlacement.Unlock()
 		return RelayDrainResult{}, fmt.Errorf("controlplane: cannot drain relay %q: no other healthy relay: %w", slot, ErrNoTarget)
 	}
-	b.draining, b.drainActive, b.drainEpoch = true, true, b.Epoch
+	b.draining, b.drainActive, b.drainEpoch = true, true, b.epoch
 	p.relaySet[slot] = b
 	calls := make([]*call, 0, len(p.calls))
 	for _, c := range p.calls {

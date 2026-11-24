@@ -45,10 +45,9 @@ func TestCallerStallChangesLiveRelay(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		leases := store.(sessionstore.RelayLeases)
-		identity := sessionstore.RelayProcess{Owner: "live-relay", PID: 42, Start: "start", Host: "host", Namespace: "namespace", Executable: "relay"}
 		var tokens []sessionstore.RelayLease
 		for _, id := range []string{"r1", "r2"} {
-			token, e := leases.ClaimRelay(ctx, id, identity, time.Minute)
+			token, e := leases.GetRelay(ctx, id)
 			require.NoError(t, e)
 			tokens = append(tokens, token)
 		}

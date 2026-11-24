@@ -2,10 +2,12 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,11 +79,15 @@ type admissionWorker struct {
 	*relayProtocolWorker
 	media            *mediaworker.Worker
 	entered, release chan struct{}
+	cutoffs          atomic.Int64
 }
 
 func (w *admissionWorker) ConfigureRelays(ctx context.Context, req mediaworker.RelaySetRequest) error {
 	if err := w.media.ConfigureRelays(ctx, req); err != nil {
 		return err
+	}
+	if req.Cutoffs["r1"] > 0 {
+		w.cutoffs.Add(1)
 	}
 	if w.entered != nil && req.Epochs["r1"] > 0 {
 		close(w.entered)
@@ -102,6 +108,9 @@ func registerAdmissionWorker(t *testing.T, p *Plane, store *sessionstore.Memory,
 	var worker Worker = w
 	if p.restart != nil {
 		mux := http.NewServeMux()
+		mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
+			privateapi.Write(rw, mediaworker.WorkerStatus{Address: media.LocalAddr(), InventoryKnown: true})
+		})
 		mux.HandleFunc("POST /relays", func(rw http.ResponseWriter, r *http.Request) {
 			var req mediaworker.RelaySetRequest
 			if !privateapi.Read(rw, r, &req) {
@@ -219,11 +228,20 @@ func admitControlTerm(t *testing.T, p *Plane, store *sessionstore.Memory, holder
 	require.NoError(t, err)
 	p.restart.guard.Store(&controlGuard{lease: lease, deadline: time.Now().Add(25 * time.Second)})
 	p.restart.healthy.Store(true)
-	p.restart.ready.Store(true)
-	records, err := store.ControlRecords(t.Context(), lease)
-	require.NoError(t, err)
-	require.NoError(t, p.restoreRelayCutoffs(records, lease.Epoch))
 	return lease
+}
+
+func rebuildAdmissionControl(t *testing.T, p *Plane) {
+	t.Helper()
+	var fixed []FixedWorker
+	for name, w := range p.workers {
+		fixed = append(fixed, FixedWorker{Name: name, URL: w.worker.(*RemoteWorker).URL})
+	}
+	require.NoError(t, p.rebuild(t.Context(), fixed))
+	for _, w := range p.workers {
+		require.NoError(t, p.Heartbeat(w.addr))
+	}
+	p.restart.ready.Store(true)
 }
 
 func TestControlRestartDuringRelayOutageKeepsEpochCutoff(t *testing.T) {
@@ -231,24 +249,30 @@ func TestControlRestartDuringRelayOutageKeepsEpochCutoff(t *testing.T) {
 	relays := newAdmissionRelays(t, store)
 	old := New(relays[0], store)
 	configureAdmission(t, old, relays)
+	admitControlTerm(t, old, store, "initial")
 	registerAdmissionWorker(t, old, store, relays[0].slot)
+	rebuildAdmissionControl(t, old)
 	for _, r := range relays {
 		require.NoError(t, syncAdmission(t.Context(), old, r))
 	}
 	id := createAdmissionCall(t, old)
-	callLease, err := store.Get(t.Context(), id)
-	require.NoError(t, err)
 	_, assigned, err := store.RelayOwner(t.Context(), id)
 	require.NoError(t, err)
 	require.Equal(t, "r1", assigned.Slot)
 	relays[0].online.Store(false)
+	relays[0].lease, err = store.RenewRelay(t.Context(), relays[0].lease, time.Millisecond)
+	require.NoError(t, err)
+	require.NoError(t, store.ReleaseControl(t.Context(), old.restart.guard.Load().lease))
 	rebuilt := New(relays[0], store)
 	configureAdmission(t, rebuilt, relays)
 	term := admitControlTerm(t, rebuilt, store, "rebuilt")
-	registerAdmissionWorker(t, rebuilt, store, relays[0].slot)
-	rebuiltCall := rebuilt.rebuildCall(callLease)
+	current := old.workers["w"]
+	require.NoError(t, rebuilt.Register("w", current.addr, current.worker))
+	rebuildAdmissionControl(t, rebuilt)
+	rebuiltCall := rebuilt.calls[id]
 	require.Len(t, rebuilt.calls, 1)
 	require.Empty(t, rebuilt.relaySet["r1"].instance, "rebuild never saw the old status token")
+	// Supply the loss observer's epoch after the real rebuild restored calls.
 	require.NoError(t, rebuilt.loseRelay(t.Context(), "r1", relays[0].lease.Epoch))
 	rebuiltCall.relayEpisodeMu.Lock()
 	episode := rebuiltCall.relayEpisode
@@ -271,7 +295,7 @@ func TestControlRestartDuringRelayOutageKeepsEpochCutoff(t *testing.T) {
 	configureAdmission(t, next, relays)
 	admitControlTerm(t, next, store, "next")
 	registerAdmissionWorker(t, next, store, relays[0].slot)
-	require.NoError(t, next.loseRelay(t.Context(), "r1", 1))
+	rebuildAdmissionControl(t, next)
 	renewed, err := store.RenewRelay(t.Context(), relays[0].lease, time.Hour)
 	require.NoError(t, err)
 	require.Equal(t, relays[0].lease.Epoch, renewed.Epoch)
@@ -283,19 +307,64 @@ func TestControlRestartDuringRelayOutageKeepsEpochCutoff(t *testing.T) {
 	require.NoError(t, syncAdmission(t.Context(), next, relays[0]))
 	healthyID := createAdmissionCall(t, next)
 	require.Equal(t, "r1", relayStatusOf(t, next, healthyID).Slot)
-	current := next.workers["w"]
-	healthyLease, err := store.Get(t.Context(), healthyID)
-	require.NoError(t, err)
+	current = next.workers["w"]
 	require.NoError(t, store.ReleaseControl(t.Context(), next.restart.guard.Load().lease))
 	healthy := New(relays[0], store)
 	configureAdmission(t, healthy, relays)
 	admitControlTerm(t, healthy, store, "healthy-restart")
 	require.NoError(t, healthy.Register("w", current.addr, current.worker))
-	healthy.rebuildCall(healthyLease)
+	rebuildAdmissionControl(t, healthy)
 	require.NoError(t, syncAdmission(t.Context(), healthy, relays[0]), "historical cutoff cannot turn healthy current calls into losses")
 	_, err = store.Get(t.Context(), healthyID)
 	require.NoError(t, err)
 	require.False(t, healthy.relaySet["r1"].lost)
+}
+
+func TestRebuildWithPendingCutoffAndUnreachableWorkerBecomesReady(t *testing.T) {
+	store := sessionstore.NewMemory()
+	relays := newAdmissionRelays(t, store)
+	p := New(relays[0], store)
+	configureAdmission(t, p, relays)
+	admitControlTerm(t, p, store, "rebuilt")
+	registerAdmissionWorker(t, p, store, relays[0].slot)
+	addr := netip.MustParseAddrPort("127.0.0.1:23457")
+	var down atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		} else if r.URL.Path == "/status" {
+			privateapi.Write(w, mediaworker.WorkerStatus{Address: addr, InventoryKnown: true})
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(server.Close)
+	require.NoError(t, p.Register("down", addr, &RemoteWorker{URL: server.URL, Client: server.Client()}))
+	require.NoError(t, p.controlRecord(t.Context(), "relay-cutoff:r1", uint64(1)))
+	down.Store(true)
+	fixed := []FixedWorker{{Name: "w", URL: p.workers["w"].worker.(*RemoteWorker).URL}, {Name: "down", URL: server.URL}}
+	require.NoError(t, store.ReleaseControl(t.Context(), p.restart.guard.Load().lease))
+	p = New(relays[0], store)
+	configureAdmission(t, p, relays)
+	admitControlTerm(t, p, store, "successor")
+	require.NoError(t, p.rebuild(t.Context(), fixed), "cutoff failure must not prevent death detection from starting")
+	p.restart.ready.Store(true)
+	require.NoError(t, p.Heartbeat(p.workers["w"].addr))
+	require.False(t, p.relaySet["r1"].cutoffDone)
+	_ = syncAdmission(t.Context(), p, relays[1]) // A healthy pair publishes despite the failed pair.
+	p.mu.Lock()
+	ready := p.readyLocked()
+	expireObservedWorker(t, p.workers["down"])
+	p.workers["down"].observation.recoveryFinished(true)
+	p.mu.Unlock()
+	require.True(t, ready)
+	relays[0].online.Store(false)
+	require.Error(t, syncAdmission(t.Context(), p, relays[0]))
+	require.True(t, p.relaySet["r1"].cutoffDone, "cutoff retry must not depend on relay availability")
+	replaceAdmissionRelay(t, store, relays[0])
+	relays[0].online.Store(true)
+	require.NoError(t, syncAdmission(t.Context(), p, relays[0]), "admission retries the unfinished cutoff after death settlement")
+	require.True(t, p.relaySet["r1"].cutoffDone)
 }
 
 func saveOpenPlannedAttempt(t *testing.T, p *Plane, id, from, target string) sessionstore.Lease {
@@ -397,4 +466,110 @@ func TestRelayAdmissionRequiresCurrentWorkerInstance(t *testing.T) {
 	ready = p.readyLocked()
 	p.mu.Unlock()
 	require.True(t, ready)
+}
+
+func TestRebuildDefersRelayAdmissionUntilCallsRestored(t *testing.T) {
+	store := sessionstore.NewMemory()
+	relays := newAdmissionRelays(t, store)
+	p := New(relays[0], store)
+	configureAdmission(t, p, relays)
+	authorizeTestControl(t, p)
+	addr := netip.MustParseAddrPort("127.0.0.1:23456")
+	lease, err := store.Claim(t.Context(), "restored", addr, time.Minute)
+	require.NoError(t, err)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/status" {
+			close(entered)
+			<-release
+			privateapi.Write(w, mediaworker.WorkerStatus{Address: addr, InventoryKnown: true, Inventory: []mediaworker.InstalledSession{{ID: lease.SessionID, Owner: addr, Epoch: lease.Epoch}}})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	done := make(chan struct{})
+	var rebuildErr error
+	go func() {
+		defer close(done)
+		rebuildErr = p.rebuild(t.Context(), []FixedWorker{{Name: "w", URL: server.URL}})
+	}()
+	t.Cleanup(func() { once.Do(func() { close(release) }); <-done })
+	awaitAdmission(t, entered)
+	require.ErrorIs(t, syncAdmission(t.Context(), p, relays[0]), ErrNotReady, "relay admission must wait for rebuild")
+	once.Do(func() { close(release) })
+	awaitAdmission(t, done)
+	require.NoError(t, rebuildErr)
+	require.Contains(t, p.calls, lease.SessionID)
+	require.NoError(t, syncAdmission(t.Context(), p, relays[0]))
+}
+
+func TestRebuildIgnoresUnlistedRelayRecords(t *testing.T) {
+	store := sessionstore.NewMemory()
+	p := New(&fakeRelay{}, store)
+	configureAdmission(t, p, newAdmissionRelays(t, store))
+	require.NoError(t, p.restoreRelayCutoffs(map[string]json.RawMessage{
+		"relay-cutoff:removed": json.RawMessage("1"),
+		"relay-joined:removed": json.RawMessage("2"),
+		"relay-cutoff:r1":      json.RawMessage("1"),
+	}))
+	require.EqualValues(t, 1, p.relaySet["r1"].cutoff)
+	require.True(t, p.relaySet["r1"].lost)
+	require.NotContains(t, p.relaySet, "removed")
+}
+
+func TestEnrollmentCarriesOtherSlotsCutoffs(t *testing.T) {
+	store := sessionstore.NewMemory()
+	relays := newAdmissionRelays(t, store)
+	p := New(relays[0], store)
+	configureAdmission(t, p, relays)
+	w := registerAdmissionWorker(t, p, store, relays[0].slot)
+	// The worker process has no floor yet; control retained it across restart.
+	require.NoError(t, p.restoreRelayCutoffs(map[string]json.RawMessage{"relay-cutoff:r1": json.RawMessage("1")}))
+	require.NoError(t, syncAdmission(t.Context(), p, relays[1]))
+	err := w.media.ConfigureRelays(t.Context(), mediaworker.RelaySetRequest{Slots: []mediaworker.RelaySlot{relays[0].slot}, Epochs: map[string]uint64{"r1": 1}})
+	require.ErrorIs(t, err, mediaworker.ErrRelayUnsupported, "r2 enrollment must retain r1's cutoff")
+}
+
+type blockedRelayRecord struct {
+	*sessionstore.Memory
+	key string
+}
+
+func (s *blockedRelayRecord) PutControlRecord(ctx context.Context, lease sessionstore.ControlLease, key string, data json.RawMessage) error {
+	if key == s.key {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return s.Memory.PutControlRecord(ctx, lease, key, data)
+}
+
+func TestRelayRecordWritesKeepRequestBound(t *testing.T) {
+	for _, key := range []string{"relay-joined:r1", "relay-cutoff:r1"} {
+		t.Run(key, func(t *testing.T) {
+			store := sessionstore.NewMemory()
+			blocked := &blockedRelayRecord{Memory: store, key: key}
+			relays := newAdmissionRelays(t, store)
+			p := New(relays[0], blocked)
+			configureAdmission(t, p, relays)
+			admitControlTerm(t, p, store, "bounded")
+			registerAdmissionWorker(t, p, store, relays[0].slot)
+			rebuildAdmissionControl(t, p)
+			done := make(chan error, 1)
+			go func() {
+				if key == "relay-joined:r1" {
+					done <- syncAdmission(t.Context(), p, relays[0])
+				} else {
+					done <- p.loseRelay(t.Context(), "r1", 1)
+				}
+			}()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			case <-time.After(2 * time.Second):
+				t.Fatal("relay record write held placement beyond its request bound")
+			}
+		})
+	}
 }

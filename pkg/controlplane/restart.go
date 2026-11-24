@@ -609,7 +609,9 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	if saved != nil {
 		instance = saved.Instance
 	}
-	if err := p.register(fixed.Name, address, worker, instance); err != nil {
+	// A down saved registration is metadata for death detection. It has no
+	// eligible relay pair until the returning process acknowledges enrollment.
+	if err := p.register(fixed.Name, address, worker, instance, !down); err != nil {
 		return err
 	}
 	log.Printf("worker bootstrap name=%s attempt=1 result=registered", fixed.Name)
@@ -646,7 +648,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	if err != nil {
 		return err
 	}
-	if err := p.restoreRelayCutoffs(records, lease.Epoch); err != nil {
+	if err := p.restoreRelayCutoffs(records); err != nil {
 		return err
 	}
 	saved := map[string]FixedWorker{}
@@ -888,10 +890,13 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	p.mu.Unlock()
 	for id, epoch := range cutoffs {
 		if err := p.loseRelay(ctx, id, epoch); err != nil {
-			return err
+			p.restartLog("relay-cutoff:"+id, "relay cutoff pending slot=%s error=%v", id, err)
 		}
 	}
 	p.resumeRelayAttempts(ctx)
+	p.mu.Lock()
+	p.relayControlEpoch = lease.Epoch
+	p.mu.Unlock()
 	return nil
 }
 func (p *Plane) rebuildCall(lease sessionstore.Lease) *call {

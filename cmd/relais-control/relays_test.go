@@ -139,7 +139,7 @@ func TestRelayListKeepsUnavailableOrMissingAddressesPending(t *testing.T) {
 }
 
 // A down listed relay no longer prevents the control listener from starting.
-func TestControlStartsWithListedRelayDown(t *testing.T) {
+func TestRelaySetBootstrapLeavesUnreachableSlotsPending(t *testing.T) {
 	var probes atomic.Int32
 	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		probes.Add(1)

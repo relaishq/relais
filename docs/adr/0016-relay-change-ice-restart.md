@@ -835,7 +835,7 @@ and expose their state and failure in private status.
 - Use a healthy token or a command counter to clear loss: neither stops a frozen
   holder that renews its revoked epoch after control restart.
 
-**Admission tests.** `TestControlStartsWithListedRelayDown`,
+**Admission tests.** `TestRelaySetBootstrapLeavesUnreachableSlotsPending`,
 `TestPendingRelayJoinsWithoutControlRestart`,
 `TestEmptyNewRelayInstanceRejoinsAfterCompletedDrain`, and
 `TestControlRestartDuringRelayOutageKeepsEpochCutoff`. The last covers loss
@@ -843,7 +843,7 @@ during rebuild without the old token, same-epoch renewal after cutoff, and
 rejoin at a higher epoch.
 
 Regression coverage includes:
-`TestControlStartsWithListedRelayDown`,
+`TestRelaySetBootstrapLeavesUnreachableSlotsPending`,
 `TestWorkerEnrollmentAddsRelaySlotAfterEnrollment`,
 `TestConfigureRelaySetRefusesWithLiveCalls`, and
 `TestDrainedOrLostRelaySlotWaitsForNewInstance`.

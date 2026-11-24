@@ -60,9 +60,15 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 							lease, err := leases.GetRelay(readCtx, id)
 							cancel()
 							if observation.Observe(lease, err, time.Now(), relayLossAfter) {
+								p.mu.Lock()
+								b := p.relaySet[id]
+								retry := !b.cutoffDone || lease.Epoch > b.cutoff
+								p.mu.Unlock()
 								// Retries retain the lost mark. No placement or planned change can
 								// use the slot while a worker's cut-off acknowledgement is pending.
-								_ = p.loseRelay(ctx, id, lease.Epoch)
+								if retry {
+									_ = p.loseRelay(ctx, id, lease.Epoch)
+								}
 							}
 						}
 					}
@@ -72,14 +78,14 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 	}
 }
 
-func (p *Plane) loseRelay(ctx context.Context, slot string, observed ...uint64) error {
+func (p *Plane) loseRelay(ctx context.Context, slot string, observed uint64) error {
 	p.relayPlacement.Lock()
 	p.mu.Lock()
 	binding := p.relaySet[slot]
 
-	epoch := binding.Epoch
-	if len(observed) > 0 && observed[0] != 0 {
-		epoch = observed[0]
+	epoch := binding.epoch
+	if observed != 0 {
+		epoch = observed
 	}
 	epoch = max(epoch, binding.cutoff)
 	if epoch == 0 {
@@ -87,7 +93,7 @@ func (p *Plane) loseRelay(ctx context.Context, slot string, observed ...uint64) 
 		p.relayPlacement.Unlock()
 		return mediaworker.ErrRelayUnsupported
 	}
-	if len(observed) > 0 && observed[0] > 0 && observed[0] < binding.Epoch {
+	if observed > 0 && observed < binding.epoch {
 		p.mu.Unlock()
 		p.relayPlacement.Unlock()
 		return nil

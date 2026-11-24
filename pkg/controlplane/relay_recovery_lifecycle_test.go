@@ -98,7 +98,7 @@ func TestRelayLossSkipsOnlySettledDeadWorker(t *testing.T) {
 		b := p.workers["b"]
 		b.worker = &unavailableRelayWorker{b.worker.(*relayProtocolWorker)}
 		p.mu.Unlock()
-		require.ErrorIs(t, p.loseRelay(context.Background(), "r1"), mediaworker.ErrClosed, "unfenced worker still requires cut-off")
+		require.ErrorIs(t, p.loseRelay(context.Background(), "r1", 0), mediaworker.ErrClosed, "unfenced worker still requires cut-off")
 		p.mu.Lock()
 		expireObservedWorker(t, b)
 		p.mu.Unlock()
@@ -106,7 +106,7 @@ func TestRelayLossSkipsOnlySettledDeadWorker(t *testing.T) {
 		p.mu.Lock()
 		b.observation.recoveryFinished(true)
 		p.mu.Unlock()
-		require.NoError(t, p.loseRelay(context.Background(), "r1"))
+		require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
 		_, assignment := waitRelayPending(t, store, id)
 		require.Equal(t, "r2", assignment.Pending)
 	})
@@ -137,7 +137,7 @@ func TestLateRelayWorkerStartsWithSurvivingSet(t *testing.T) {
 			forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
 				p, _, _, id := relayFailurePlane(t, store)
 				stopRelayRecoveries(t, p)
-				require.NoError(t, p.loseRelay(context.Background(), "r1"))
+				require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
 				_, _ = waitRelayPending(t, store, id)
 				p.mu.Lock()
 				old, live := p.relaySet["r1"].Slot, p.relaySet["r2"].Slot
@@ -160,7 +160,7 @@ func TestLateRelayWorkerStartsWithSurvivingSet(t *testing.T) {
 				// Fresh workers initialized from the current view can acknowledge retries.
 				require.NoError(t, w.ConfigureRelays(context.Background(), mediaworker.RelaySetRequest{Slots: []mediaworker.RelaySlot{live}, Epochs: map[string]uint64{live.ID: 1}}))
 				require.Error(t, w.ConfigureRelays(context.Background(), mediaworker.RelaySetRequest{Slots: []mediaworker.RelaySlot{old, live}, Epochs: map[string]uint64{old.ID: 1, live.ID: 1}}), "lost leg must never be readmitted")
-				require.NoError(t, p.loseRelay(context.Background(), "r1"))
+				require.NoError(t, p.loseRelay(context.Background(), "r1", 0))
 			})
 		})
 	}
@@ -361,7 +361,7 @@ func TestRelayLossDispatchScalesToTwoHundredCalls(t *testing.T) {
 		defer measured.slow.Store(false)
 		started := time.Now()
 		done := make(chan error, 1)
-		go func() { done <- p.loseRelay(ctx, "r1") }()
+		go func() { done <- p.loseRelay(ctx, "r1", 0) }()
 		select {
 		case first := <-measured.first:
 			gap := first.Sub(started)

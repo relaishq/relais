@@ -61,7 +61,7 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 		}
 		s.instance, s.registered = b.instance, map[netip.AddrPort]bool{}
 		for worker, ack := range b.pairs {
-			if ack.epoch == b.Epoch && ack.instance == worker.instance && p.workers[worker.name] == worker {
+			if ack.epoch == b.epoch && ack.instance == worker.instance && p.workers[worker.name] == worker {
 				s.registered[worker.addr] = true
 			}
 		}

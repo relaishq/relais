@@ -87,7 +87,7 @@ func TestDrainedOrLostRelaySlotWaitsForNewInstance(t *testing.T) {
 			if state == "draining" {
 				require.NoError(t, plane.DrainRelay(ctx, "r1"))
 			} else {
-				require.NoError(t, plane.loseRelay(ctx, "r1"))
+				require.NoError(t, plane.loseRelay(ctx, "r1", 0))
 			}
 			remote := &registryRecorder{instance: "before"}
 			registry := RelayWorkerRegistry{Slot: "r1"}

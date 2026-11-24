@@ -112,7 +112,7 @@ func configureRelayFixture(t *testing.T, p *Plane, bindings []RelayBinding) {
 		require.NoError(t, w.worker.(relayChangeWorker).ConfigureRelays(t.Context(), req))
 	}
 	for id, b := range p.relaySet {
-		b.Epoch, b.instance, b.pending = 1, id+"-first", false
+		b.epoch, b.instance, b.pending = 1, id+"-first", false
 		for _, w := range p.workers {
 			b.pairs[w] = relayPairAck{epoch: 1, instance: w.instance}
 			w.observation.relayRegistered()
@@ -123,7 +123,7 @@ func configureRelayFixture(t *testing.T, p *Plane, bindings []RelayBinding) {
 
 // Protocol-only tests treat r3's fake enrollment as already acknowledged.
 func acknowledgedRelayFixture(p *Plane, b RelayBinding) RelayBinding {
-	b.Epoch, b.instance, b.pending, b.syncMu = 1, b.Slot.ID+"-first", false, &sync.Mutex{}
+	b.epoch, b.instance, b.pending, b.syncMu = 1, b.Slot.ID+"-first", false, &sync.Mutex{}
 	if b.Slot.ID == "r3" {
 		addr := netip.MustParseAddrPort("127.0.0.1:18003")
 		b.Slot.Leg, b.Slot.Public = addr, addr

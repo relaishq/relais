@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/netip"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ import (
 // existing calls can still move workers or roll back through that slot.
 func (p *Plane) relayPairLocked(w *registration, slot string) bool {
 	b, ok := p.relaySet[slot]
-	return w != nil && ok && !b.pending && !b.lost && b.Epoch != 0 && b.pairs[w].epoch == b.Epoch && b.pairs[w].instance == w.instance
+	return w != nil && ok && !b.pending && !b.lost && b.epoch != 0 && b.pairs[w].epoch == b.epoch && b.pairs[w].instance == w.instance
 }
 func (p *Plane) workerRelayReadyLocked(w *registration) bool {
 	if len(p.relaySet) == 0 {
@@ -31,7 +32,7 @@ func (p *Plane) workerRelayReadyLocked(w *registration) bool {
 	return false
 }
 func (p *Plane) workerAtRelayLocked(w *registration, slot string) bool {
-	if slot != "" {
+	if b, known := p.relaySet[slot]; known && !b.lost && !b.pending {
 		return p.relayPairLocked(w, slot)
 	}
 	return p.workerRelayReadyLocked(w)
@@ -60,7 +61,7 @@ func (p *Plane) relayAuthority() bool {
 	return ready
 }
 
-func (p *Plane) restoreRelayCutoffs(records map[string]json.RawMessage, term uint64) error {
+func (p *Plane) restoreRelayCutoffs(records map[string]json.RawMessage) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for key, data := range records {
@@ -72,13 +73,20 @@ func (p *Plane) restoreRelayCutoffs(records map[string]json.RawMessage, term uin
 				continue
 			}
 		}
+		binding, known := p.relaySet[id]
+		if !known {
+			if !p.ignoredRelayRecords[id] {
+				log.Printf("ignoring saved relay record for unlisted slot=%s", id)
+				if p.ignoredRelayRecords == nil {
+					p.ignoredRelayRecords = map[string]bool{}
+				}
+				p.ignoredRelayRecords[id] = true
+			}
+			continue
+		}
 		var epoch uint64
 		if err := json.Unmarshal(data, &epoch); err != nil {
 			return err
-		}
-		binding, known := p.relaySet[id]
-		if !known {
-			return mediaworker.ErrRelayUnsupported
 		}
 		if cutoff {
 			binding.cutoff = max(binding.cutoff, epoch)
@@ -95,7 +103,6 @@ func (p *Plane) restoreRelayCutoffs(records map[string]json.RawMessage, term uin
 		}
 		p.relaySet[id] = binding
 	}
-	p.relayControlEpoch = term
 	return nil
 }
 
@@ -164,6 +171,14 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 	}
 	binding.syncMu.Lock()
 	defer binding.syncMu.Unlock()
+	p.mu.Lock()
+	unfinished := p.relaySet[id]
+	p.mu.Unlock()
+	if unfinished.lost && !unfinished.cutoffDone {
+		if err := p.loseRelay(ctx, id, unfinished.cutoff); err != nil {
+			return err
+		}
+	}
 	status, err := remote.Status(ctx)
 	if err != nil {
 		return err
@@ -201,10 +216,6 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 		p.mu.Unlock()
 		return ErrMoveInProgress
 	}
-	if b.lost && !b.cutoffDone {
-		p.mu.Unlock()
-		return ErrNotReady
-	}
 	p.mu.Unlock()
 	if rejoin {
 		if !p.mutationReady() {
@@ -222,10 +233,10 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 	p.relayPlacement.Lock()
 	p.mu.Lock()
 	b = p.relaySet[id]
-	if b.Epoch != lease.Epoch || b.instance != status.Instance {
+	if b.epoch != lease.Epoch || b.instance != status.Instance {
 		b.pending, b.pairs = true, map[*registration]relayPairAck{}
 	}
-	b.Epoch, b.instance, b.Slot = lease.Epoch, status.Instance, slot
+	b.epoch, b.instance, b.Slot = lease.Epoch, status.Instance, slot
 	p.relaySet[id] = b
 	for w := range b.pairs {
 		if p.workers[w.name] != w {
@@ -260,6 +271,9 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 			continue
 		}
 		req := mediaworker.RelaySetRequest{Slots: []mediaworker.RelaySlot{slot}, Epochs: map[string]uint64{id: lease.Epoch}}
+		p.mu.Lock()
+		req.Cutoffs = p.relayCutoffsLocked()
+		p.mu.Unlock()
 		if err := worker.ConfigureRelays(ctx, req); err != nil {
 			failures = errors.Join(failures, err)
 			continue
@@ -274,7 +288,10 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 		needsRecord := p.relaySet[id].joinedEpoch < lease.Epoch
 		p.mu.Unlock()
 		if needsRecord {
-			if err := p.controlRecord(ctx, "relay-joined:"+id, lease.Epoch); err != nil {
+			bounded, cancel := context.WithTimeout(ctx, time.Second)
+			err := p.controlRecord(bounded, "relay-joined:"+id, lease.Epoch)
+			cancel()
+			if err != nil {
 				p.relayPlacement.Unlock()
 				failures = errors.Join(failures, err)
 				continue
@@ -282,7 +299,7 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 		}
 		p.mu.Lock()
 		current = p.relaySet[id]
-		if !p.controlAuthority() || p.workers[w.name] != w || w.instance != expectedInstance || latest.Expired || latest.Epoch != lease.Epoch || latest.Holder.Owner != status.Instance || current.Epoch != lease.Epoch || current.cutoff >= lease.Epoch || current.draining && (current.drainEpoch >= lease.Epoch || current.drainActive) || current.lost && !current.cutoffDone {
+		if !p.controlAuthority() || p.workers[w.name] != w || w.instance != expectedInstance || latest.Expired || latest.Epoch != lease.Epoch || latest.Holder.Owner != status.Instance || current.epoch != lease.Epoch || current.cutoff >= lease.Epoch || current.draining && (current.drainEpoch >= lease.Epoch || current.drainActive) || current.lost && !current.cutoffDone {
 			failures = errors.Join(failures, ErrNotReady)
 		} else {
 			current.joinedEpoch = max(current.joinedEpoch, lease.Epoch)
@@ -297,4 +314,14 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 		p.relayPlacement.Unlock()
 	}
 	return failures
+}
+
+func (p *Plane) relayCutoffsLocked() map[string]uint64 {
+	cutoffs := map[string]uint64{}
+	for id, b := range p.relaySet {
+		if b.cutoff > 0 {
+			cutoffs[id] = b.cutoff
+		}
+	}
+	return cutoffs
 }
