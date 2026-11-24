@@ -190,6 +190,10 @@ func main() {
 // A new relay process loses its private-leg registry. Re-register live workers
 // on each tick, including late registrations and rejoins in the same instance.
 func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, slot string, r *controlplane.RemoteRelay, first chan<- struct{}) {
+	registerRelayLoop(ctx, plane, slot, r, first, plane.AuthorityChanges())
+}
+
+func registerRelayLoop(ctx context.Context, plane *controlplane.Plane, slot string, r *controlplane.RemoteRelay, first chan<- struct{}, authority <-chan struct{}) {
 	registry := controlplane.RelayWorkerRegistry{Slot: slot}
 	healthy := false
 	lastInstance, lastRegistered := "", 0
@@ -208,7 +212,7 @@ func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, slot
 		if attempt == 1 && first != nil {
 			close(first)
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, controlplane.ErrNotReady) {
 			delay = min(delay*2, 5*time.Second)
 		} else {
 			delay = 100 * time.Millisecond
@@ -218,7 +222,7 @@ func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, slot
 		case <-ctx.Done():
 			timer.Stop()
 			return
-		case <-plane.AuthorityChanges():
+		case <-authority:
 			timer.Stop()
 			delay = 100 * time.Millisecond
 		case <-timer.C:

@@ -143,3 +143,63 @@ func TestRelayRegistryKeepsCompletedDrainStatusWithoutError(t *testing.T) {
 	id := createAdmissionCall(t, plane)
 	require.Equal(t, "r2", relayStatusOf(t, plane, id).Slot, "the same instance must remain excluded from placement")
 }
+
+func TestRelayRegistryKeepsExpectedAdmissionWaitsOutOfStatus(t *testing.T) {
+	for _, state := range []string{"cut-off instance", "lost not empty", "draining not empty"} {
+		t.Run(state, func(t *testing.T) {
+			store := sessionstore.NewMemory()
+			relays := newAdmissionRelays(t, store)
+			plane := New(relays[0], store)
+			configureAdmission(t, plane, relays)
+			registerAdmissionWorker(t, plane, store, relays[0].slot)
+			for _, r := range relays {
+				require.NoError(t, syncAdmission(t.Context(), plane, r))
+			}
+			if state == "draining not empty" {
+				require.NoError(t, plane.DrainRelay(t.Context(), "r1"))
+			} else {
+				require.NoError(t, plane.loseRelay(t.Context(), "r1", relays[0].lease.Epoch))
+			}
+			if state != "cut-off instance" {
+				id := createAdmissionCall(t, plane)
+				lease, current, err := store.RelayOwner(t.Context(), id)
+				require.NoError(t, err)
+				pending := current
+				pending.Pending = "r1"
+				require.NoError(t, store.CASRelay(t.Context(), lease, current, pending))
+				replaceAdmissionRelay(t, store, relays[0])
+			}
+			registry := RelayWorkerRegistry{Slot: "r1"}
+			require.Error(t, registry.Sync(t.Context(), plane, relays[0]), "an expected wait must retain failure backoff")
+			response := httptest.NewRecorder()
+			plane.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/status", nil))
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var status Status
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &status))
+			require.Equal(t, RelayStatus{Name: "r1", Lost: state != "draining not empty", Draining: state == "draining not empty", Pending: true}, status.Relays[0])
+		})
+	}
+}
+
+func TestRelayRegistryReportsAdmissionFaults(t *testing.T) {
+	for _, fault := range []string{"status read", "invalid addresses"} {
+		t.Run(fault, func(t *testing.T) {
+			store := sessionstore.NewMemory()
+			relays := newAdmissionRelays(t, store)
+			plane := New(relays[0], store)
+			configureAdmission(t, plane, relays)
+			registerAdmissionWorker(t, plane, store, relays[0].slot)
+			if fault == "status read" {
+				relays[0].online.Store(false)
+			} else {
+				relays[0].slot.Leg = netip.AddrPort{}
+			}
+			registry := RelayWorkerRegistry{Slot: "r1"}
+			err := registry.Sync(t.Context(), plane, relays[0])
+			require.Error(t, err)
+			status, statusErr := plane.Status(t.Context())
+			require.NoError(t, statusErr)
+			require.Equal(t, err.Error(), status.Relays[0].Error)
+		})
+	}
+}

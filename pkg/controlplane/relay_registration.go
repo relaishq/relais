@@ -55,8 +55,8 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 		b, known := p.relaySet[s.Slot]
 		if known {
 			b.admissionError = ""
-			// A completed drain still backs off until a new instance arrives.
-			if err != nil && !errors.Is(err, errRelayDrained) {
+			// Expected admission waits are not relay faults.
+			if err != nil && !errors.Is(err, errRelayAdmissionWaiting) {
 				b.admissionError = err.Error()
 			}
 			p.relaySet[s.Slot] = b

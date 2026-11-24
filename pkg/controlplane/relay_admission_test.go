@@ -414,7 +414,7 @@ func TestOpenPlannedFromBlocksOnlyItsDrainedSlotRejoin(t *testing.T) {
 				require.ErrorIs(t, err, ErrMoveInProgress)
 				status, statusErr := p.Status(t.Context())
 				require.NoError(t, statusErr)
-				require.Equal(t, err.Error(), status.Relays[0].Error, "a new instance blocked by an incomplete drain remains an admission error")
+				require.Empty(t, status.Relays[0].Error, "a new instance waiting for a completed drain is not a relay fault")
 			} else {
 				require.NoError(t, err, "an unrelated planned move does not block rejoin")
 			}

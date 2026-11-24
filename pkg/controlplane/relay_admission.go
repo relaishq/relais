@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/netip"
 	"strings"
@@ -14,7 +15,11 @@ import (
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
-var errRelayDrained = errors.New("controlplane: drained relay awaits a new instance")
+var errRelayAdmissionWaiting = errors.New("controlplane: relay admission waiting")
+
+func relayAdmissionWait(reason error) error {
+	return fmt.Errorf("%w: %w", errRelayAdmissionWaiting, reason)
+}
 
 // relayPairLocked is traffic eligibility. Draining blocks new placement, but
 // existing calls can still move workers or roll back through that slot.
@@ -163,7 +168,7 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 	AddWorker(context.Context, netip.AddrPort) error
 }) error {
 	if !p.relayAuthority() {
-		return ErrNotReady
+		return relayAdmissionWait(ErrNotReady)
 	}
 	p.mu.Lock()
 	binding, known := p.relaySet[id]
@@ -211,34 +216,24 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 	b := p.relaySet[id]
 	if lease.Epoch <= b.cutoff {
 		p.mu.Unlock()
-		return mediaworker.ErrRelayUnsupported
+		return relayAdmissionWait(mediaworker.ErrRelayUnsupported)
 	}
 	rejoin := b.lost || b.draining
 	if b.draining && (b.drainEpoch >= lease.Epoch || b.drainActive) {
-		sameInstance := !b.drainActive && b.drainEpoch == lease.Epoch && b.instance == status.Instance
 		p.mu.Unlock()
-		if sameInstance {
-			empty, err := p.relaySlotEmpty(ctx, id)
-			if err != nil {
-				return err
-			}
-			if empty {
-				return errRelayDrained
-			}
-		}
-		return ErrMoveInProgress
+		return relayAdmissionWait(ErrMoveInProgress)
 	}
 	p.mu.Unlock()
 	if rejoin {
 		if !p.mutationReady() {
-			return ErrNotReady
+			return relayAdmissionWait(ErrNotReady)
 		}
 		empty, err := p.relaySlotEmpty(ctx, id)
 		if err != nil {
 			return err
 		}
 		if !empty {
-			return ErrMoveInProgress
+			return relayAdmissionWait(ErrMoveInProgress)
 		}
 	}
 	slot := mediaworker.RelaySlot{ID: id, Leg: status.Private, Public: status.Public}
@@ -264,6 +259,7 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 	p.mu.Unlock()
 	p.relayPlacement.Unlock()
 	var failures error
+	waiting := false
 	for _, w := range workers {
 		p.mu.Lock()
 		current := p.relaySet[id]
@@ -312,7 +308,7 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 		p.mu.Lock()
 		current = p.relaySet[id]
 		if !p.controlAuthority() || p.workers[w.name] != w || w.instance != expectedInstance || latest.Expired || latest.Epoch != lease.Epoch || latest.Holder.Owner != status.Instance || current.epoch != lease.Epoch || current.cutoff >= lease.Epoch || current.draining && (current.drainEpoch >= lease.Epoch || current.drainActive) || current.lost && !current.cutoffDone {
-			failures = errors.Join(failures, ErrNotReady)
+			waiting = true
 		} else {
 			current.joinedEpoch = max(current.joinedEpoch, lease.Epoch)
 			current.pairs[w] = relayPairAck{epoch: lease.Epoch, instance: expectedInstance}
@@ -325,7 +321,14 @@ func (p *Plane) syncRelaySlot(ctx context.Context, id string, remote interface {
 		p.mu.Unlock()
 		p.relayPlacement.Unlock()
 	}
-	return failures
+	// Real faults remain visible even when another pair is waiting.
+	if failures != nil {
+		return failures
+	}
+	if waiting {
+		return relayAdmissionWait(ErrNotReady)
+	}
+	return nil
 }
 
 func (p *Plane) relayCutoffsLocked() map[string]uint64 {
