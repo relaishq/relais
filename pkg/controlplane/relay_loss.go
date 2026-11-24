@@ -46,6 +46,8 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 			for _, id := range ids {
 				wg.Go(func() {
 					var observation relaylease.Observation
+					var settledEpoch uint64
+					haveSettled := false
 					poll := time.NewTicker(relaylease.DefaultPoll)
 					defer poll.Stop()
 					for {
@@ -59,15 +61,11 @@ func (p *Plane) runRelayLoss(ctx context.Context) {
 							readCtx, cancel := context.WithTimeout(ctx, relaylease.DefaultPoll)
 							lease, err := leases.GetRelay(readCtx, id)
 							cancel()
-							if observation.Observe(lease, err, time.Now(), relayLossAfter) {
-								p.mu.Lock()
-								b := p.relaySet[id]
-								retry := !b.cutoffDone || lease.Epoch > b.cutoff
-								p.mu.Unlock()
-								// Retries retain the lost mark. No placement or planned change can
-								// use the slot while a worker's cut-off acknowledgement is pending.
-								if retry {
-									_ = p.loseRelay(ctx, id, lease.Epoch)
+							if observation.Observe(lease, err, time.Now(), relayLossAfter) && (!haveSettled || lease.Epoch != settledEpoch) {
+								// Cutoff acknowledgement permits admission, but journal and call
+								// recovery errors must also settle before this observer can stop.
+								if p.loseRelay(ctx, id, lease.Epoch) == nil {
+									settledEpoch, haveSettled = lease.Epoch, true
 								}
 							}
 						}

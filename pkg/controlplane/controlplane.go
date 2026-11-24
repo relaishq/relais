@@ -335,9 +335,21 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 			slot = assignment.Slot
 		}
 	}
-	return p.pickCapacityAtRelay(ctx, name, excluded, overflow, existingID, slot)
+	return p.pickCapacityMatching(ctx, name, excluded, overflow, existingID, func(w *registration) bool {
+		return p.workerAtRelayLocked(w, slot)
+	})
 }
-func (p *Plane) pickCapacityAtRelay(ctx context.Context, name string, excluded map[netip.AddrPort]bool, overflow bool, existingID, slot string) (*registration, error) {
+
+// New placement requires the selected pair itself to be joined. Only moves
+// and takeover may use another joined slot while a call's slot is unavailable.
+func (p *Plane) pickCapacityAtRelay(ctx context.Context, name string, excluded map[netip.AddrPort]bool, slot string) (*registration, error) {
+	return p.pickCapacityMatching(ctx, name, excluded, false, "", func(w *registration) bool {
+		return len(p.relaySet) == 0 || p.relayPairLocked(w, slot)
+	})
+}
+
+// atRelay is checked under the registry lock, before and after store sampling.
+func (p *Plane) pickCapacityMatching(ctx context.Context, name string, excluded map[netip.AddrPort]bool, overflow bool, existingID string, atRelay func(*registration) bool) (*registration, error) {
 	for range 32 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -346,7 +358,7 @@ func (p *Plane) pickCapacityAtRelay(ctx context.Context, name string, excluded m
 		version := p.loadVersion
 		candidates := make([]*registration, 0, len(p.workers))
 		for _, w := range p.workers {
-			if (name == "" || w.name == name) && w.observation.knowledge().eligible && p.workerAtRelayLocked(w, slot) && !excluded[w.addr] {
+			if (name == "" || w.name == name) && w.observation.knowledge().eligible && atRelay(w) && !excluded[w.addr] {
 				candidates = append(candidates, w)
 			}
 		}
@@ -379,7 +391,7 @@ func (p *Plane) pickCapacityAtRelay(ctx context.Context, name string, excluded m
 		var best *registration
 		load, ready := int(^uint(0)>>1), false
 		for _, w := range candidates {
-			if p.workers[w.name] != w || !w.observation.knowledge().eligible || !p.workerAtRelayLocked(w, slot) {
+			if p.workers[w.name] != w || !w.observation.knowledge().eligible || !atRelay(w) {
 				continue
 			}
 			ready = true
@@ -487,7 +499,7 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	var placed sessionstore.Lease
 	for range attempts {
 		var err error
-		w, err = p.pickCapacityAtRelay(ctx, name, excluded, false, "", slot)
+		w, err = p.pickCapacityAtRelay(ctx, name, excluded, slot)
 		if err != nil {
 			return "", "", err
 		}

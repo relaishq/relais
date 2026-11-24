@@ -16,6 +16,45 @@ type observedRelayReads struct {
 	reads chan struct{}
 }
 
+type oneFailedLossJournal struct {
+	*sessionstore.Memory
+	fail   atomic.Bool
+	failed chan struct{}
+}
+
+func (s *oneFailedLossJournal) ControlIntents(ctx context.Context) ([]sessionstore.ControlIntent, error) {
+	if s.fail.CompareAndSwap(true, false) {
+		close(s.failed)
+		return nil, sessionstore.ErrTransient
+	}
+	return s.Memory.ControlIntents(ctx)
+}
+
+func TestRelayLossObserverRetriesRecoveryAfterJournalFailure(t *testing.T) {
+	store := &oneFailedLossJournal{Memory: sessionstore.NewMemory(), failed: make(chan struct{})}
+	p, _, _, id := relayFailurePlane(t, store, "")
+	stopRelayRecoveries(t, p)
+	delete(p.relaySet, "r2") // Observe only the call's stale slot in this fixture.
+	_, err := store.ClaimRelay(t.Context(), "r1", sessionstore.RelayProcess{Owner: "r1", PID: 1, Start: "test", Host: "test", Namespace: "test", Executable: "test"}, time.Hour)
+	require.NoError(t, err)
+	store.fail.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); p.runRelayLoss(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	awaitAdmission(t, store.failed)
+	p.mu.Lock()
+	cutoffDone := p.relaySet["r1"].cutoffDone
+	c := p.calls[id]
+	p.mu.Unlock()
+	require.True(t, cutoffDone, "the journal failed after workers acknowledged cutoff")
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return c.terminal
+	}, 8*time.Second, time.Millisecond, "the next observer pass must apply the relay-loss end rule")
+}
+
 func (s *observedRelayReads) GetRelay(ctx context.Context, id string) (sessionstore.RelayLease, error) {
 	lease, err := s.Memory.GetRelay(ctx, id)
 	select {

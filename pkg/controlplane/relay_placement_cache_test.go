@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -12,6 +14,48 @@ import (
 type assignmentReadCount struct {
 	*sessionstore.Memory
 	reads atomic.Int64
+}
+
+type pausedPlacementSample struct {
+	*sessionstore.Memory
+	armed            atomic.Bool
+	entered, release chan struct{}
+}
+
+func (s *pausedPlacementSample) ListByWorker(ctx context.Context, addr netip.AddrPort) ([]sessionstore.Lease, error) {
+	if s.armed.CompareAndSwap(true, false) {
+		close(s.entered)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return s.Memory.ListByWorker(ctx, addr)
+}
+
+func TestCreateRefusesSlotThatTurnsPendingDuringSelection(t *testing.T) {
+	store := &pausedPlacementSample{Memory: sessionstore.NewMemory(), entered: make(chan struct{}), release: make(chan struct{})}
+	p, a, b, _ := relayFailurePlane(t, store)
+	store.armed.Store(true)
+	beforeA, beforeB := a.next, b.next
+	var release sync.Once
+	var createErr error
+	done := make(chan struct{})
+	go func() { defer close(done); _, _, createErr = p.Create(t.Context(), "offer", "a") }()
+	t.Cleanup(func() { release.Do(func() { close(store.release) }); <-done })
+	awaitAdmission(t, store.entered) // pickRelay already chose the less-loaded r2.
+	p.mu.Lock()
+	binding := p.relaySet["r2"]
+	binding.pending, binding.pairs = true, map[*registration]relayPairAck{}
+	p.relaySet["r2"] = binding
+	p.loadVersion++
+	p.mu.Unlock()
+	release.Do(func() { close(store.release) })
+	awaitAdmission(t, done)
+	require.ErrorIs(t, createErr, ErrNoTarget, "Create cannot use another slot's ready pair")
+	require.Equal(t, beforeA, a.next, "no create command may reach an unjoined pair")
+	require.Equal(t, beforeB, b.next)
 }
 
 func (s *assignmentReadCount) RelayOwner(ctx context.Context, id string) (sessionstore.Lease, sessionstore.RelayAssignment, error) {

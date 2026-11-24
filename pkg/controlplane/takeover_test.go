@@ -23,7 +23,10 @@ type takeoverWorker struct {
 	rtcpMargin uint32
 }
 
-func TestTakeoverMovesCallWhileItsRelayIsLost(t *testing.T) {
+// This pins control's target selection through a fake resume boundary. A real
+// target rejects the snapshot once its relay slot is cut off; this does not
+// prove end-to-end recovery after simultaneous worker and relay loss.
+func TestControlSelectsTakeoverTargetWhileCallRelayIsLost(t *testing.T) {
 	p, _, baseB, id := relayFailurePlane(t, sessionstore.NewMemory())
 	stopRelayRecoveries(t, p)
 	b := &takeoverWorker{fakeWorker: baseB}
@@ -40,7 +43,7 @@ func TestTakeoverMovesCallWhileItsRelayIsLost(t *testing.T) {
 	status, err := p.Status(t.Context())
 	require.NoError(t, err)
 	require.Len(t, status.Takeovers, 1)
-	require.False(t, status.Takeovers[0].Lost, "relay recovery must follow worker takeover")
+	require.False(t, status.Takeovers[0].Lost, "control selection must still offer a target to the fake resume boundary")
 	require.True(t, b.runs(id))
 	require.Equal(t, "b", status.Calls[0].Owner)
 }

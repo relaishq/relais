@@ -808,6 +808,8 @@ episode, detection starts one as today. Readiness need not wait for these calls
 to recover or end. The 5 s loss target still needs an already running, joined
 spare; admission never extends a saved recovery deadline.
 
+Relay recovery after a worker dies on a lost relay is not provided.
+
 For rejoin, **empty** means no live store assignment names the slot as current
 or pending. A **completed drain** also has no open planned attempt whose stored
 `From` names that slot. Planned attempts store `From` through supersession and
