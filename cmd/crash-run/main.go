@@ -698,6 +698,7 @@ func run() (err error) {
 	workerRestart := flag.Bool("worker-restart", false, "repeated worker crashes with automatic same-address restart and new-call placement")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	relayLoss := flag.Bool("relay-loss", false, "eight-call relay-slot loss: interleaved SIGSTOP/SIGCONT and SIGKILL of active plus standby")
+	relayLossNetns := flag.Bool("relay-loss-netns", false, "eight-call network blackhole of a live relay; requires -topology=netns")
 	relayLossProcesses := flag.Bool("relay-loss-processes", false, "relay-loss drill using shipped relay, control and worker binaries")
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
@@ -730,8 +731,11 @@ func run() (err error) {
 			return errors.New("worker-restart requires at least two crashes")
 		}
 	}
-	if (*relayLoss || *relayLossProcesses) && (*relayLoss && *relayLossProcesses || *relayStandby || *relayRestart || *terminate || *pauseWorker || *bufferOn || *compareBuffer || *storeStall != "" || *scenario != "" || *topologyOption != "loopback" || workerdriver.IsCustom(selectedWorker.Agent)) {
-		return errors.New("relay-loss requires the loopback echo topology and cannot combine with another fault mode")
+	if err := validateRelayLossTopology(*relayLoss, *relayLossProcesses, *relayLossNetns, *topologyOption); err != nil {
+		return err
+	}
+	if (*relayLoss || *relayLossProcesses || *relayLossNetns) && (*relayStandby || *relayRestart || *terminate || *pauseWorker || *bufferOn || *compareBuffer || *storeStall != "" || *scenario != "" || workerdriver.IsCustom(selectedWorker.Agent)) {
+		return errors.New("relay-loss requires echo and cannot combine with another fault mode")
 	}
 	if *releasePair {
 		return runReleasePairCommand(pair, *binArg, *redisAddr, *redisBinary, flag.NFlag())
@@ -805,7 +809,11 @@ func run() (err error) {
 	defer cancel()
 	var topology *nettopology.Topology
 	if *topologyOption == "netns" {
-		topology, err = nettopology.OpenManaged(ctx, func(format string, args ...any) { fmt.Printf(format+"\n", args...) }, manager.AddCleanup)
+		open := nettopology.OpenManaged
+		if *relayLossNetns {
+			open = nettopology.OpenManagedRelayLoss
+		}
+		topology, err = open(ctx, func(format string, args ...any) { fmt.Printf(format+"\n", args...) }, manager.AddCleanup)
 		if err != nil {
 			return err
 		}
@@ -914,8 +922,8 @@ func run() (err error) {
 	if *storeStall != "" {
 		return runStoreStallTrials(ctx, manager, ownedRedis, bin, dir, hex.EncodeToString(key[:]), addr, *storeStall, *stallDuration, *runs, *after, *verbose)
 	}
-	if *relayLoss || *relayLossProcesses {
-		return runRelayLossTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after, *relayLossProcesses)
+	if *relayLoss || *relayLossProcesses || *relayLossNetns {
+		return runRelayLossTrials(ctx, manager, bin, dir, hex.EncodeToString(key[:]), addr, *runs, *after, *relayLossProcesses || *relayLossNetns, topology, password)
 	}
 	if *scenario != "" {
 		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRouteTuning: *privateRouteTuning, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)

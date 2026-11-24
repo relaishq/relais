@@ -414,6 +414,56 @@ jobs:
             bin/relay-continuity-*.log
             bin/crash-run-*
 
+  chrome-relay-change:
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install Redis
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server
+      # Use the browser supplied by the versioned runner image. Do not add
+      # a browser download source; record the exact image and browser version.
+      - name: Select runner Chrome
+        run: |
+          chrome="$(command -v google-chrome)"
+          test -x "$chrome"
+          echo "RELAIS_CHROME=$chrome" >> "$GITHUB_ENV"
+          {
+            echo "Runner image: $ImageOS $ImageVersion"
+            "$chrome" --version
+          } | tee chrome-version.log
+      - name: Run planned and unplanned Chrome relay changes
+        timeout-minutes: 10
+        env:
+          # Shared runner: report row 1 gaps against the ADR target and fail
+          # only past 2x. The strict target applies on a quiet host.
+          RELAIS_CHROME_TIMING: shared-runner
+        run: |
+          set -o pipefail
+          make test-chrome-relay-change |& tee chrome-relay-change.log
+      - name: Summarize Chrome gaps
+        if: always()
+        run: python3 scripts/ci/chrome_summary.py chrome-relay-change.log chrome-version.log >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Chrome relay evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chrome-relay-change-evidence
+          path: |
+            chrome-version.log
+            chrome-relay-change.log
+
   # Ten consecutive buffered SIGKILL trials, each observing 60 seconds,
   # separate from the phase-1 cache and relay-continuity comparisons.
   crash-run-buffer:
@@ -585,11 +635,16 @@ jobs:
           if-no-files-found: warn
 
   netns-crash-run:
+    name: netns-crash-run (${{ matrix.fault }})
     timeout-minutes: 45
     permissions:
       contents: read
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        fault: [worker-crash, relay-loss]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -614,10 +669,30 @@ jobs:
           sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.skip='^Test(LinuxProfile|Profile)' -test.timeout=3m 2>&1 | tee bin/netns-tests.log
           sudo -E ./bin/clusterprocess.test -test.v -test.run='^Test(NamespaceCommand|ManagerCleanupAfterChildren|StopReapedChildCannotSignalReusedGroup|DriverDoubleSignalCleanup)$' -test.timeout=3m 2>&1 | tee bin/netns-process-tests.log
       - name: Run twenty namespaced LAN SIGKILL trials (ten per mode)
+        if: matrix.fault == 'worker-crash'
         timeout-minutes: 28
         run: |
           set -o pipefail
           sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=lan 2>&1 | tee bin/netns-crash-run.log
+      - name: Run ten live-relay network blackhole trials with eight calls
+        if: matrix.fault == 'relay-loss'
+        timeout-minutes: 30
+        run: |
+          set -o pipefail
+          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -relay-loss-netns -runs=10 -after=60s 2>&1 | tee bin/netns-relay-loss.log
+      - name: Summarize network relay loss
+        if: always() && matrix.fault == 'relay-loss'
+        run: |
+          {
+            echo '### Network relay loss (eight calls per trial)'
+            echo '```text'
+            if [ -f bin/netns-relay-loss.log ]; then
+              awk '/RELAY_LOSS_CALL|RELAY_LOSS_NETNS|PASS:|relay loss netns-blackhole/' bin/netns-relay-loss.log
+            else
+              echo 'NOT-RUN: driver log missing'
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Assert namespace and link cleanup
         if: always()
         timeout-minutes: 1
@@ -646,13 +721,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: netns-crash-run-route-settings
+          name: netns-crash-run-${{ matrix.fault }}-route-settings
           path: bin/crash-run-*/private-route-settings.json
       - name: Upload namespace failure logs
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
-          name: netns-crash-run-logs
+          name: netns-crash-run-${{ matrix.fault }}-logs
           path: |
             bin/netns-*.log
             bin/crash-run-*

@@ -72,3 +72,22 @@ func envValue(env []string, key string) string {
 	}
 	return ""
 }
+
+func validateRelayLossTopology(inProcess, processes, blackhole bool, topology string) error {
+	modes := 0
+	for _, enabled := range []bool{inProcess, processes, blackhole} {
+		if enabled {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return errors.New("select only one relay-loss mode")
+	}
+	if blackhole && topology != "netns" {
+		return errors.New("relay-loss-netns requires -topology=netns")
+	}
+	if (inProcess || processes) && topology != "loopback" {
+		return errors.New("process-signal relay loss requires the loopback topology")
+	}
+	return nil
+}

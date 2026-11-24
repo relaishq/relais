@@ -548,6 +548,7 @@ func (w *Worker) createSession(ctx context.Context, offerSDP, slotID string, pla
 			sess.close()
 			return "", "", err
 		}
+		traceRestartOffer("worker-restart-initial", sess.id, offerSDP)
 	}
 	answer, err := buildAnswer(offer, sess.answerParams())
 	if err != nil {
