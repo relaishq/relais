@@ -8,20 +8,22 @@ const CallCount = 8
 
 // Call uses an ordinal rather than a session identifier.
 type Call struct {
-	Number    int           `json:"call"`
-	Gap       time.Duration `json:"gapNs"`
-	Recovered bool          `json:"recovered"`
+	RecoveryGap time.Duration `json:"recoveryGapNs,omitempty"`
+	Number      int           `json:"call"`
+	Gap         time.Duration `json:"gapNs"`
+	Recovered   bool          `json:"recovered"`
 }
 
 type Report struct {
-	Completed bool   `json:"completed"`
-	Calls     []Call `json:"calls"`
+	FailedPhase string `json:"failedPhase,omitempty"`
+	Completed   bool   `json:"completed"`
+	Calls       []Call `json:"calls"`
 }
 
 // Passed requires every call and the entire fault/restore procedure. Missing
 // recovery evidence cannot pass as a zero-length gap.
 func (r Report) Passed() bool {
-	if !r.Completed || len(r.Calls) != CallCount {
+	if !r.Completed || r.FailedPhase != "" || len(r.Calls) != CallCount {
 		return false
 	}
 	for i, c := range r.Calls {
@@ -30,4 +32,13 @@ func (r Report) Passed() bool {
 		}
 	}
 	return true
+}
+
+// PublicPhase keeps untrusted report text out of uploaded diagnostics.
+func PublicPhase(phase string) string {
+	switch phase {
+	case "", "setup", "baseline", "fault", "recovery", "restore", "observation", "completion", "unavailable":
+		return phase
+	}
+	return "unavailable"
 }

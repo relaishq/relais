@@ -512,15 +512,21 @@ func TestRedisUnavailableNoStandbyTakeover(t *testing.T) {
 }
 
 func TestValidateAddressesBeforeFencing(t *testing.T) {
-	require.NoError(t, validateAddresses(true, "127.0.0.1:5000", "127.0.0.1:5001", "127.0.0.1:5002"))
-	require.NoError(t, validateAddresses(false, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0"))
+	advertised, err := validateAddresses(false, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "192.0.2.10:24780")
+	require.NoError(t, err)
+	require.Equal(t, netip.MustParseAddrPort("192.0.2.10:24780"), advertised)
+	_, err = validateAddresses(true, "127.0.0.1:5000", "127.0.0.1:5001", "127.0.0.1:5002", "")
+	require.NoError(t, err)
+	_, err = validateAddresses(false, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "")
+	require.NoError(t, err)
 	for _, addrs := range [][3]string{
 		{"127.0.0.1:0", "127.0.0.1:5001", "127.0.0.1:5002"},
 		{"0.0.0.0:5000", "127.0.0.1:5001", "127.0.0.1:5002"},
 		{"127.0.0.1:5000", "127.0.0.1:5001", "0.0.0.0:5002"},
 		{"127.0.0.1:5000", "127.0.0.1:5001", "127.0.0.1:65536"},
 	} {
-		require.Error(t, validateAddresses(true, addrs[0], addrs[1], addrs[2]))
+		_, err := validateAddresses(true, addrs[0], addrs[1], addrs[2], "")
+		require.Error(t, err)
 	}
 }
 

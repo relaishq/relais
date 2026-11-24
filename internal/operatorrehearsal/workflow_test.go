@@ -93,7 +93,7 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		t.Fatal(tokens, uploads, execute, summaries, builds, recorded)
 	}
 	paths := w.On["pull_request"].(map[string]any)["paths"].([]any)
-	for _, expected := range []string{"cmd/crash-run/**", "cmd/relais-relay/**", "cmd/relais-control/**", "cmd/relais-worker/**", "internal/nettopology/**", "internal/relayloss/**", "internal/operator*/**", "deploy/aws/**", "cmd/relais-gates/**", "pkg/operator/**", "scripts/ci/gate-mutation/**", ".github/workflows/operator-rehearsal.yml"} {
+	for _, expected := range []string{"internal/clusterprocess/**", "internal/relaylease/**", "internal/processrun/**", "pkg/workerapp/**", "scripts/ci/rehearsal_summary.py", "cmd/crash-run/**", "cmd/relais-relay/**", "cmd/relais-control/**", "cmd/relais-worker/**", "internal/nettopology/**", "internal/relayloss/**", "internal/operator*/**", "deploy/aws/**", "cmd/relais-gates/**", "pkg/operator/**", "scripts/ci/gate-mutation/**", ".github/workflows/operator-rehearsal.yml"} {
 		found := false
 		for _, p := range paths {
 			found = found || p == expected

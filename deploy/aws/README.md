@@ -55,7 +55,7 @@ behavior is documented in [AWS NAT gateways](https://docs.aws.amazon.com/vpc/lat
 | Parameter | Selection |
 | --- | --- |
 | `Profile` | `lean` or `resilience`; default `lean` |
-| `ReleaseVersion` | Required stable version after `0.2.0`, without `v`; **no default** |
+| `ReleaseVersion` | Required stable version `0.4.0` or later, without `v`; **no default** |
 | `ArchiveSHA256` | Required lowercase SHA-256 of that release's Linux archive for the selected architecture |
 | `Architecture` | `arm64` (Graviton default) or `x86_64` (archive suffix `amd64`) |
 | `ArmInstanceType`, `X86InstanceType` | Defaults `m7g.large` and `m7i.large`; check regional availability and architecture compatibility |
@@ -81,7 +81,9 @@ Obtain the archive digest independently from the chosen release's reviewed
 checksum manifest. Boot downloads
 `https://github.com/relaishq/relais/releases/download/vVERSION/relais_VERSION_linux_ARCH.tar.gz`,
 checks its exact SHA-256, rejects unsafe archive members and starts nothing on
-a mismatch. No published post-0.2.0 artifact is selected by this template.
+a mismatch. This template needs release **v0.4.0 or later**, the first release
+with relay-set support. Older releases need the template from their own tag.
+No release is selected by this template.
 
 Cloud-init uses the standard AL2023 AMI's AWS CLI v2, system Python and
 `aws-cfn-bootstrap`. It downloads no OS packages, Python SDK or PyPI dependency.
@@ -323,19 +325,29 @@ record outcomes; there is no ALB access log or WAF sampled-body log in this slic
 `make operator-rehearsal-run` adds a tested-head relay-loss procedure after the
 four pinned-release gates and the head-caller comparison. The pinned releases
 predate relay sets, so their four-host topology keeps its single-relay launcher
-path. They are not evidence for the new two-relay template.
+path. The local renderer accepts only the exact v0.3.4/v0.3.5 release-and-digest
+pairs as exceptions to the head template's version rule. Other old archives are
+refused. These comparisons are not evidence for the new two-relay template.
 
 The added procedure runs `crash-run -topology=netns -relay-loss-netns -runs=1
--after=5s -relay-loss-report=FILE` with the prebuilt tested-head binaries. CI passes the pinned Redis executable
-path explicitly through sudo; it never starts a system Redis service. It
+-after=5s -relay-loss-report=FILE` with the prebuilt tested-head binaries. CI
+passes the pinned Redis executable path explicitly through sudo; it never starts
+a system Redis service. It
 starts eight live audio/video calls, then drops **all INPUT and OUTPUT** traffic
 in one relay host's owned namespace. This cuts off caller media, private worker
 legs, control and store traffic while the relay process stays alive. The second
 relay stays reachable. The procedure restores the network and checks the old
 relay fence, decryption failures and duplicate packets.
 
-`report.json` records `relayLoss.completed` and each call's ordinal, `gapNs`
-and `recovered`. The step summary prints every gap and its 5 s grade. Every call
+`report.json` records `relayLoss.completed`, a sanitized `failedPhase` on failure,
+and each call's ordinal, `gapNs`, `recoveryGapNs` and `recovered`.
+`recoveryGapNs` is a conservative upper bound from the last caller media
+before loss to both decodable video and advancing audio RTP after the observed
+relay commit. It is absent when recovery was not observed. `gapNs` is the maximum of that recovery gap and the call's worst
+observed media gap on either track, including trailing silence when the
+procedure finishes. The 5 s grade applies to this maximum, so a later stall
+still fails even when the initial recovery was fast. The step summary prints
+both gaps and the 5 s grade. Every call
 must recover within 5 s, and the whole procedure must complete. Missing or
 unknown evidence fails. Operational waits get 2x margin (10 s to observe
 recovery); the product threshold stays 5 s. The added child has a 3-minute
@@ -534,9 +546,9 @@ rollback tests, and regenerate `scripts/release/compatibility.json`. A floor alo
 never authorizes an unlisted version; semver proximity supplies no evidence.
 `0.0.0-dev` templates/manual CI artifacts can carry that policy but cannot
 authorize a live rollout. Stamp each #251 build with its own real release version.
-For example, build the first main revision as `0.3.0`; before building the second
-as `0.3.1`, nominate `0.3.0` in `tested_peers: ["self", "0.3.0"]` and set
-both floors to `0.3.0`. Regenerate the template, then build and test that candidate
+For example, build the first main revision as `0.4.0`; before building the second
+as `0.4.1`, nominate `0.4.0` in `tested_peers: ["self", "0.4.0"]` and set
+both floors to `0.4.0`. Regenerate the template, then build and test that candidate
 pair in both directions before publishing or using its allowed verdict, with the
 [release pair test](../../scripts/release/README.md) as the required evidence. Without
 this policy change, two different main builds refuse with `unsupported_pair`.
@@ -594,7 +606,7 @@ rollback, capacity and managed-store durability remain **NOT-RUN** until separat
 approved acceptance evidence is recorded.
 
 `DeletionPolicy: RetainExceptOnCreate` and `UpdateReplacePolicy: Retain` protect
-the store, its subnet/security groups, all five secrets and the relay Elastic IP.
+the store, its subnet/security groups, all five secrets and both relay Elastic IPs.
 The retained store also requires its VPC, two private subnets, three ACL users
 and user group, so these dependencies use the same policies. Component security
 groups, standalone ingress/egress rules, EC2/root volumes, ALB/WAF, public subnets,

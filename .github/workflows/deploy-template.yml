@@ -76,7 +76,7 @@ jobs:
           systemd-analyze --version
       - name: Build the existing real components and caller
         run: |
-          flags="-X github.com/relaishq/relais/pkg/buildinfo.Version=0.3.0 -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(git rev-parse HEAD) -X github.com/relaishq/relais/pkg/buildinfo.Date=offline-test"
+          flags="-X github.com/relaishq/relais/pkg/buildinfo.Version=0.4.0 -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(git rev-parse HEAD) -X github.com/relaishq/relais/pkg/buildinfo.Date=offline-test"
           go build -ldflags "$flags" -o "$RUNNER_TEMP/bin/" ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal ./cmd/relais-load ./cmd/relais-demo ./scripts/release/compat
           mv "$RUNNER_TEMP/bin/compat" "$RUNNER_TEMP/bin/relais-compat"
       - name: Same units, fake cloud sources, Redis Cluster ACLs and real call

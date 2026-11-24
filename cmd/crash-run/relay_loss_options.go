@@ -15,3 +15,9 @@ func (o relayLossOptions) margin() int {
 	}
 	return 1
 }
+
+func (o relayLossOptions) phase(phase string) {
+	if o.Evidence != nil {
+		o.Evidence.FailedPhase = phase
+	}
+}

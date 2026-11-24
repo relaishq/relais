@@ -108,10 +108,13 @@ func Load(root fs.FS, c Config) (*Topology, error) {
 	}
 	r := obj(doc["Resources"])
 	parameters := obj(doc["Parameters"])
+	// This local single-relay comparison deliberately boots only these exact
+	// historical artifacts. The deployable head template still enforces 0.4+.
+	pinnedComparison := c.Version == "0.3.4" && c.ArchiveSHA256 == ReleaseASHA256 || c.Version == "0.3.5" && c.ArchiveSHA256 == ReleaseBSHA256
 	for name, value := range map[string]string{"ReleaseVersion": c.Version, "ArchiveSHA256": c.ArchiveSHA256} {
 		pattern := str(obj(parameters[name])["AllowedPattern"])
 		re, e := regexp.Compile("^(?:" + pattern + ")$")
-		if e != nil || pattern == "" || !re.MatchString(value) {
+		if e != nil || pattern == "" || !re.MatchString(value) && (name != "ReleaseVersion" || !pinnedComparison) {
 			return nil, errors.New("invalid-release-pin")
 		}
 	}
@@ -227,7 +230,7 @@ func Load(root fs.FS, c Config) (*Topology, error) {
 		// The pinned four-gate comparison predates relay sets. Keep its single
 		// relay launcher path; the tested-head netns phase covers host loss.
 		file := h.Metadata.Files["/etc/relais/node.env"]
-		file.Content = strings.ReplaceAll(file.Content, "RELAY_TWO_PRIVATE=10.42.1.10", "RELAY_TWO_PRIVATE=")
+		file.Content = strings.ReplaceAll(file.Content, "RELAY_TWO_PRIVATE="+str(prop(r["RelayTwoInterface"])["PrivateIpAddress"]), "RELAY_TWO_PRIVATE=")
 		h.Metadata.Files["/etc/relais/node.env"] = file
 		t.Hosts[slot] = h
 	}

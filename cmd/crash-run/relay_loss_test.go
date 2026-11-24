@@ -9,6 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/relaishq/relais/internal/relayloss"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/stretchr/testify/require"
@@ -141,4 +142,12 @@ func TestRelayLossOperationalMarginKeepsFiveSecondGrade(t *testing.T) {
 		{Kind: "video", Packets: 100, LastArrival: 10 * time.Second, MediaGap: time.Second},
 	}}
 	require.ErrorContains(t, relayLossMediaProgress("call-1", report, started.Add(10*time.Second)), "gap=6s")
+}
+
+func TestRelayLossReportNamesCurrentPhase(t *testing.T) {
+	evidence := &relayloss.Report{}
+	options := relayLossOptions{Evidence: evidence}
+	options.phase("recovery")
+	require.Equal(t, "recovery", evidence.FailedPhase)
+	(relayLossOptions{}).phase("baseline")
 }

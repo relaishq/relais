@@ -120,15 +120,17 @@ def report_lines(report):
     lines += ['', '### Relay host loss (5 s budget)', '']
     completed = field(loss, 'completed')
     lines += ['Procedure completed: ' + ('yes' if completed is True else 'no' if completed is False else code(completed))]
+    phase = field(loss, 'failedPhase')
+    lines += ['Failed phase: ' + ('none' if phase == '' or completed is True and phase is MISSING else code(phase))]
     calls = field(loss, 'calls')
     if isinstance(calls, list):
-        lines += ['', '| Call | Gap (ns) | Recovery | Within 5 s |', '| --- | ---: | --- | --- |']
+        lines += ['', '| Call | Graded gap (ns) | Recovery gap (ns) | Recovery | Within 5 s |', '| --- | ---: | ---: | --- | --- |']
         for call in calls:
             gap, recovered = field(call, 'gapNs'), field(call, 'recovered')
             valid = type(gap) is int and gap > 0
             within = 'pass' if recovered is True and valid and gap <= 5_000_000_000 else 'fail'
             recovery = 'observed' if recovered is True else 'unobserved'
-            lines.append(f'| {count(field(call, "call"))} | {count(gap)} | {recovery} | {within} |')
+            lines.append(f'| {count(field(call, "call"))} | {count(gap)} | {count(field(call, "recoveryGapNs"))} | {recovery} | {within} |')
     else:
         lines.append('Call gaps: ' + code(calls))
     return lines

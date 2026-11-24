@@ -123,6 +123,11 @@ def check(template):
     assert not re.search(r'(?<![0-9])[0-9]{12}(?![0-9])|AKIA[A-Z0-9]{16}|-----BEGIN .*PRIVATE KEY', encoded)
     assert not re.search(r'(?i)(password|token|secret_access_key)\s*[:=]\s*["\']?[A-Za-z0-9+/]{24,}', encoded)
     assert not re.search(r'RELAIS_(?:SESSIONSTORE_KEY|REDIS_PASSWORD)\s*=', encoded), 'literal credential assignment'
+    pattern = template['Parameters']['ReleaseVersion']['AllowedPattern']
+    for version in ('0.3.5', '0.2.1', '0.4.0-rc.1', 'v0.4.0'):
+        assert not re.fullmatch(pattern, version), 'unsupported template release: ' + version
+    for version in ('0.4.0', '0.4.9', '0.5.0', '0.10.0', '1.0.0', '10.0.0'):
+        assert re.fullmatch(pattern, version), 'supported template release refused: ' + version
     resources = template['Resources']
     assert resources['WorkerRecoveryTemplate']['Properties']['LaunchTemplateData'] == {
         'MaintenanceOptions': {'AutoRecovery': 'default'}}, 'worker recovery must be enabled'
@@ -342,6 +347,7 @@ def regression_tests(template):
              'single_inline_role_policy','no_secret_output','host_uses_own_role']
     mutations = list(zip(names, mutations))
     mutations += [
+        ('relay_set_release_floor', lambda t: t['Parameters']['ReleaseVersion'].update(AllowedPattern=r'0\.3\.[0-9]+|0\.4\.[0-9]+')),
         ('second_relay_always_on', lambda t: t['Resources']['RelayTwoHost'].update(Condition='Resilience')),
         ('second_relay_private_paths', lambda t: t['Resources']['RelayTwoInterface']['Properties'].update(GroupSet=[{'Ref': 'HostGroup'}])),
         ('second_relay_distinct_address', lambda t: t['Resources']['RelayTwoInterface']['Properties'].update(PrivateIpAddress='10.42.0.10')),

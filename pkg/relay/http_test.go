@@ -49,8 +49,5 @@ func TestRelayAdvertisesMappedAddressWithoutBindingIt(t *testing.T) {
 		require.True(t, r.publicAddr.Addr().IsLoopback(), "mapped public address must never be bound locally")
 		require.NoError(t, r.Close())
 	}
-	for _, address := range []string{"0.0.0.0:24780", "192.0.2.10:0", "224.0.0.1:24780"} {
-		_, err := New(Config{Owners: sessionstore.NewMemory(), AdvertiseAddr: netip.MustParseAddrPort(address)})
-		require.ErrorContains(t, err, "invalid advertised media address")
-	}
+
 }

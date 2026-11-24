@@ -199,13 +199,13 @@ class Summary(unittest.TestCase):
 class RelayHostLossSummary(unittest.TestCase):
     def test_per_call_gaps_and_failed_boundary(self):
         report = {'schemaVersion': 1, 'relayLoss': {'completed': True, 'calls': [
-            {'call': 1, 'gapNs': 5_000_000_000, 'recovered': True},
+            {'call': 1, 'gapNs': 5_000_000_000, 'recoveryGapNs': 4_000_000_000, 'recovered': True},
             {'call': 2, 'gapNs': 5_000_000_001, 'recovered': True},
             {'call': 3, 'gapNs': 0, 'recovered': False}]}}
         text = '\n'.join(report_lines(report))
-        self.assertIn('| 1 | 5000000000 | observed | pass |', text)
-        self.assertIn('| 2 | 5000000001 | observed | fail |', text)
-        self.assertIn('| 3 | 0 | unobserved | fail |', text)
+        self.assertIn('| 1 | 5000000000 | 4000000000 | observed | pass |', text)
+        self.assertIn('| 2 | 5000000001 | missing | observed | fail |', text)
+        self.assertIn('| 3 | 0 | missing | unobserved | fail |', text)
 
 
 if __name__ == '__main__':

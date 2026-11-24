@@ -71,16 +71,9 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	if *bindTimeout <= 0 {
 		return fmt.Errorf("relay bind timeout must be positive")
 	}
-	if err := validateAddresses(*standby, *public, *leg, *httpAddr); err != nil {
+	advertised, err := validateAddresses(*standby, *public, *leg, *httpAddr, *advertise)
+	if err != nil {
 		return err
-	}
-	var advertised netip.AddrPort
-	if *advertise != "" {
-		var err error
-		advertised, err = netip.ParseAddrPort(*advertise)
-		if err != nil || advertised.Port() == 0 || advertised.Addr().IsUnspecified() || advertised.Addr().IsMulticast() {
-			return errors.New("invalid advertised media address")
-		}
 	}
 	ctx, cancel := processrun.Context()
 	defer cancel()
@@ -159,33 +152,40 @@ func main() {
 
 // Reject invalid socket configuration before a candidate can claim or signal.
 // Validation itself must not bind anything, including the private HTTP socket.
-func validateAddresses(standby bool, public, leg, httpAddr string) error {
+func validateAddresses(standby bool, public, leg, httpAddr, advertise string) (netip.AddrPort, error) {
 	for _, addr := range []string{public, leg} {
 		udp, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
-			return err
+			return netip.AddrPort{}, err
 		}
 		if udp.IP == nil || udp.IP.IsUnspecified() {
-			return fmt.Errorf("relay UDP address must name a specific IP: %s", addr)
+			return netip.AddrPort{}, fmt.Errorf("relay UDP address must name a specific IP: %s", addr)
 		}
 		if standby && udp.Port == 0 {
-			return fmt.Errorf("standby requires fixed socket addresses: %s", addr)
+			return netip.AddrPort{}, fmt.Errorf("standby requires fixed socket addresses: %s", addr)
 		}
 	}
 	_, port, err := net.SplitHostPort(httpAddr)
 	if err != nil {
-		return err
+		return netip.AddrPort{}, err
 	}
 	// Same rule as processrun.ListenPrivate: loopback, or an explicitly
 	// allowed private prefix (the netns topology), checked before startup.
 	if err := processrun.ValidatePrivateListener(httpAddr, os.Getenv("RELAIS_PRIVATE_NETS")); err != nil {
-		return err
+		return netip.AddrPort{}, err
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 0 || n > 65535 || standby && n == 0 {
-		return fmt.Errorf("invalid relay HTTP port: %s", httpAddr)
+		return netip.AddrPort{}, fmt.Errorf("invalid relay HTTP port: %s", httpAddr)
 	}
-	return nil
+	var advertised netip.AddrPort
+	if advertise != "" {
+		advertised, err = netip.ParseAddrPort(advertise)
+		if err != nil || advertised.Port() == 0 || advertised.Addr().IsUnspecified() || advertised.Addr().IsMulticast() {
+			return netip.AddrPort{}, errors.New("invalid advertised media address")
+		}
+	}
+	return advertised, nil
 }
 
 const (

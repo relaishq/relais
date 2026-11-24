@@ -10,8 +10,8 @@ Parameters:
     - resilience
   ReleaseVersion:
     Type: String
-    AllowedPattern: 0\.2\.[1-9][0-9]*|0\.([3-9]|[1-9][0-9]+)\.[0-9]+|[1-9][0-9]*\.[0-9]+\.[0-9]+
-    Description: Required post-v0.2.0 release version without v; no release is selected for you.
+    AllowedPattern: 0\.([4-9]|[1-9][0-9]+)\.[0-9]+|[1-9][0-9]*\.[0-9]+\.[0-9]+
+    Description: Required 0.4.0 or later release version without v; relay-set support is required.
   ArchiveSHA256:
     Type: String
     AllowedPattern: '[a-f0-9]{64}'

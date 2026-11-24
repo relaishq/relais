@@ -36,7 +36,14 @@ func (r *rehearsal) runRelayLoss(ctx context.Context) *relayloss.Report {
 	}
 	if err != nil || result.Err != nil || result.Code == nil || *result.Code != 0 || result.Truncated {
 		report.Completed = false
+		if report.FailedPhase == "" {
+			report.FailedPhase = "completion"
+		}
 	}
-	_, _ = fmt.Fprintf(r.diagnostics, "relay-host-loss completed=%t calls=%d passed=%t\n", report.Completed, len(report.Calls), report.Passed())
+	if err != nil {
+		report.FailedPhase = "unavailable"
+	}
+	report.FailedPhase = relayloss.PublicPhase(report.FailedPhase)
+	_, _ = fmt.Fprintf(r.diagnostics, "relay-host-loss failed_phase=%s completed=%t calls=%d passed=%t\n", report.FailedPhase, report.Completed, len(report.Calls), report.Passed())
 	return report
 }

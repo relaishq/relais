@@ -68,12 +68,15 @@ func (p *lossProbe) replay(a net.Addr) error {
 
 func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bin, dir, key, addr string, runs int, after time.Duration, shipped bool, topology *nettopology.Topology, password string, options relayLossOptions) (runErr error) {
 	if options.ReportPath != "" {
-		options.Evidence = &relayloss.Report{Calls: make([]relayloss.Call, relayloss.CallCount)}
+		options.Evidence = &relayloss.Report{FailedPhase: "setup", Calls: make([]relayloss.Call, relayloss.CallCount)}
 		for i := range options.Evidence.Calls {
 			options.Evidence.Calls[i].Number = i + 1
 		}
 		defer func() {
 			options.Evidence.Completed = runErr == nil
+			if options.Evidence.Completed {
+				options.Evidence.FailedPhase = ""
+			}
 			data, err := json.Marshal(options.Evidence)
 			if err == nil {
 				err = os.WriteFile(options.ReportPath, data, 0600)
@@ -112,11 +115,7 @@ func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bi
 
 // Both drills share the shipped two-relay topology and eight live callers.
 // A drain uses the operator API before any relay-loss fault is injected.
-func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, drainSamples *[]relayDrainSample, topology *nettopology.Topology, password string, settings ...relayLossOptions) (trialErr error) {
-	var options relayLossOptions
-	if len(settings) != 0 {
-		options = settings[0]
-	}
+func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, drainSamples *[]relayDrainSample, topology *nettopology.Topology, password string, options relayLossOptions) (trialErr error) {
 	margin := time.Duration(options.margin())
 	prefix := fmt.Sprintf("relais:slot-loss:%s:", filepath.Base(dir))
 	env := processEnv(keyHex, addr, prefix)
@@ -345,6 +344,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		}()
 		defer func() { stop(); <-heartbeatDone }()
 	}
+	options.phase("baseline")
 	media, stopMedia := context.WithCancel(ctx)
 	sent := make(chan error, 8)
 	for _, c := range calls {
@@ -413,6 +413,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 	})
 	defer stopTrace()
 	fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=baseline\n", freeze)
+	options.phase("fault")
 	fault := time.Now()
 	blackholed := false
 	if topology != nil {
@@ -440,6 +441,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		}
 	}
 	fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=fault\n", freeze)
+	options.phase("recovery")
 	recoveryCtx, stopRecovery := context.WithDeadline(ctx, fault.Add(relayloss.Budget*margin))
 	defer stopRecovery()
 	gaps := make([]time.Duration, len(calls))
@@ -484,7 +486,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		gaps[i] = gap
 		if options.Evidence != nil {
 			row := &options.Evidence.Calls[i]
-			row.Recovered, row.Gap = true, gap
+			row.Recovered, row.RecoveryGap, row.Gap = true, gap, gap
 		}
 		if gap > relayloss.Budget {
 			failure := relayLossCallError(c.SessionID(), "recovery", gap, errors.New("exceeded 5s"))
@@ -501,6 +503,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 	if !shipped && !cutoff.Load() {
 		return fmt.Errorf("worker cut-off boundary missing")
 	}
+	options.phase("restore")
 	var resumedBaseline relay.RelayStatus
 	if freeze || topology != nil {
 		remote := bindings[0].Relay.(*controlplane.RemoteRelay)
@@ -568,6 +571,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		}
 		resumedBaseline = before
 	}
+	options.phase("observation")
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

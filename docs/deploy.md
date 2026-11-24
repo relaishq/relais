@@ -7,7 +7,8 @@ The live topology needs
 
 A reviewable [AWS preview template](../deploy/aws/README.md) defines the fixed
 lean and resilience profiles in native CloudFormation. It is tested without an
-AWS account. Both profiles have two always-on relay hosts and two stable public
+AWS account. This template needs release v0.4.0 or later; older releases need
+the template from their own tag. Both profiles have two always-on relay hosts and two stable public
 addresses. The added footprint is one more always-on relay instance and one
 more public address, plus its root volume and network interface. The supported
 failure domain is one relay host lost at a time. A call whose relay and worker

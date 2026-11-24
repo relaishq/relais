@@ -954,7 +954,7 @@ workflow-only verification.
 Owner decision, 2026-10-28: the free rehearsal proves that the operator procedures
 complete and that the media evidence contains no known failure. A shared runner
 cannot provide the scheduling isolation needed to settle every media timing
-measurement. Pinned media timing is judged strictly only in the paid run. The pinned
+measurement. Media timing is judged strictly only in the paid run. The pinned
 judge, its thresholds and the paid-run pass rule remain unchanged.
 
 A free rehearsal passes only when every covered procedure completed, every
@@ -1017,12 +1017,24 @@ and the restored clock must pass the same source check. The ACL control restores
 exact template rules and repeats its positive authenticated probe even after a
 failed negative observation. All hosts are verified again before gates start.
 
+**2026-11-24, #540:** The 2026-10-28 decision above remains unchanged for the
+pinned comparison. The added relay-host-loss procedure grades its per-call
+gaps strictly against 5 s, including on the free shared runner.
+
 The free run also requires the separate tested-head relay-host-loss procedure.
 It reuses the namespace blackhole from #537 with eight live audio/video calls.
 Both traffic directions on one relay host are dropped, including private paths;
 the surviving relay stays up. `report.json` includes `relayLoss` with all eight
-call gaps and recovery observations. Each gap must be at most 5 s. The driver
-has a 10 s recovery observation limit and a 3-minute outer limit; these are
+call gaps and recovery observations. `recoveryGapNs` records a conservative
+upper bound from the last caller media before loss to both decodable video and
+advancing audio RTP after the observed commit, when recovery is observed. `gapNs` is the maximum of the recovery gap and the worst observed
+media gap on either track, including trailing silence at procedure completion.
+This maximum must be at most 5 s; a later stall cannot hide behind fast initial
+recovery. A failed run records a fixed `failedPhase` code in the report and host
+diagnostics (`setup`, `baseline`, `fault`, `recovery`, `restore`, `observation`,
+`completion`, or `unavailable`). `unavailable` means no usable child report was
+received, so no more specific phase is known. The driver has a 10 s recovery
+observation limit and a 3-minute outer limit; these are
 operational margins, not relaxed product thresholds. A missing report, unknown
 completion, missing call or over-budget call fails the free run. Its measurements
 are outside the pinned four-phase media pool. See the

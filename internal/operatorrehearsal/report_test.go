@@ -172,6 +172,7 @@ func TestRehearsalPassRule(t *testing.T) {
 func TestReportDropsFreeText(t *testing.T) {
 	r := passingReport()
 	secret := "BEARER-private-value"
+	r.RelayLoss.FailedPhase = secret
 	r.Errors = []string{"error " + secret}
 	r.Gates[0].Reason = secret
 	r.Gates[1].Category = secret

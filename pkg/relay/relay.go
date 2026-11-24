@@ -419,9 +419,6 @@ type Relay struct {
 
 // New starts a relay.
 func New(cfg Config) (*Relay, error) {
-	if cfg.AdvertiseAddr != (netip.AddrPort{}) && (!cfg.AdvertiseAddr.IsValid() || cfg.AdvertiseAddr.Port() == 0 || cfg.AdvertiseAddr.Addr().IsUnspecified() || cfg.AdvertiseAddr.Addr().IsMulticast()) {
-		return nil, errors.New("relay: invalid advertised media address")
-	}
 	if cfg.SlotID != "" {
 		if _, ok := cfg.Owners.(sessionstore.RelayOwners); !ok {
 			return nil, errors.New("relay: named slot requires relay assignment lookup")
