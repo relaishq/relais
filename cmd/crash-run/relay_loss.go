@@ -251,6 +251,12 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		if err := topology.AllowMedia(ctx, bindings[0].Slot.Public, bindings[1].Slot.Public); err != nil {
 			return err
 		}
+		if err := topology.VerifyPrivateAPIs(ctx, []string{
+			strings.TrimPrefix(bindings[0].Relay.(*controlplane.RemoteRelay).URL, "http://"),
+			strings.TrimPrefix(bindings[1].Relay.(*controlplane.RemoteRelay).URL, "http://"),
+		}); err != nil {
+			return fmt.Errorf("phase=private-api-isolation: %w", err)
+		}
 	}
 	var probes []*lossProbe
 	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: signalingURL + "/calls", RelayAddr: bindings[0].Slot.Public, CallerSocket: func() (net.PacketConn, error) {
@@ -387,14 +393,18 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	defer stopTrace()
 	fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=baseline\n", freeze)
 	fault := time.Now()
+	blackholed := false
 	if topology != nil {
 		if err = topology.BlackholeRelay(ctx, true); err != nil {
 			return fmt.Errorf("phase=blackhole: %w", err)
 		}
+		blackholed = true
 		defer func() {
-			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			trialErr = errors.Join(trialErr, topology.BlackholeRelay(cleanup, false))
+			if blackholed {
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				trialErr = errors.Join(trialErr, topology.BlackholeRelay(cleanup, false))
+			}
 		}()
 	} else {
 		signal := syscall.SIGKILL
@@ -437,13 +447,35 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 	if !shipped && !cutoff.Load() {
 		return fmt.Errorf("worker cut-off boundary missing")
 	}
-	if freeze {
+	var resumedBaseline relay.RelayStatus
+	if freeze || topology != nil {
 		remote := bindings[0].Relay.(*controlplane.RemoteRelay)
-		if err = active.Signal(syscall.SIGCONT); err != nil {
-			return err
-		}
-		if err = standby.Signal(syscall.SIGCONT); err != nil {
-			return err
+		if freeze {
+			if err = active.Signal(syscall.SIGCONT); err != nil {
+				return err
+			}
+			if err = standby.Signal(syscall.SIGCONT); err != nil {
+				return err
+			}
+		} else {
+			lease, e := store.GetRelay(ctx, "r1")
+			if e != nil {
+				return fmt.Errorf("phase=before-network-restore: %w", e)
+			}
+			if err = topology.BlackholeRelay(ctx, false); err != nil {
+				return fmt.Errorf("phase=network-restore: %w", err)
+			}
+			blackholed = false
+			renewalCtx, stopRenewal := context.WithTimeout(ctx, 3*time.Second)
+			err = lossWait(renewalCtx, func() bool {
+				next, e := store.GetRelay(renewalCtx, "r1")
+				return e == nil && next.Holder == lease.Holder && next.Epoch == lease.Epoch && !next.Expired && next.ExpiresAt.After(lease.ExpiresAt)
+			})
+			stopRenewal()
+			if err != nil {
+				return fmt.Errorf("phase=restored-relay-renewal: %w", err)
+			}
+			fmt.Println("RELAY_LOSS_STAGE phase=network-restored renewal=observed")
 		}
 		// SIGSTOP leaves pre-cut-off worker datagrams queued in r1's UDP
 		// socket. Its HTTP status can answer before that backlog drains.
@@ -474,14 +506,27 @@ func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, d
 		if e != nil {
 			return e
 		}
-		if last.Stats.WorkerPackets != before.Stats.WorkerPackets || oldOutput.Load() != 0 {
-			return fmt.Errorf("resumed old slot worker fence failed: worker_packets_delta=%d r1_before=%+v r1_after=%+v oldInput=%d oldOutput=%d cutoff=%t", last.Stats.WorkerPackets-before.Stats.WorkerPackets, before.Stats, last.Stats, oldInput.Load(), oldOutput.Load(), cutoff.Load())
+		if err := lossResumedWorkerFence(before, last); err != nil {
+			return err
 		}
+		if oldOutput.Load() != 0 {
+			return fmt.Errorf("resumed old slot worker fence failed: oldOutput=%d", oldOutput.Load())
+		}
+		resumedBaseline = before
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(after):
+	}
+	if topology != nil {
+		last, e := bindings[0].Relay.(*controlplane.RemoteRelay).Status(ctx)
+		if e != nil {
+			return fmt.Errorf("phase=restored-relay-observation: %w", e)
+		}
+		if err := lossResumedWorkerFence(resumedBaseline, last); err != nil {
+			return err
+		}
 	}
 	for _, endpoint := range workerURLs {
 		var callIDs []string
@@ -623,4 +668,11 @@ func relayLossObservedGap(report *callharness.Report, now time.Time) time.Durati
 		gap = max(gap, track.MediaGap, now.Sub(report.StartedAt)-track.LastArrival)
 	}
 	return gap
+}
+
+func lossResumedWorkerFence(before, after relay.RelayStatus) error {
+	if after.Stats.WorkerPackets != before.Stats.WorkerPackets {
+		return fmt.Errorf("phase=restored-relay-fence: resumed old slot worker packets changed: before=%d after=%d", before.Stats.WorkerPackets, after.Stats.WorkerPackets)
+	}
+	return nil
 }

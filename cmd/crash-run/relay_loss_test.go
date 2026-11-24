@@ -107,3 +107,14 @@ func TestRelayLossObservationRejectsSecondAndTrailingFreeze(t *testing.T) {
 	missing.Tracks = missing.Tracks[:1]
 	require.ErrorContains(t, relayLossMediaProgress("call-8", missing, now), "evidence missing")
 }
+
+func TestResumedRelayFenceRejectsWorkerPacketsDuringObservation(t *testing.T) {
+	before := relay.RelayStatus{Stats: relay.Stats{WorkerPackets: 10, CallerPackets: 20}}
+	// Replayed caller ciphertext must reach the old relay; it must not cause
+	// any worker output there, either immediately or later in the window.
+	after := relay.RelayStatus{Stats: relay.Stats{WorkerPackets: 10, CallerPackets: 180}}
+	require.NoError(t, lossResumedWorkerFence(before, after))
+	after.Stats.WorkerPackets++
+	require.ErrorContains(t, lossResumedWorkerFence(before, after), "phase=restored-relay-fence")
+	require.ErrorContains(t, lossResumedWorkerFence(before, after), "before=10 after=11")
+}

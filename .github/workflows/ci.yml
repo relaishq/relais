@@ -440,12 +440,8 @@ jobs:
             echo "Runner image: $ImageOS $ImageVersion"
             "$chrome" --version
           } | tee chrome-version.log
-      - name: Build relay
-        run: |
-          mkdir -p bin
-          go build -o bin/relais-relay ./cmd/relais-relay
       - name: Run planned and unplanned Chrome relay changes
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           set -o pipefail
           make test-chrome-relay-change |& tee chrome-relay-change.log
@@ -673,7 +669,7 @@ jobs:
           sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=lan 2>&1 | tee bin/netns-crash-run.log
       - name: Run ten live-relay network blackhole trials with eight calls
         if: matrix.fault == 'relay-loss'
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           set -o pipefail
           sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -relay-loss-netns -runs=10 -after=60s 2>&1 | tee bin/netns-relay-loss.log
