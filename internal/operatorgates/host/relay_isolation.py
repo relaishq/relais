@@ -12,31 +12,27 @@ ISOLATION_LOCK = "/run/relais-gate-isolation.lock"
 def isolation_rules(seconds, generation):
     # Management, resolver and link-local clock/credential traffic survive. A generic
     # established rule would also preserve existing store and private HTTP flows.
-    return f'''create table inet {ISOLATION_TABLE} {{
- comment "{generation}"
- set isolated {{ type nf_proto; flags timeout; elements = {{ ipv4 timeout {seconds}s, ipv6 timeout {seconds}s }}; }}
- chain input {{ type filter hook input priority -10; policy accept;
-  iifname "lo" accept
-  ip saddr 169.254.0.0/16 accept
-  ip6 saddr fe80::/10 accept
-  meta l4proto ipv6-icmp icmpv6 type {{ 133, 134, 135, 136 }} accept
-  udp sport 53 ct direction reply ct state established accept
-  tcp sport 53 ct direction reply ct state established accept
-  tcp sport 443 ct direction reply ct state established accept
-  meta nfproto @isolated drop
- }}
- chain output {{ type filter hook output priority -10; policy accept;
-  oifname "lo" accept
-  ip daddr 169.254.0.0/16 accept
-  ip6 daddr fe80::/10 accept
-  meta l4proto ipv6-icmp icmpv6 type {{ 133, 134, 135, 136 }} accept
-  udp dport 53 ct direction original accept
-  tcp dport 53 ct direction original accept
-  tcp dport 443 ct direction original accept
-  meta nfproto @isolated drop
- }}
-}}
-'''
+    # create only the table itself. Explicit add commands avoid relying on
+    # create-table nested-body expansion; nft commits this whole batch atomically.
+    lines = [f'create table inet {ISOLATION_TABLE} {{ comment "{generation}"; }}',
+             f"add set inet {ISOLATION_TABLE} isolated {{ type nf_proto; flags timeout; elements = {{ ipv4 timeout {seconds}s, ipv6 timeout {seconds}s }}; }}"]
+    for chain in ("input", "output"):
+        lines.append(f"add chain inet {ISOLATION_TABLE} {chain} {{ type filter hook {chain} priority -10; policy accept; }}")
+        inbound = chain == "input"
+        address = "saddr" if inbound else "daddr"
+        rules = [('iifname' if inbound else 'oifname') + ' "lo" accept',
+                 f"ip {address} 169.254.0.0/16 accept",
+                 f"ip6 {address} fe80::/10 accept",
+                 "meta l4proto ipv6-icmp icmpv6 type { 133, 134, 135, 136 } accept"]
+        for protocol, port in (("udp", 53), ("tcp", 53), ("tcp", 443)):
+            if inbound:
+                rules.append(f"{protocol} sport {port} ct direction reply ct state established accept")
+            else:
+                rules.append(f"{protocol} dport {port} ct direction original accept")
+        rules.append("meta nfproto @isolated drop")
+        lines.extend(f"add rule inet {ISOLATION_TABLE} {chain} {rule}" for rule in rules)
+    return "\n".join(lines) + "\n"
+
 
 
 def isolation_table(nft, command):

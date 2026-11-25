@@ -61,7 +61,7 @@ func ValidateProcessParameters(p ProcessParameters) error {
 	}
 	for _, w := range []string{"w1", "w2"} {
 		e, ok := p.Workers[w]
-		if !ok || !endpoint(e.HTTP) || !e.Media.IsValid() || e.Media.Port() == 0 {
+		if !ok || !endpoint(e.HTTP) || !e.Media.IsValid() || e.Media.Port() == 0 || e.Media.Port() == 53 || e.Media.Port() == 443 {
 			return fault("invalid-process-endpoints")
 		}
 	}

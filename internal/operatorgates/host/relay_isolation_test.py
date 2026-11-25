@@ -29,7 +29,11 @@ class IsolationTests(unittest.TestCase):
 
     def test_rules_keep_management_clock_and_resolver_directions(self):
         rules = isolation.isolation_rules(120, "abc")
-        self.assertIn('create table inet relais_gate_isolation', rules)
+        self.assertEqual(rules.splitlines()[0], 'create table inet relais_gate_isolation { comment "abc"; }')
+        self.assertEqual(rules.count('add set inet relais_gate_isolation isolated'), 1)
+        for chain in ('input', 'output'):
+            self.assertEqual(rules.count('add chain inet relais_gate_isolation ' + chain), 1)
+            self.assertEqual(rules.count('add rule inet relais_gate_isolation ' + chain + ' '), 8)
         self.assertEqual(rules.count('timeout 120s'), 2)
         self.assertIn('ipv4 timeout', rules)
         self.assertIn('ipv6 timeout', rules)

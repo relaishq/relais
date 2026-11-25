@@ -2098,6 +2098,10 @@ It does not permit arbitrary established traffic: existing media, private HTTP
 and store connections must also stop. The rules use no deployment addresses or
 call ports. The supplied endpoint parameters remain the source of probe targets.
 
+The nft transaction creates the table with its generation comment, then adds
+the set, chains and rules explicitly in the same atomic batch. It does not rely
+on nested declarations inside `create table` to install child objects.
+
 Before applying the table atomically, the step arms a transient host-owned
 systemd timer. The timer deletes only the table generation it owns, even if the
 operator process has exited. Kernel set elements also expire after the supplied
@@ -2110,9 +2114,13 @@ A host reboot also removes this nonpersistent table.
 `TestContainerTemplateBoot` runs the actual isolation code against the booted
 relay and its private peers. It checks UDP, private HTTP and store isolation,
 management-port egress, loopback, explicit restore, repeated restore and expiry
-after the operator process exits. It also checks that the DNS/link-local rules
-are installed and that existing HTTP and UDP flows stop. This proof needs Linux,
-privileged disposable containers and a pinned release archive.
+after the operator process exits. It validates the installed nft JSON
+semantically: table and chain scope, each allowed path, protocol/direction/state,
+and the final timed drops. Prefix,
+range and set forms are normalized to the same address space. Missing or
+over-broad rules fail. Existing HTTP and UDP flows must also stop. A failure
+prints the exact JSON readback and a fresh table dump for diagnosis. This proof
+needs Linux, privileged disposable containers and a pinned release archive.
 
 The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
 path PRs and matching main pushes. It builds a native archive from the tested

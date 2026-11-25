@@ -146,9 +146,13 @@ func TestReceiptBindingEqualSecondBoundaries(t *testing.T) {
 }
 
 func TestReceiptBindingEveryHost(t *testing.T) {
-	for i, slot := range operator.HostSlots(false) {
+	for _, slot := range operator.HostSlots(false) {
 		t.Run(slot, func(t *testing.T) {
 			in := bindingFixture(t)
+			i := slices.IndexFunc(in.BeforeRun, func(h BindingHost) bool { return h.Slot == slot })
+			if i < 0 {
+				t.Fatal("missing host fixture", slot)
+			}
 			in.BeforeRun[i].Tracking.Rows[10].SkewPPM++
 			_, err := BindReceipt(in)
 			var refusal *BindingError

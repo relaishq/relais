@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/host"
 )
@@ -20,6 +21,15 @@ func verifyRelayIsolation(t *testing.T, ctx context.Context, d *Deployment) {
 			t.Fatal(err)
 		}
 		if _, err = d.command(ctx, "relay-isolation-proof", args, []byte(script)); err != nil {
+			diagnostic, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer done()
+			query, lookupErr := d.execArgs("relay", nil, "nft", "-j", "list", "table", "inet", "relais_gate_isolation")
+			if lookupErr == nil {
+				result, readErr := d.command(diagnostic, "relay-isolation-json", query, nil)
+				t.Logf("NFT_ISOLATION_TABLE_JSON: %s\nstderr: %s\nread error: %v", d.Topology.Redact(string(result.Stdout)), d.Topology.Redact(string(result.Stderr)), readErr)
+			} else {
+				t.Logf("NFT_ISOLATION_TABLE_JSON unavailable: %v", lookupErr)
+			}
 			t.Fatal(err)
 		}
 	}
@@ -31,11 +41,15 @@ func verifyRelayIsolation(t *testing.T, ctx context.Context, d *Deployment) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checker, err := assets.ReadFile("assets/isolation_check.py")
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw, err := json.Marshal((&rehearsal{topology: d.Topology}).parameters())
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := string(process) + "\n" + string(isolation) + "\np=json.loads(" + fmt.Sprintf("%q", string(raw)) + ")\n"
+	prefix := string(process) + "\n" + string(isolation) + "\n" + string(checker) + "\np=json.loads(" + fmt.Sprintf("%q", string(raw)) + ")\n"
 	// A real UDP echo peer and management HTTPS-port peer. Both end themselves.
 	run("shared", prefix+`
 import urllib.parse
@@ -86,9 +100,8 @@ def existing_udp():
  assert media.recv(1024)==b'existing-flow'
 existing_udp()
 assert execute('relay-isolate',dict(p,isolationSeconds=15))['completed']
-rules=command([shutil.which('nft'),'-n','list','table','inet',ISOLATION_TABLE])
-for required in ('169.254.0.0/16','fe80::/10','icmpv6 type','udp dport 53','udp sport 53','tcp dport 53','tcp sport 53'):
- assert required in rules, 'missing management/clock rule: '+required
+rules=command([shutil.which('nft'),'-j','list','table','inet',ISOLATION_TABLE])
+check_isolation_json(rules)
 blocked(lambda: (existing.request('GET','/status'),existing.getresponse().read()))
 blocked(existing_udp)
 existing.close();media.close()
