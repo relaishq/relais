@@ -98,11 +98,13 @@ def rule_contract(rule, sets):
     return frozenset(conditions), verdicts[0]
 
 
-def isolation_contract(document, table='relais_gate_isolation'):
+def isolation_contract(document, generation, table='relais_gate_isolation'):
     """Require all and only the allowed paths, followed by both-family drops."""
     objects = document['nftables']
     scoped = lambda row: row.get('family') == 'inet' and row.get('table') == table
-    assert any(x.get('table', {}).get('family') == 'inet' and x['table'].get('name') == table for x in objects), 'isolation table missing'
+    tables = [x['table'] for x in objects if x.get('table', {}).get('family') == 'inet' and x['table'].get('name') == table]
+    assert len(tables) == 1, 'isolation table missing'
+    assert not tables[0].get('flags'), 'unexpected isolation table flags'
     sets = {x['set']['name']: x['set'].get('elem', []) for x in objects if 'set' in x and scoped(x['set'])}
     # JSON commands may carry elements separately from their set declaration.
     for row in objects:
@@ -113,6 +115,7 @@ def isolation_contract(document, table='relais_gate_isolation'):
             sets[element['name']].extend(values if isinstance(values, list) else [values])
     timed = [x['set'] for x in objects if 'set' in x and scoped(x['set']) and x['set']['name'] == 'isolated']
     assert len(timed) == 1 and 'timeout' in timed[0].get('flags', []), 'timed isolation set missing'
+    assert generation and timed[0].get('comment') == generation, 'isolation set generation differs'
     for chain in ('input', 'output'):
         chains = [x['chain'] for x in objects if 'chain' in x and scoped(x['chain']) and x['chain']['name'] == chain]
         assert len(chains) == 1 and chains[0].get('type') == 'filter' and chains[0].get('hook') == chain and chains[0].get('prio') == -10 and chains[0].get('policy') == 'accept', 'isolation base chain missing: ' + chain
@@ -141,9 +144,9 @@ def isolation_contract(document, table='relais_gate_isolation'):
         assert verdict == 'drop' and terms == frozenset([term(('meta', 'nfproto'), 2, 10)]), 'both-family isolation drop missing: ' + chain
 
 
-def check_isolation_json(raw):
+def check_isolation_json(raw, generation):
     try:
-        isolation_contract(json.loads(raw))
+        isolation_contract(json.loads(raw), generation)
     except Exception:
         print('NFT_ISOLATION_TABLE_JSON_AT_CHECK: ' + raw, file=sys.stderr)
         raise

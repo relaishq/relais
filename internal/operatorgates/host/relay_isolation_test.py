@@ -18,19 +18,25 @@ class IsolationTests(unittest.TestCase):
         self.addCleanup(lock.stop)
         self.calls = []
         self.present = False
+        self.generation = "a" * 32
 
     def command(self, args):
         self.calls.append(args)
         if args[1:4] == ["-j", "list", "tables"]:
             return json.dumps({"nftables": [{"table": {"family": "inet", "name": isolation.ISOLATION_TABLE}}] if self.present else []})
+        if args[1:4] == ["-j", "list", "table"]:
+            return json.dumps({"nftables": [
+                {"table": {"family": "inet", "name": isolation.ISOLATION_TABLE, "handle": 5}},
+                {"set": {"family": "inet", "table": isolation.ISOLATION_TABLE, "name": "isolated", "type": "nf_proto", "flags": ["timeout"], "comment": self.generation}}]})
         if args[1] == "delete":
             self.present = False
         return ""
 
     def test_rules_keep_management_clock_and_resolver_directions(self):
         rules = isolation.isolation_rules(120, "abc")
-        self.assertEqual(rules.splitlines()[0], 'create table inet relais_gate_isolation { comment "abc"; }')
+        self.assertEqual(rules.splitlines()[0], 'create table inet relais_gate_isolation')
         self.assertEqual(rules.count('add set inet relais_gate_isolation isolated'), 1)
+        self.assertIn('flags timeout; comment "abc";', rules)
         for chain in ('input', 'output'):
             self.assertEqual(rules.count('add chain inet relais_gate_isolation ' + chain), 1)
             self.assertEqual(rules.count('add rule inet relais_gate_isolation ' + chain + ' '), 8)
@@ -72,16 +78,22 @@ class IsolationTests(unittest.TestCase):
         with patch.object(isolation.shutil, 'which', return_value='/sbin/nft'), patch.object(isolation.subprocess, 'run'):
             isolation.relay_isolation('relay-isolate', {'isolationSeconds': 1}, self.command)
         script = self.calls[-1][-1]
-        for same in (True, False):
+        for change in ({}, {'comment': 'other'}, {'family': 'ip'}, {'table': 'other'}, {'name': 'other'}, {'comment': None}):
             calls = []
             def run(args, **kw):
                 calls.append(args)
                 generation = self.calls[-1][3].split('isolation-', 1)[1]
-                return type('Result', (), {'returncode': 0, 'stdout': json.dumps({'nftables': [{'table': {'comment': generation if same else 'other'}}]})})()
+                owner = dict(family='inet', table=isolation.ISOLATION_TABLE, name='isolated', type='nf_proto', handle=1, flags=['timeout'], comment=generation)
+                owner.update(change)
+                # Model nft 1.0.4 after element expiry: no table comment or elem.
+                return type('Result', (), {'returncode': 0, 'stdout': json.dumps({'nftables': [
+                    {'metainfo': {'version': '1.0.4', 'release_name': 'Lester Gooch #3', 'json_schema_version': 1}},
+                    {'table': {'family': 'inet', 'name': isolation.ISOLATION_TABLE, 'handle': 5}},
+                    {'set': owner}]})})()
             with patch.object(subprocess, 'run', run):
                 exec(script, {})
-            self.assertEqual(len(calls), 2 if same else 1)
-            if same:
+            self.assertEqual(len(calls), 2 if not change else 1, change)
+            if not change:
                 self.assertEqual(calls[-1], ['/sbin/nft', 'delete', 'table', 'inet', isolation.ISOLATION_TABLE])
 
     def test_bounds_and_missing_prerequisite_never_mutate(self):
@@ -112,6 +124,13 @@ class IsolationTests(unittest.TestCase):
             for _ in range(2):
                 self.assertEqual(isolation.relay_isolation('relay-restore', {}, self.command), {'completed': True})
         self.assertEqual([c for c in self.calls if c[1] == 'delete'], [['/sbin/nft', 'delete', 'table', 'inet', isolation.ISOLATION_TABLE]])
+
+    def test_restore_requires_the_set_generation(self):
+        self.present = True
+        self.generation = None
+        with patch.object(isolation.shutil, 'which', return_value='/sbin/nft'), self.assertRaisesRegex(ValueError, 'generation'):
+            isolation.relay_isolation('relay-restore', {}, self.command)
+        self.assertFalse(any(c[1] == 'delete' for c in self.calls))
 
     def test_relay_status_uses_the_selected_endpoint(self):
         endpoints = {'relay': 'http://192.0.2.1:24700', 'relayTwo': 'http://192.0.2.2:24700'}

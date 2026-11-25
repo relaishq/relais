@@ -12,6 +12,7 @@ spec = importlib.util.spec_from_file_location('isolation_check', path)
 proof = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(proof)
 TABLE = 'relais_gate_isolation'
+GENERATION = 'a' * 32
 
 
 def fixture(address_form='prefix', enum_form='numbers'):
@@ -21,7 +22,7 @@ def fixture(address_form='prefix', enum_form='numbers'):
     def match(kind, field, value):
         left = {'payload': {'protocol': kind, 'field': field}} if kind not in ('ct', 'meta') else {kind: {'key': field}}
         return {'match': {'op': 'in' if isinstance(value, dict) and 'set' in value else '==', 'left': left, 'right': value}}
-    scoped('set', name='isolated', type='nf_proto', flags=['timeout'], elem=[{'elem': {'val': 'ipv4', 'timeout': 15, 'expires': 14}}, {'elem': {'val': 'ipv6', 'timeout': 15, 'expires': 14}}])
+    scoped('set', name='isolated', type='nf_proto', flags=['timeout'], comment=GENERATION, elem=[{'elem': {'val': 'ipv4', 'timeout': 15, 'expires': 14}}, {'elem': {'val': 'ipv6', 'timeout': 15, 'expires': 14}}])
     v4 = {'prefix': {'addr': '169.254.0.0', 'len': 16}}
     v6 = {'prefix': {'addr': 'fe80::', 'len': 10}}
     if address_form == 'cidr':
@@ -74,7 +75,7 @@ class IsolationReadbackTests(unittest.TestCase):
         for form in ('prefix', 'cidr', 'range', 'set', 'named-set', 'element-objects'):
             for enums in ('numbers', 'names', 'range'):
                 with self.subTest(addresses=form, enums=enums):
-                    proof.isolation_contract(fixture(form, enums))
+                    proof.isolation_contract(fixture(form, enums), GENERATION)
 
     def test_every_allowed_rule_is_required_in_its_chain(self):
         original = fixture()
@@ -84,7 +85,7 @@ class IsolationReadbackTests(unittest.TestCase):
             doc = copy.deepcopy(original)
             del doc['nftables'][i]
             with self.subTest(rule=i), self.assertRaises(AssertionError):
-                proof.isolation_contract(doc)
+                proof.isolation_contract(doc, GENERATION)
 
     def test_scope_prefix_protocol_state_and_direction_are_semantic(self):
         changes = (
@@ -97,7 +98,7 @@ class IsolationReadbackTests(unittest.TestCase):
             for row in doc['nftables']:
                 edit(row)
             with self.assertRaises(AssertionError):
-                proof.isolation_contract(doc)
+                proof.isolation_contract(doc, GENERATION)
         for field, replacement in (('prefix', {'addr': '169.0.0.0', 'len': 8}), ('direction', 'original'), ('state', {'set': ['established', 'related']})):
             doc = fixture()
             for row in doc['nftables']:
@@ -111,21 +112,45 @@ class IsolationReadbackTests(unittest.TestCase):
                     if value.get('left') == {'ct': {'key': field}}:
                         value['right'] = replacement
             with self.subTest(field=field), self.assertRaises(AssertionError):
-                proof.isolation_contract(doc)
+                proof.isolation_contract(doc, GENERATION)
 
     def test_empty_table_broad_established_and_early_drop_refuse(self):
         doc = fixture()
         with self.assertRaises(AssertionError):
-            proof.isolation_contract({'nftables': doc['nftables'][:2]})
+            proof.isolation_contract({'nftables': doc['nftables'][:2]}, GENERATION)
         rules = [r['rule'] for r in doc['nftables'] if r.get('rule', {}).get('chain') == 'input']
         rules[0]['expr'] = [{'match': {'op': '==', 'left': {'ct': {'key': 'state'}}, 'right': 'established'}}, {'accept': None}]
         with self.assertRaises(AssertionError):
-            proof.isolation_contract(doc)
+            proof.isolation_contract(doc, GENERATION)
         doc = fixture()
         rules = [r['rule'] for r in doc['nftables'] if r.get('rule', {}).get('chain') == 'output']
         rules[0]['expr'], rules[-1]['expr'] = rules[-1]['expr'], rules[0]['expr']
         with self.assertRaises(AssertionError):
-            proof.isolation_contract(doc)
+            proof.isolation_contract(doc, GENERATION)
+
+    def test_nft_104_set_generation_without_table_comment(self):
+        doc = fixture()
+        table = doc['nftables'][1]['table']
+        table['handle'] = 5
+        doc['nftables'][0]['metainfo'].update(version='1.0.4', release_name='Lester Gooch #3')
+        doc['nftables'][2]['set']['handle'] = 1
+        self.assertNotIn('comment', table)
+        proof.isolation_contract(doc, GENERATION)
+        for comment in (None, '', 'b' * 32):
+            with self.subTest(comment=comment), self.assertRaisesRegex(AssertionError, 'generation'):
+                doc['nftables'][2]['set']['comment'] = comment
+                proof.isolation_contract(doc, GENERATION)
+        # A matching table comment cannot substitute for the missing set owner.
+        table['comment'] = GENERATION
+        del doc['nftables'][2]['set']['comment']
+        with self.assertRaisesRegex(AssertionError, 'generation'):
+            proof.isolation_contract(doc, GENERATION)
+
+    def test_dormant_table_refuses(self):
+        doc = fixture()
+        doc['nftables'][1]['table']['flags'] = ['dormant']
+        with self.assertRaisesRegex(AssertionError, 'flags'):
+            proof.isolation_contract(doc, GENERATION)
 
     def test_failure_prints_the_exact_json_readback(self):
         doc = fixture()
@@ -133,5 +158,5 @@ class IsolationReadbackTests(unittest.TestCase):
         raw = json.dumps(doc)
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(AssertionError):
-            proof.check_isolation_json(raw)
+            proof.check_isolation_json(raw, GENERATION)
         self.assertEqual(stderr.getvalue(), 'NFT_ISOLATION_TABLE_JSON_AT_CHECK: ' + raw + '\n')

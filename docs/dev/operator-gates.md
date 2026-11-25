@@ -2098,14 +2098,17 @@ It does not permit arbitrary established traffic: existing media, private HTTP
 and store connections must also stop. The rules use no deployment addresses or
 call ports. The supplied endpoint parameters remain the source of probe targets.
 
-The nft transaction creates the table with its generation comment, then adds
-the set, chains and rules explicitly in the same atomic batch. It does not rely
+The nft transaction creates the table, then adds the set with its generation
+comment, chains and rules explicitly in the same atomic batch. Set comments
+remain visible in JSON on nft 1.0.4; table comments do not. It does not rely
 on nested declarations inside `create table` to install child objects.
 
 Before applying the table atomically, the step arms a transient host-owned
-systemd timer. The timer deletes only the table generation it owns, even if the
-operator process has exited. Kernel set elements also expire after the supplied
-duration, so packet drops end within that duration even if timer dispatch is
+systemd timer. The timer matches the generation on the `isolated` set and
+deletes only the table generation it owns, even if the operator process has
+exited. Explicit restore checks the current set owner under the same lock.
+Kernel set elements also expire after the supplied duration, so packet drops
+end within that duration even if timer dispatch is
 late. Timer cleanup normally removes the empty table within about one more
 second; a delayed or failed timer can leave an inert table. Early restore deletes
 only the dedicated table. An old timer cannot delete a later isolation attempt.
@@ -2115,9 +2118,9 @@ A host reboot also removes this nonpersistent table.
 relay and its private peers. It checks UDP, private HTTP and store isolation,
 management-port egress, loopback, explicit restore, repeated restore and expiry
 after the operator process exits. It validates the installed nft JSON
-semantically: table and chain scope, each allowed path, protocol/direction/state,
-and the final timed drops. Prefix,
-range and set forms are normalized to the same address space. Missing or
+semantically: table flags and scope, set generation, chain scope, each allowed
+path, protocol/direction/state, and the final timed drops. Prefix, range and set
+forms are normalized to the same address space. Missing or
 over-broad rules fail. Existing HTTP and UDP flows must also stop. A failure
 prints the exact JSON readback and a fresh table dump for diagnosis. This proof
 needs Linux, privileged disposable containers and a pinned release archive.

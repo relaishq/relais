@@ -99,9 +99,13 @@ def existing_udp():
  media.sendto(b'existing-flow',(address.hostname,address.port))
  assert media.recv(1024)==b'existing-flow'
 existing_udp()
-assert execute('relay-isolate',dict(p,isolationSeconds=15))['completed']
+# Fix only the generated UUID so the readback must match this fault's owner.
+from unittest.mock import patch
+generation=uuid.uuid4()
+with patch.object(uuid,'uuid4',return_value=generation):
+ assert execute('relay-isolate',dict(p,isolationSeconds=15))['completed']
 rules=command([shutil.which('nft'),'-j','list','table','inet',ISOLATION_TABLE])
-check_isolation_json(rules)
+check_isolation_json(rules,generation.hex)
 blocked(lambda: (existing.request('GET','/status'),existing.getresponse().read()))
 blocked(existing_udp)
 existing.close();media.close()

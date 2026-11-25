@@ -14,8 +14,9 @@ def isolation_rules(seconds, generation):
     # established rule would also preserve existing store and private HTTP flows.
     # create only the table itself. Explicit add commands avoid relying on
     # create-table nested-body expansion; nft commits this whole batch atomically.
-    lines = [f'create table inet {ISOLATION_TABLE} {{ comment "{generation}"; }}',
-             f"add set inet {ISOLATION_TABLE} isolated {{ type nf_proto; flags timeout; elements = {{ ipv4 timeout {seconds}s, ipv6 timeout {seconds}s }}; }}"]
+    # nft 1.0.4 exposes set comments in JSON, but omits table comments.
+    lines = [f'create table inet {ISOLATION_TABLE}',
+             f'add set inet {ISOLATION_TABLE} isolated {{ type nf_proto; flags timeout; comment "{generation}"; elements = {{ ipv4 timeout {seconds}s, ipv6 timeout {seconds}s }}; }}']
     for chain in ("input", "output"):
         lines.append(f"add chain inet {ISOLATION_TABLE} {chain} {{ type filter hook {chain} priority -10; policy accept; }}")
         inbound = chain == "input"
@@ -42,6 +43,10 @@ def isolation_table(nft, command):
 
 def isolation_restore(nft, command):
     if isolation_table(nft, command):
+        rows = json.loads(command([nft, "-j", "list", "table", "inet", ISOLATION_TABLE]))["nftables"]
+        if not any(x.get("set", {}).get("family") == "inet" and x["set"].get("table") == ISOLATION_TABLE
+                   and x["set"].get("name") == "isolated" and x["set"].get("comment") for x in rows):
+            raise ValueError("isolation generation missing")
         command([nft, "delete", "table", "inet", ISOLATION_TABLE])
 
 
@@ -66,7 +71,7 @@ def relay_isolation(op, p, command):
 with open({ISOLATION_LOCK!r}, 'a') as lock:
  fcntl.flock(lock, fcntl.LOCK_EX)
  r=subprocess.run([{nft!r}, '-j', 'list', 'table', 'inet', {ISOLATION_TABLE!r}],capture_output=True,text=True,timeout=5)
- if r.returncode == 0 and any(x.get('table',{{}}).get('comment') == {generation!r} for x in json.loads(r.stdout)['nftables']):
+ if r.returncode == 0 and any(x.get('set',{{}}).get('family') == 'inet' and x['set'].get('table') == {ISOLATION_TABLE!r} and x['set'].get('name') == 'isolated' and x['set'].get('comment') == {generation!r} for x in json.loads(r.stdout)['nftables']):
   subprocess.run([{nft!r}, 'delete', 'table', 'inet', {ISOLATION_TABLE!r}],check=True,timeout=5)
 '''
         command(["systemd-run", "--quiet", "--collect", "--unit=relais-gate-isolation-" + generation,
