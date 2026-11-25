@@ -36,6 +36,7 @@ func TestRelayLossProcedure(t *testing.T) {
 		{"pass", "pass", "", false, false, false},
 		{"slow", "fail", "relay-loss-slow", false, false, false},
 		{"missing", "inconclusive", "relay-loss-missing", false, false, false},
+		{"missing-episode", "inconclusive", "relay-loss-episode-count", false, false, false},
 		{"unrecovered", "fail", "relay-loss-unrecovered", false, false, false},
 		{"target-insufficient", "inconclusive", "relay-loss-target-insufficient", false, false, false},
 		{"restore-failed", "fail", "relay-loss-restore-failed", false, false, false},
@@ -180,7 +181,10 @@ func TestRelayLossProcedure(t *testing.T) {
 							e.FirstVideoNS = 0
 							e.FirstAudioNS = 0
 						}
-						if tc.name != "missing" {
+						if tc.name == "missing" {
+							e.ArrivalsBeforeApplied = nil
+						}
+						if tc.name != "missing-episode" {
 							episodes = []callharness.RelayRestartEpisode{e}
 						}
 					}

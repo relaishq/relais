@@ -114,7 +114,7 @@ func generatorWindow(samples []loadgen.Stats, start, end time.Time, windows []wa
 		return false
 	}
 	regular := false
-	var cumulative time.Duration
+	var cumulative, excursion time.Duration
 	for i, s := range samples {
 		if i > 0 {
 			if !s.At.After(samples[i-1].At) {
@@ -132,6 +132,7 @@ func generatorWindow(samples []loadgen.Stats, start, end time.Time, windows []wa
 			if cumulative < -sampleTolerance || cumulative > sampleTolerance {
 				return false
 			}
+			excursion = max(excursion, cumulative, -cumulative)
 		}
 		if s.Interval >= samplePeriod-sampleTolerance && s.Interval <= samplePeriod+sampleTolerance {
 			regular = true
@@ -143,7 +144,12 @@ func generatorWindow(samples []loadgen.Stats, start, end time.Time, windows []wa
 	if !regular || samples[0].At.Add(-samples[0].Interval).After(start.Add(min(samples[0].Interval, 1500*time.Millisecond))) || samples[len(samples)-1].At.Before(end) {
 		return false
 	}
+	// Match statsClockExcursion: the largest absolute cumulative excursion
+	// over the whole timeline pads both event edges, including later reversals.
+	padded := make([]wallWindow, 0, len(windows))
 	for _, w := range windows {
+		w = wallWindow{w.start.Add(-excursion), w.end.Add(excursion)}
+		padded = append(padded, w)
 		if w.start.Before(samples[0].At.Add(-samples[0].Interval)) || w.end.After(samples[len(samples)-1].At) || w.end.Before(w.start) {
 			return false
 		}
@@ -154,7 +160,7 @@ func generatorWindow(samples []loadgen.Stats, start, end time.Time, windows []wa
 			continue
 		}
 		a, b := s.At.Add(-s.Interval), s.At
-		for _, w := range windows {
+		for _, w := range padded {
 			if a.Add(-s.IntervalLateness.Max).Before(w.end) && b.After(w.start) {
 				return false
 			}

@@ -82,7 +82,7 @@ func TestRelayLossRules(t *testing.T) {
 			m[0].Call.Tracks[0].MediaGap = ptr(relayloss.Budget + 1)
 			m[0].Episodes = nil
 		}},
-		{"missing-record", "inconclusive", "relay-loss-missing", func(_ *Input, m []message) { m[0].Episodes = nil }},
+		{"missing-record", "inconclusive", "relay-loss-episode-count", func(_ *Input, m []message) { m[0].Episodes = nil }},
 		{"extra-restart", "inconclusive", "relay-loss-episode-count", func(_ *Input, m []message) { m[0].Episodes = append(m[0].Episodes, m[0].Episodes[0]) }},
 		{"wrong-generation", "inconclusive", "relay-loss-generation-mismatch", func(_ *Input, m []message) { m[0].Episodes[0].Generation = ptr(uint64(9)) }},
 		{"wrong-candidate", "inconclusive", "relay-loss-candidate-mismatch", func(_ *Input, m []message) { m[0].Episodes[0].Candidate = ptr("127.0.0.3:9000") }},
@@ -365,5 +365,54 @@ func TestOmittedArrivalCountsAreMissing(t *testing.T) {
 	got := Judge(in)
 	if got.Outcome != "inconclusive" || !slices.Contains(got.Calls[0].Causes, "relay-loss-missing") {
 		t.Fatal(got)
+	}
+}
+
+func TestSpecificEpisodeCausesDoNotAddMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name, cause string
+		change      func(*message)
+	}{
+		{"absent", "relay-loss-episode-count", func(m *message) { m.Episodes = nil }},
+		{"extra", "relay-loss-episode-count", func(m *message) { m.Episodes = append(m.Episodes, m.Episodes[0]) }},
+		{"restart-count", "relay-loss-episode-count", func(m *message) { *m.Call.ICERestarts = 0 }},
+		{"early-media", "relay-loss-media-order-violated", func(m *message) { *m.Episodes[0].Counts[0].Count = 1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, ms := fixture(t)
+			tc.change(&ms[0])
+			got := Judge(wire(t, in, ms))
+			if got.Outcome != "inconclusive" || !slices.Equal(got.Calls[0].Causes, []string{tc.cause}) {
+				t.Fatal(got)
+			}
+			ms[0].Call.Tracks[0].MediaGap = nil
+			got = Judge(wire(t, in, ms))
+			if !slices.Contains(got.Calls[0].Causes, "relay-loss-missing") {
+				t.Fatal("independent missing gap hidden", got)
+			}
+		})
+	}
+}
+
+func TestGeneratorWindowPadsLargestClockExcursion(t *testing.T) {
+	base := time.Unix(1800000000, 0).UTC()
+	for _, drift := range []time.Duration{0, 25 * time.Millisecond, -25 * time.Millisecond} {
+		var samples []loadgen.Stats
+		for i := 1; i <= 200; i++ {
+			s := loadgen.Stats{At: base.Add(time.Duration(i) * time.Second), Interval: time.Second}
+			if i >= 50 && i < 100 {
+				s.At = s.At.Add(drift)
+			}
+			if i == 9 {
+				s.CPUPerGOMAXPROCS = 100
+			}
+			samples = append(samples, s)
+		}
+		// The unpadded left edge is 10ms after the flagged interval ends.
+		// A later excursion (even one reversed before hangup) pads both edges.
+		got := generatorWindow(samples, base.Add(time.Second), base.Add(200*time.Second), []wallWindow{{base.Add(9*time.Second + 10*time.Millisecond), base.Add(20 * time.Second)}})
+		if got != (drift == 0) {
+			t.Fatal(drift, got)
+		}
 	}
 }

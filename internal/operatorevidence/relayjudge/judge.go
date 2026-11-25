@@ -222,7 +222,17 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 			row.add("fail", "relay-loss-decryption")
 		}
 		v := move.Measurement
-		for _, fact := range []struct{ trusted, failed bool }{{v.AudioLoss.Trusted, v.AudioLoss.Failed}, {v.Audio.Verdict.Trusted, v.Audio.Verdict.Failed}, {v.ResumeVerdict.Trusted, v.ResumeVerdict.Failed}, {v.VideoLoss.Trusted, v.VideoLoss.Failed}, {v.Video.Verdict.Trusted, v.Video.Verdict.Failed}, {v.FirstContentVerdict.Trusted, v.FirstContentVerdict.Failed}, {v.FirstNewContentVerdict.Trusted, v.FirstNewContentVerdict.Failed}, {v.FirstLiveVerdict.Trusted, v.FirstLiveVerdict.Failed}} {
+		facts := []struct{ trusted, failed bool }{
+			{v.AudioLoss.Trusted, v.AudioLoss.Failed},
+			{v.Audio.Verdict.Trusted, v.Audio.Verdict.Failed},
+			{v.ResumeVerdict.Trusted, v.ResumeVerdict.Failed},
+			{v.VideoLoss.Trusted, v.VideoLoss.Failed},
+			{v.Video.Verdict.Trusted, v.Video.Verdict.Failed},
+			{v.FirstContentVerdict.Trusted, v.FirstContentVerdict.Failed},
+			{v.FirstNewContentVerdict.Trusted, v.FirstNewContentVerdict.Failed},
+			{v.FirstLiveVerdict.Trusted, v.FirstLiveVerdict.Failed},
+		}
+		for _, fact := range facts {
 			if fact.trusted && fact.failed {
 				row.add("fail", "relay-loss-call-lost")
 			}
@@ -277,7 +287,6 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 	} else if row.Role == "affected" {
 		if len(m.Episodes) != 1 {
 			row.add("inconclusive", "relay-loss-episode-count")
-			missing()
 		} else {
 			e := m.Episodes[0]
 			anchors := duration(e.Last) && duration(e.Start) && duration(e.Applied) && duration(e.Video) && duration(e.Audio) && *e.Last > 0 && *e.Last < *e.Start
@@ -306,6 +315,7 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 				row.add("inconclusive", "relay-loss-anchor-order")
 			}
 			countOK := !m.recoveryInvalid && len(e.Counts) == len(c.Tracks) && len(c.Tracks) == 2
+			mediaOrderViolated := false
 			counted := map[string]bool{}
 			for _, n := range e.Counts {
 				t := tracks[n.Kind]
@@ -315,12 +325,13 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 				counted[n.Kind] = true
 				if positive(n.Count) {
 					row.add("inconclusive", "relay-loss-media-order-violated")
-					countOK = false
+					mediaOrderViolated = true
 				}
 			}
 			if !countOK {
 				missing()
 			}
+			countOK = countOK && !mediaOrderViolated
 			// A complete unanswered attempt can prove non-recovery without an
 			// answer binding. A partial answered attempt still needs that binding
 			// and the arrival counts; contradictory anchors cannot prove absence.
@@ -330,13 +341,17 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 					*e.Applied >= *e.Start && *e.Applied <= *c.HungUpAt &&
 						(*e.Video == 0 || *e.Video >= *e.Applied && *e.Video <= *c.HungUpAt) &&
 						(*e.Audio == 0 || *e.Audio >= *e.Applied && *e.Audio <= *c.HungUpAt))
+			unrecovered := complete && consistent && countOK && (*e.Applied == 0 || binding) &&
+				(*e.Video == 0 || *e.Audio == 0) && !slices.Contains(row.Causes, "relay-loss-media-order-violated") &&
+				*c.HungUpAt >= *e.Last &&
+				*c.HungUpAt-*e.Last >= 2*relayloss.Budget
 			// Only a bound, ordered, zero-early-media episode is a recovery measure.
 			// Other independent gap failures still survive missing episode evidence.
 			if recovered && binding && countOK {
 				row.Gap = max(row.Gap, max(*e.Video, *e.Audio)-*e.Last)
-			} else if complete && consistent && countOK && (*e.Applied == 0 || binding) && (*e.Video == 0 || *e.Audio == 0) && !slices.Contains(row.Causes, "relay-loss-media-order-violated") && *c.HungUpAt >= *e.Last && *c.HungUpAt-*e.Last >= 2*relayloss.Budget {
+			} else if unrecovered {
 				row.add("fail", "relay-loss-unrecovered")
-			} else {
+			} else if !mediaOrderViolated && !slices.Contains(row.Causes, "relay-loss-episode-count") {
 				missing()
 			}
 		}

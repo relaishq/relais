@@ -86,24 +86,8 @@ func BuildRelayLossPinned(ctx context.Context, checkout, commit, goExecutable, o
 		return out, err
 	}
 	dest := filepath.Join(source, "internal", "operatorevidence", "relayjudge")
-	if err = os.MkdirAll(dest, 0700); err != nil {
+	if err = overlayRelayJudge(dest); err != nil {
 		return out, err
-	}
-	entries, err := relayJudgeSources.ReadDir("relayjudge")
-	if err != nil {
-		return out, err
-	}
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-		raw, e := relayJudgeSources.ReadFile("relayjudge/" + entry.Name())
-		if e != nil {
-			return out, e
-		}
-		if e = os.WriteFile(filepath.Join(dest, entry.Name()), raw, 0600); e != nil {
-			return out, e
-		}
 	}
 	entry := filepath.Join(source, "cmd", "operator-relay-loss-judge")
 	if err = os.MkdirAll(entry, 0700); err != nil {
@@ -132,6 +116,33 @@ func BuildRelayLossPinned(ctx context.Context, checkout, commit, goExecutable, o
 		out.pinned.Diagnostics = diagnostics[0]
 	}
 	return out, nil
+}
+
+// Replace the archived directory so removed source files cannot enter an R build.
+func overlayRelayJudge(dest string) error {
+	if err := os.RemoveAll(dest); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dest, 0700); err != nil {
+		return err
+	}
+	entries, err := relayJudgeSources.ReadDir("relayjudge")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		raw, e := relayJudgeSources.ReadFile("relayjudge/" + entry.Name())
+		if e != nil {
+			return e
+		}
+		if e = os.WriteFile(filepath.Join(dest, entry.Name()), raw, 0600); e != nil {
+			return e
+		}
+	}
+	return nil
 }
 
 const relayLossMain = `package main

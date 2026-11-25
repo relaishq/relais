@@ -1,6 +1,8 @@
 package operatorevidence
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -101,5 +103,61 @@ func TestRelayLossPinnedBuildAndHash(t *testing.T) {
 	}
 	if _, err = p.Judge(ctx, in); err == nil || err.Error() != "judge-binary-differs" {
 		t.Fatal("accepted tampered binary", err)
+	}
+}
+
+func TestRelayLossOverlayRemovesStaleArchivedFiles(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for _, name := range []string{"stale.go", "nested/stale_test.go"} {
+		raw := []byte("archived source must not survive")
+		if err := writer.WriteHeader(&tar.Header{Name: "internal/operatorevidence/relayjudge/" + name, Mode: 0600, Size: int64(len(raw))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := extract(tar.NewReader(&archive), source); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(source, "internal", "operatorevidence", "relayjudge")
+	if err := overlayRelayJudge(dest); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"stale.go", "nested"} {
+		if _, err := os.Stat(filepath.Join(dest, name)); !os.IsNotExist(err) {
+			t.Fatal("stale archive entry survived", name, err)
+		}
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := relayJudgeSources.ReadDir("relayjudge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var production int
+	for _, entry := range want {
+		if strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		production++
+		expected, err := relayJudgeSources.ReadFile("relayjudge/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dest, entry.Name()))
+		if err != nil || !bytes.Equal(got, expected) {
+			t.Fatal("overlay differs", entry.Name(), err)
+		}
+	}
+	if len(entries) != production {
+		t.Fatal("unexpected overlay entries", entries)
 	}
 }

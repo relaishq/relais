@@ -2189,7 +2189,9 @@ applied. V is the first non-repeated decodable video frame after application;
 A is the first advancing audio after application. Each affected call must have
 one episode at preflight generation plus one, with the answer candidate equal
 to the survivor endpoint. Unaffected calls must have no restart episodes or
-ICE restarts.
+ICE restarts. A restart on an unaffected call is inconclusive, with cause
+`relay-loss-unaffected-restart`. Its gap checks still fail real disruptions
+that exceed the budget.
 
 The per-run invariant is: **no media arrives on any track in (L, Applied]**.
 The isolation drops all old relay output. The ordering assumption is that packets
