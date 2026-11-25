@@ -252,6 +252,7 @@ func runBridge(ctx context.Context, c BridgeConfig, box Store, load string, host
 	stopped := false
 	done := false
 	stats := 0
+	var relayLossSamples []json.RawMessage
 	httpURL := ""
 	var sessions []string
 	// Publishing a stop is one submission even when publication is lost.
@@ -391,6 +392,9 @@ func runBridge(ctx context.Context, c BridgeConfig, box Store, load string, host
 					}
 					return nil
 				}, stop, interrupt)
+				if streamErr == nil && m.Phase == RelayLoss {
+					relayLossSamples = append(relayLossSamples, rawLine)
+				}
 			case "done":
 				done = true
 			}
@@ -471,6 +475,10 @@ func runBridge(ctx context.Context, c BridgeConfig, box Store, load string, host
 					err = errors.New("invalid-caller-feed")
 					break
 				}
+				if feed.Payload.Kind == "relay-loss-finish" && m.Phase != RelayLoss {
+					err = errors.New("relay-loss-finish-outside-R")
+					break
+				}
 				ack, e := Deliver(deliveryCtx, feed, ids, local, interrupt, SystemClock{})
 				if e != nil {
 					ack.Error = "feed-rejected"
@@ -517,6 +525,11 @@ func runBridge(ctx context.Context, c BridgeConfig, box Store, load string, host
 	ids := append([]string{}, sessions...)
 	stateMu.Unlock()
 	exitCode := child.ProcessState.ExitCode()
+	if m.Phase == RelayLoss {
+		if createJSON(finalCtx, box, m.Job()+"/relay-loss-stats.json", relayLossSamples) != Committed {
+			return errors.New("relay-loss-stats-publication-unknown")
+		}
+	}
 	finished := map[string]any{"runId": m.RunID, "job": "caller-1", "done": done, "pid": child.Process.Pid, "exitCode": exitCode, "stats": stats, "sessions": ids, "stopped": wasStopped}
 	if createJSON(finalCtx, box, m.Job()+"/finished.json", finished) != Committed {
 		return errors.New("finished-publication-unknown")

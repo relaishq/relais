@@ -216,6 +216,9 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 }
 
 func leaseRestoration(op string, rollback, recovery bool) bool {
+	if op == "relay-start" || op == "relay-loss-stop" {
+		return true
+	}
 	switch op {
 	case "worker-start", "control-start", "signal-start", "unfreeze", "relay-replenish", "relay-restore":
 		return true

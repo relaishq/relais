@@ -83,8 +83,8 @@ func (r *recorder) observeRelayRestartsLocked(now time.Duration) {
 			last, e.FirstVideoNS, e.FirstAudioNS = r.relayRecoveryPoints(e.RestartStartNS, e.AppliedNS, min(now, deadline))
 			e.LastBeforeNS = max(e.LastBeforeNS, last)
 		}
-		e.final = now >= deadline || e.FirstVideoNS > 0 && e.FirstAudioNS > 0
-		if e.final && e.AppliedNS > 0 && e.AppliedNS <= deadline {
+		e.final = r.hungUp || now >= deadline || e.FirstVideoNS > 0 && e.FirstAudioNS > 0
+		if e.final && e.AppliedNS > 0 && e.AppliedNS <= deadline && r.historyStart <= e.LastBeforeNS {
 			// Packet timestamps are taken before acquiring the recorder lock.
 			// Settle the counts with the media evidence, not at answer application.
 			for _, track := range r.tracks {

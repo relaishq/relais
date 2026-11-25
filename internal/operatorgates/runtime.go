@@ -130,16 +130,19 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	if err := ValidateProcessParameters(r.Config.Parameters); err != nil {
 		return StepResult{}, err
 	}
+	if (op == "relay-start" || op == "relay-loss-stop") && (!r.Session.scenario.RelayTwo || len(r.Session.scenario.Gates) != 1 || r.Session.scenario.Gates[0] != operator.RelayHostLoss || op == "relay-start" && slot != "relay-two") {
+		return StepResult{}, fault("invalid-process-scope")
+	}
 	expected := "shared"
 	switch op {
 	case "worker-down", "worker-stop", "worker-start":
 		expected = extra.Worker
-	case "relay-status", "relay-isolate", "relay-restore":
+	case "relay-status", "relay-isolate", "relay-restore", "relay-start":
 		expected = slot
 		if slot != "relay" && slot != "relay-two" || extra.IsolationSeconds < 0 || extra.IsolationSeconds > 300 {
 			return StepResult{}, fault("invalid-process-scope")
 		}
-	case "relay-inspect", "relay-stage", "relay-stop", "relay-replenish":
+	case "relay-inspect", "relay-stage", "relay-stop", "relay-replenish", "relay-loss-stop":
 		expected = "relay"
 	}
 	if (op != "telemetry" && slot != expected) || !slices.Contains(r.Session.hostSlots(), slot) || extra.Worker != "" && extra.Worker != "w1" && extra.Worker != "w2" {
@@ -314,6 +317,9 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 			return operator.Unknown
 		}
 		observed, e = DecodeStepResult(op, envelope.Data)
+		if e == nil && op == "status" && extra.RelayLossStatus {
+			e = observe.Require(envelope.Data, observe.Contract{"relays", "relays[].name", "relays[].lost", "relays[].pending", "relays[].draining", "calls[].relay.slot", "calls[].relay.generation"})
+		}
 		observed.Started = envelope.Started
 		observed.Ended = envelope.Ended
 		if e != nil {
@@ -501,7 +507,7 @@ func DecodeStepResult(op string, data json.RawMessage) (r StepResult, err error)
 			err = fault("missing-readiness-evidence")
 		}
 		r.ReadyMS = &ready.ReadyMS
-	case "worker-start", "worker-stop", "worker-down", "control-stop", "freeze", "unfreeze", "signal-stop", "signal-start", "relay-stage", "relay-stop", "relay-replenish", "relay-isolate", "relay-restore", "worker-empty":
+	case "worker-start", "worker-stop", "worker-down", "control-stop", "freeze", "unfreeze", "signal-stop", "signal-start", "relay-stage", "relay-stop", "relay-replenish", "relay-isolate", "relay-restore", "relay-start", "relay-loss-stop", "worker-empty":
 		var proof struct {
 			Completed bool `json:"completed"`
 		}

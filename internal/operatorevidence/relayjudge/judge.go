@@ -334,7 +334,7 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 			// Other independent gap failures still survive missing episode evidence.
 			if recovered && binding && countOK {
 				row.Gap = max(row.Gap, max(*e.Video, *e.Audio)-*e.Last)
-			} else if complete && consistent && (*e.Applied == 0 || binding && countOK) && (*e.Video == 0 || *e.Audio == 0) && !slices.Contains(row.Causes, "relay-loss-media-order-violated") && *c.HungUpAt >= *e.Last && *c.HungUpAt-*e.Last >= 2*relayloss.Budget {
+			} else if complete && consistent && countOK && (*e.Applied == 0 || binding) && (*e.Video == 0 || *e.Audio == 0) && !slices.Contains(row.Causes, "relay-loss-media-order-violated") && *c.HungUpAt >= *e.Last && *c.HungUpAt-*e.Last >= 2*relayloss.Budget {
 				row.add("fail", "relay-loss-unrecovered")
 			} else {
 				missing()

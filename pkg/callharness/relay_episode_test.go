@@ -120,3 +120,29 @@ func TestRelayLossEpisodeRecordsAppliedAnswer(t *testing.T) {
 	// This planned change validates hook wiring, not the unplanned-loss order.
 	require.Len(t, row.ArrivalsBeforeApplied, 2)
 }
+
+func TestRelayLossCountsRequireRetainedHistory(t *testing.T) {
+	c := relayEpisodeCall()
+	r := c.rec
+	index := r.beginRelayRestart(r.start.Add(4 * time.Second))
+	r.appliedRelayRestart(index, r.start.Add(5*time.Second), 1, "192.0.2.2:3478")
+	r.historyStart = 3 * time.Second // L=2.1s is no longer in the retained interval.
+	r.observeRelayRestarts(r.start.Add(7 * time.Second))
+	row := c.RelayLossEpisodes()[0]
+	require.Equal(t, 2100*time.Millisecond, row.LastBeforeNS)
+	require.Nil(t, row.ArrivalsBeforeApplied, "trimmed history must not fabricate zero counts")
+}
+
+func TestRelayLossHangupSettlesCountsBeforeDeadline(t *testing.T) {
+	c := relayEpisodeCall()
+	r := c.rec
+	index := r.beginRelayRestart(r.start.Add(4 * time.Second))
+	r.appliedRelayRestart(index, r.start.Add(5*time.Second), 1, "192.0.2.2:3478")
+	r.hungUp = true
+	r.hungUpAt = 5500 * time.Millisecond
+	rows := c.RelayLossEpisodes()
+	require.Len(t, rows[0].ArrivalsBeforeApplied, 2)
+	require.Zero(t, rows[0].FirstAudioNS)
+	require.Zero(t, rows[0].FirstVideoNS)
+	require.True(t, r.relayEpisodes[0].final)
+}

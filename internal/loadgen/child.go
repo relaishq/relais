@@ -179,6 +179,13 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	var startMu sync.Mutex
 	started := false
 	mux := http.NewServeMux()
+	mediaContext := lifetime
+	var relayFinish *relayLossFinish
+	if o.RelayLoss {
+		mediaContext, relayFinish = registerRelayLossFinish(lifetime, mux)
+		defer relayFinish.cancel()
+	}
+
 	if o.Distributed != nil {
 		registerDistributedFeed(mux, calls, bursts)
 	}
@@ -291,7 +298,10 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			// sends for the whole duration, so its frame ticks and keyframes
 			// keep that phase and it ends up to one second after the others.
 			offset := o.Desync.MediaStart(i)
-			sendErr := sendAfter(lifetime, offset, o.Duration, c.SendMedia)
+			sendErr := sendAfter(mediaContext, offset, o.Duration, c.SendMedia)
+			if relayFinish != nil {
+				sendErr = relayFinish.sendError(sendErr)
+			}
 			// Allow the 10s final status read plus echo drain and deletion.
 			hangup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 			defer stop()

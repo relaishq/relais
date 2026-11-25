@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -71,6 +72,9 @@ func (c resourceCallerClock) Sleep(ctx context.Context, d time.Duration) error {
 
 func (r ResourceRunner) validate(s *Session) error {
 	c := r.Config
+	if slices.Contains(s.scenario.Gates, operator.RelayHostLoss) && (!s.scenario.RelayTwo || len(s.scenario.Gates) != 1) {
+		return errors.New("invalid-resource-config")
+	}
 	if ValidateProcessParameters(c.Parameters) != nil || s.scenario.RelayTwo && c.Parameters.RelayTwo == "" || inventory.ValidatePins(c.Pins, s.scenario) != nil {
 		return errors.New("invalid-resource-config")
 	}
@@ -91,6 +95,8 @@ func CampaignDuration(g operator.Gate) time.Duration {
 	switch g {
 	case operator.Rollout, operator.ControlRestart, operator.UpgradeRollback:
 		return 1500 * time.Second
+	case operator.RelayHostLoss:
+		return 300 * time.Second
 	case operator.RelayDeploy:
 		return 600 * time.Second
 	}
@@ -196,6 +202,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	var launchers resourceCallers
 	var boundary *operatorcaller.Broker
 	var caller *CallerRuntime
+	var relayLossMedia *MediaSummary
 	var current operator.Gate
 	gatePools := map[operator.Gate]*EvidenceRuntime{}
 	gateMediaErrors := map[operator.Gate]error{}
@@ -208,6 +215,9 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		identity := operatorcaller.Identity{RunID: c.Endpoints.RunID, Gate: gate, Phase: phase, CallerID: strconv.FormatUint(next, 10), Attempt: "1", PublicSHA: s.scenario.Caller.SourceCommit}
 		next++
 		manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: s.Budget.armed, CreatedAt: s.clock.Wall().UnixMilli(), Deadline: wall(callerEnd).UnixMilli(), Plan: operatorcaller.NewPlan(phase, seconds, identity.PublicSHA), Endpoints: c.Endpoints}
+		if gate == operator.RelayHostLoss {
+			manifest.Plan = operatorcaller.NewRelayLossPlan(seconds, identity.PublicSHA)
+		}
 		port := &ResourcePorts{Session: s, Peer: peer, End: callerEnd, Manifest: manifest}
 		broker, err := operatorcaller.NewBroker(manifest, operatorcaller.NewMailbox(port), resourceCallerClock{s.clock, pause}, s)
 		return port, broker, err
@@ -263,7 +273,14 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			if !fits {
 				return fault("gate-deadline")
 			}
-			port, broker, err := makeCaller(gate, operatorcaller.Survivor, seconds, callerEnd)
+			phaseKind := operatorcaller.Survivor
+			if gate == operator.RelayHostLoss {
+				phaseKind = operatorcaller.RelayLoss
+				if !s.scenario.RelayTwo || len(s.scenario.Gates) != 1 {
+					return fault("precondition-failed")
+				}
+			}
+			port, broker, err := makeCaller(gate, phaseKind, seconds, callerEnd)
 			if err != nil {
 				return fault("precondition-failed:caller")
 			}
@@ -331,6 +348,11 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		},
 		Command: func(ctx context.Context, gate operator.Gate, end time.Duration) ProcedureResult {
 			p := procedures()
+			if gate == operator.RelayHostLoss {
+				out := runResourceRelayLoss(ctx, s, runtime, caller, p, min(end, caller.End-callerStopReserve), c.JudgeBinary)
+				relayLossMedia = out.Media
+				return out
+			}
 			p.Media = caller.Media
 			p.Duplicates = caller.Duplicates
 			out := runResourceCommand(ctx, s.clock, caller, end, p, func(ctx context.Context, p ProcedurePorts, end time.Duration) ProcedureResult {
@@ -357,6 +379,9 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			return out
 		},
 		Finalize: func(ctx context.Context, end time.Duration) (*MediaSummary, error) {
+			if len(s.gates) == 1 && s.gates[0] == operator.RelayHostLoss {
+				return relayLossMedia, nil
+			}
 			attemptsBefore := len(s.clockDrainAttempts) + s.clockDrainAttemptsOmitted
 			summary, coverage, err := s.finalizePool(ctx, end, pool, c.Bounds, r.CoverageRead, pause)
 			if coverage != nil {
@@ -367,6 +392,9 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			return summary, err
 		},
 		RefreshMedia: func(ctx context.Context, gate operator.Gate) (media *MediaSummary, err error) {
+			if gate == operator.RelayHostLoss {
+				return relayLossMedia, nil
+			}
 			started := time.Now()
 			defer func() {
 				if r.Timing != nil {

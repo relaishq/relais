@@ -187,7 +187,7 @@ func TestHostileRawRecords(t *testing.T) {
 	}
 }
 func TestRelayLossTrustBoundary(t *testing.T) {
-	t.Run("no-answer-is-unrecovered", func(t *testing.T) {
+	t.Run("no-answer-without-counts-is-missing", func(t *testing.T) {
 		in, m := fixture(t)
 		e := &m[0].Episodes[0]
 		e.Applied = ptr(time.Duration(0))
@@ -197,7 +197,7 @@ func TestRelayLossTrustBoundary(t *testing.T) {
 		e.Audio = ptr(time.Duration(0))
 		e.Counts = nil
 		got := Judge(wire(t, in, m))
-		if got.Outcome != "fail" || !slices.Contains(got.Calls[0].Causes, "relay-loss-unrecovered") {
+		if got.Outcome != "inconclusive" || !slices.Contains(got.Calls[0].Causes, "relay-loss-missing") {
 			t.Fatal(got)
 		}
 	})
@@ -340,5 +340,30 @@ func TestInitialRelayGenerationIsZero(t *testing.T) {
 	}
 	if _, err := DecodeInput([]byte(missing)); err == nil {
 		t.Fatal("missing preflight generation accepted as zero")
+	}
+}
+
+func TestArrivalCountsMustCoverEachTrack(t *testing.T) {
+	for _, counts := range [][]arrival{nil, {}, {{"audio", ptr(uint32(1)), ptr(0)}}, {{"audio", ptr(uint32(1)), ptr(0)}, {"audio", ptr(uint32(1)), ptr(0)}}} {
+		in, m := fixture(t)
+		m[0].Episodes[0].Counts = counts
+		got := Judge(wire(t, in, m))
+		if got.Outcome != "inconclusive" {
+			t.Fatal(got)
+		}
+	}
+}
+
+func TestOmittedArrivalCountsAreMissing(t *testing.T) {
+	in, m := fixture(t)
+	in = wire(t, in, m)
+	original := in.CallerJSONL
+	in.CallerJSONL = strings.Replace(in.CallerJSONL, `,"arrivalsBeforeApplied":[{"kind":"audio","ssrc":1,"count":0},{"kind":"video","ssrc":2,"count":0}]`, "", 1)
+	if original == in.CallerJSONL {
+		t.Fatal("omission did not match")
+	}
+	got := Judge(in)
+	if got.Outcome != "inconclusive" || !slices.Contains(got.Calls[0].Causes, "relay-loss-missing") {
+		t.Fatal(got)
 	}
 }

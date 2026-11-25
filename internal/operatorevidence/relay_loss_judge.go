@@ -158,3 +158,9 @@ func (p RelayLossJudge) Judge(ctx context.Context, in relayjudge.Input) (relayju
 	err = observe.DecodeClosedLimit(stdout, &result, nil, operator.MaxBlobBytes)
 	return result, err
 }
+
+// OpenRelayLossJudge uses an already-built, scenario-bound executable. Every
+// invocation still verifies its bytes; this does not build during the campaign.
+func OpenRelayLossJudge(commit, sha, binary string) RelayLossJudge {
+	return RelayLossJudge{pinned: PinnedJudge{Commit: commit, SHA256: sha, Binary: binary}}
+}
