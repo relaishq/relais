@@ -88,7 +88,8 @@ type ProcessExtra struct {
 	Sessions   []string `json:"sessions,omitempty"`
 	// RecoveryStatus is the failover recovery wait's opt-in for control status.
 	// It changes only the script's failure branch, never its parameters.
-	RecoveryStatus bool `json:"-"`
+	RecoveryStatus   bool `json:"-"`
+	IsolationSeconds int  `json:"isolationSeconds,omitempty"`
 }
 type WorkerEndpoint struct {
 	HTTP  string         `json:"http"`
@@ -98,6 +99,7 @@ type ProcessParameters struct {
 	ClockProbeFile string                    `json:"clockProbeFile,omitempty"`
 	Control        string                    `json:"control"`
 	Relay          string                    `json:"relay"`
+	RelayTwo       string                    `json:"relayTwo,omitempty"`
 	Store          string                    `json:"store"`
 	StorePort      int                       `json:"storePort"`
 	Workers        map[string]WorkerEndpoint `json:"workers"`

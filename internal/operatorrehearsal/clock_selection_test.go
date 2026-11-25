@@ -628,8 +628,8 @@ func TestClockAdmissionTiming(t *testing.T) {
 		{s(1), s(13), s(10), s(10), s(150), "clock-admit-poll"},
 		{s(4), s(16), s(13), s(34), s(180), "clock-admit-poll"},
 	} {
-		seed, setup, window := clockAdmissionTiming(c.latency, c.poll)
-		err := CheckClockAdmissionTiming(c.latency, c.poll)
+		seed, setup, window := clockAdmissionTiming(c.latency, c.poll, false)
+		err := CheckClockAdmissionTiming(c.latency, c.poll, false)
 		if seed != c.seed || setup != c.setup || window != c.window || c.cause == "" != (err == nil) || err != nil && err.Error() != c.cause {
 			t.Fatal("MUTATION: admission-timing", c.latency, c.poll, seed, setup, window, err)
 		}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/relaishq/relais/pkg/operator"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,7 +20,7 @@ func leaseFixture() LeaseObservation {
 func selectionFixture() (SelectionEvidence, SelectionPolicy) {
 	start := int64(1792886402)
 	in := SelectionEvidence{RunID: "selection-test", FrontendSlot: "relay", ControlSlot: "shared", CallerLeapMode: "unsmeared", StartUnixSeconds: start, EndUnixSeconds: start + 120}
-	for _, slot := range selectionSlots {
+	for _, slot := range slices.Sorted(slices.Values(operator.HostSlots(false))) {
 		h := SelectionHost{Slot: slot, LeapMode: "unsmeared", Tracking: TrackingLog{ReadComplete: true, Rows: []TrackingRow{}, Breaks: []TrackingBreak{}}, Lease: leaseFixture()}
 		for at := start - 2; at <= start+121; at++ {
 			h.Tracking.Rows = append(h.Tracking.Rows, TrackingRow{BeforeRun: true, UnixSeconds: at, MaxErrorSeconds: 1.234e-6, MaxErrorDecimal: "1.234e-06", LeapStatus: "N"})
@@ -206,7 +207,7 @@ func TestClockSelectLeaseFreshness(t *testing.T) {
 		{"same-row", 0, false}, {"upper-boundary", 60000000000, false}, {"late", 60000000001, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for i, slot := range selectionSlots {
+			for i, slot := range operator.HostSlots(false) {
 				in, p := selectionFixture()
 				last := in.Hosts[i].Tracking.Rows[len(in.Hosts[i].Tracking.Rows)-1].UnixSeconds * 1000000000
 				in.Hosts[i].Lease.MeasuredUnixNS, in.Hosts[i].Lease.ReferenceUnixNS = fmt.Sprint(last+tc.offset), fmt.Sprint(last+tc.offset)
@@ -389,7 +390,7 @@ func TestRecordedLeaseAndOptionalParsingAreVerdictNeutral(t *testing.T) {
 		b, _ := json.Marshal(pub)
 		require.True(t, bytes.Equal(a, b), "%s != %s", a, b)
 		rows := map[string]Sample{"relay": parsed, "shared": parsed, "w1": parsed, "w2": parsed}
-		e, err := Check(rows, Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 1}, "relay", "shared")
+		e, err := Check(rows, Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 1}, "relay", "shared", false)
 		require.NoError(t, err)
 		require.Equal(t, int64(2), e.Control)
 	}

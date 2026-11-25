@@ -31,7 +31,7 @@ type Operation string
 
 const (
 	HostExecute Operation = "host.execute"
-	// HostReadBatch is optional. It groups four independent inventory or clock
+	// HostReadBatch is optional. It groups independent inventory or clock
 	// reads; adapters must join every result and must never retry a child.
 	HostReadBatch Operation = "host.read-batch"
 	// Lease observations carry typed inputs only; adapters generate the reader.

@@ -82,15 +82,15 @@ func TestRehearsalPollTimingCharacterization(t *testing.T) {
 	for _, poll := range []int64{1, 8} {
 		t.Run(strconv.FormatInt(poll, 10), func(t *testing.T) {
 			period := time.Duration(poll) * time.Second
-			seed, setup, window := clockAdmissionTiming(400*time.Millisecond, period)
+			seed, setup, window := clockAdmissionTiming(400*time.Millisecond, period, false)
 			require.Equal(t, 10*time.Second, seed)
 			require.Equal(t, 10*time.Second, setup)
 			require.Equal(t, 150*time.Second, window)
-			seed, setup, window = rehearsalClockAdmissionTiming(400*time.Millisecond, period)
+			seed, setup, window = rehearsalClockAdmissionTiming(400*time.Millisecond, period, false)
 			require.Equal(t, 10*time.Second, seed)
 			require.Equal(t, 10*time.Second, setup)
 			require.Equal(t, 320*time.Second, window)
-			require.NoError(t, CheckClockAdmissionTiming(400*time.Millisecond, period))
+			require.NoError(t, CheckClockAdmissionTiming(400*time.Millisecond, period, false))
 			o := clocks.LeaseObservation{Available: true, ErrorBoundNS: 1000, MeasuredUnixNS: "1793930005800000000", ReferenceUnixNS: "1793930000000000000", ReferenceAgeNS: 5800000000, PollSeconds: strconv.FormatInt(poll, 10), ResidualPPM: "0", SkewPPM: "0", DispersionStartSeconds: "0.000001000", DispersionEndSeconds: "0.000001001", IntervalNS: 20000000, HostElapsedNS: 20000000}
 			lease, err := clocks.RecordLease(o, o.HostElapsedNS)
 			require.NoError(t, err)

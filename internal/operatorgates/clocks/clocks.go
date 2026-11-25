@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 type Sample struct {
@@ -151,12 +152,12 @@ func Parse(data []byte) (s Sample, err error) {
 }
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
-func Check(rows map[string]Sample, bounds Bounds, frontendSlot, controlSlot string) (Evidence, error) {
+func Check(rows map[string]Sample, bounds Bounds, frontendSlot, controlSlot string, relayTwo bool) (Evidence, error) {
 	e := Evidence{Version: EvidenceVersion, Clocks: rows}
 	if bounds.FrontendControlBoundNS < 0 || bounds.FrontendWorkerBoundNS < 0 || !finite(bounds.DriftPPM) || bounds.DriftPPM < 0 {
 		return e, fmt.Errorf("invalid clock assumptions")
 	}
-	for _, slot := range []string{"relay", "w1", "w2", "shared"} {
+	for _, slot := range operator.HostSlots(relayTwo) {
 		if _, ok := rows[slot]; !ok {
 			return e, fmt.Errorf("missing independent clock evidence")
 		}

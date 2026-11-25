@@ -91,12 +91,12 @@ func BindReceipt(in ReceiptBindingInput) (ReceiptBinding, error) {
 }
 
 func bindingReadback(e SelectionEvidence, reads []BindingHost) error {
-	if len(reads) != len(selectionSlots) {
+	if len(reads) != len(e.Hosts) {
 		return &BindingError{"clock-binding-readback-differ"}
 	}
 	seen := map[string]bool{}
 	for _, h := range reads {
-		if !slices.Contains(selectionSlots, h.Slot) || seen[h.Slot] {
+		if !slices.Contains(operator.HostSlots(len(e.Hosts) == 5), h.Slot) || seen[h.Slot] {
 			return &BindingError{"clock-binding-roles-differ"}
 		}
 		seen[h.Slot] = true

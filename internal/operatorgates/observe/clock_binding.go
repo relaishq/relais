@@ -97,7 +97,7 @@ func clockNumber(s string) bool {
 }
 func (b ClockBinding) Valid(expected string) bool {
 	r := b.Receipt
-	if !coverageSlot(r.FrontendSlot) || !coverageSlot(r.ControlSlot) || !clockRunPattern.MatchString(r.RunID) || r.Formula != ClockSelectionFormula || (r.CallerLeapMode != "smeared" && r.CallerLeapMode != "unsmeared") || !ClockDigestValid(r.EvidenceSHA256) || len(r.Hosts) != 4 || !clockNumber(r.Policy.MaxDispersionGrowthPPM) {
+	if !coverageSlot(r.FrontendSlot) || !coverageSlot(r.ControlSlot) || !clockRunPattern.MatchString(r.RunID) || r.Formula != ClockSelectionFormula || (r.CallerLeapMode != "smeared" && r.CallerLeapMode != "unsmeared") || !ClockDigestValid(r.EvidenceSHA256) || (len(r.Hosts) != 4 && len(r.Hosts) != 5) || !clockNumber(r.Policy.MaxDispersionGrowthPPM) {
 		return false
 	}
 	seen := map[string]bool{}
@@ -108,6 +108,13 @@ func (b ClockBinding) Valid(expected string) bool {
 		seen[h.Slot] = true
 	}
 
+	// DecoderSources also compiles in pinned release trees; keep host-set
+	// validation self-contained instead of calling newer operator helpers.
+	for _, slot := range []string{"relay", "shared", "w1", "w2", r.FrontendSlot, r.ControlSlot} {
+		if !seen[slot] {
+			return false
+		}
+	}
 	raw, err := json.Marshal(b.Receipt)
 	return err == nil && ClockDigestValid(expected) && b.Binding.ReceiptSHA256 == expected && fmt.Sprintf("%x", sha256.Sum256(raw)) == expected && b.Binding.Bounds == b.Receipt.Bounds && b.Binding.EvidenceSHA256 == b.Receipt.EvidenceSHA256 && b.Receipt.Version == 1 && b.Receipt.Bounds.DriftPPM == 100 && b.Receipt.Bounds.FrontendControlBoundNS >= 0 && b.Receipt.Bounds.FrontendControlBoundNS <= 1e9 && b.Receipt.Bounds.FrontendWorkerBoundNS >= 0 && b.Receipt.Bounds.FrontendWorkerBoundNS <= 1e9 && b.Receipt.Policy.SignalReserveNS >= 0 && b.Receipt.Policy.SignalReserveNS <= b.Receipt.Bounds.FrontendWorkerBoundNS
 }

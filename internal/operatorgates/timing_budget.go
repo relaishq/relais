@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
-	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -18,7 +17,10 @@ type ClockTiming struct {
 
 // timingBudget derives every lease-read and drain time from one poll period
 // and one host read latency. A session keeps one budget for its lifetime.
-type timingBudget struct{ poll, read time.Duration }
+type timingBudget struct {
+	poll, read time.Duration
+	extraHost  bool
+}
 
 // Warm local reads measured 300–390 ms; four sequential reads 1.2–1.57 s.
 var referenceTiming = timingBudget{poll: time.Second, read: 400 * time.Millisecond}
@@ -31,22 +33,24 @@ const leaseProcessStart = 150 * time.Millisecond
 const drainMinimum = 10 * time.Second
 const judgeReserveMinimum = time.Minute
 
-func hostReads() time.Duration { return time.Duration(len(inventory.Slots)) }
+func (b timingBudget) hostReads() time.Duration {
+	return time.Duration(len(operator.HostSlots(b.extraHost)))
+}
 
 // leaseReadMinimum is the time one serial lease read needs after queueing.
 func (b timingBudget) leaseReadMinimum() time.Duration { return b.read + leaseProcessStart }
 
 // leaseBatchMinimum charges a batch the service time of its four host reads.
-func (b timingBudget) leaseBatchMinimum() time.Duration { return hostReads() * b.read }
+func (b timingBudget) leaseBatchMinimum() time.Duration { return b.hostReads() * b.read }
 
 // leaseAttempt bounds a whole observation (serial or batch), including
 // send-lock queueing. Two attempts and their polls fit inside the 10P refresh.
-func (b timingBudget) leaseAttempt() time.Duration { return hostReads()*b.read + b.poll/5 }
+func (b timingBudget) leaseAttempt() time.Duration { return b.hostReads()*b.read + b.poll/5 }
 
 // drainLimit lets the trailing coverage read wait two poll periods for the
 // closing rows and then read every host once.
 func (b timingBudget) drainLimit() time.Duration {
-	return max(drainMinimum, 2*b.poll+hostReads()*b.read)
+	return max(drainMinimum, 2*b.poll+b.hostReads()*b.read)
 }
 
 // judgeReserve is the part of PoolReserve the drain never uses.
@@ -55,9 +59,11 @@ func (b timingBudget) judgeReserve() time.Duration { return PoolReserve - b.drai
 // budget refuses a configuration that cannot fit the existing deadlines.
 // restoreReads is the number of host read actions before a restoration
 // command: one batch or four serial inventory reads. Restoration reads no leases.
-func (t ClockTiming) budget(restoreReads int) (timingBudget, error) {
+func (t ClockTiming) budget(restoreReads int, relayTwo bool) (timingBudget, error) {
 	if t == (ClockTiming{}) {
-		return referenceTiming, nil
+		b := referenceTiming
+		b.extraHost = relayTwo
+		return b, nil
 	}
 	refuse := func(cause string) (timingBudget, error) {
 		return timingBudget{}, &clocks.BindingError{Cause: cause}
@@ -65,10 +71,10 @@ func (t ClockTiming) budget(restoreReads int) (timingBudget, error) {
 	if t.PollSeconds <= 0 || t.HostReadLatencyMS <= 0 || t.PollSeconds > int64(PoolReserve/time.Second) || t.HostReadLatencyMS > PoolReserve.Milliseconds() {
 		return refuse("clock-timing-invalid")
 	}
-	b := timingBudget{poll: time.Duration(t.PollSeconds) * time.Second, read: time.Duration(t.HostReadLatencyMS) * time.Millisecond}
-	// A lease is valid for five poll periods. It must outlast five reads, or a
+	b := timingBudget{extraHost: relayTwo, poll: time.Duration(t.PollSeconds) * time.Second, read: time.Duration(t.HostReadLatencyMS) * time.Millisecond}
+	// A lease is valid for five poll periods. It must outlast all host reads plus one retry, or a
 	// read and its retry leave no validity for the fault they protect.
-	if validity := time.Duration(clocks.LeaseValidityPolls) * b.poll; validity < 5*b.read {
+	if validity := time.Duration(clocks.LeaseValidityPolls) * b.poll; validity < (b.hostReads()+1)*b.read {
 		return refuse("clock-timing-lease-validity")
 	}
 	if b.judgeReserve() < judgeReserveMinimum {
@@ -85,7 +91,7 @@ func (t ClockTiming) budget(restoreReads int) (timingBudget, error) {
 // CheckClockTiming is the check before a session starts. Capabilities are not
 // known yet, so it assumes batch reads; Run checks again with the session's own.
 func (c ResourceConfig) CheckClockTiming() error {
-	_, err := c.ClockTiming.budget(1)
+	_, err := c.ClockTiming.budget(1, false)
 	return err
 }
 
@@ -93,5 +99,5 @@ func (s *Session) restoreReads() int {
 	if s.capabilities[operator.HostReadBatch] {
 		return 1
 	}
-	return len(inventory.Slots)
+	return len(s.hostSlots())
 }

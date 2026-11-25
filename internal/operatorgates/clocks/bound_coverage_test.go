@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,7 +21,7 @@ func boundCoverageFixture(t *testing.T) CoverageEvidence {
 	require.NoError(t, json.Unmarshal(raw, &s))
 	start, end := "1793930010250000000", "1793930020250000000"
 	e := CoverageEvidence{FrontendSlot: "relay", ControlSlot: "shared", Windows: []observe.CoverageWindow{{Kind: "takeover", Worker: "w1", StartUnixNS: start, EndUnixNS: end}}, KillBrackets: []observe.CoverageBracket{{Worker: "w1", MidpointUnixNS: start, BeforeUnixNS: "1793930010249999999", AfterUnixNS: "1793930010250000001"}}, Attempts: []CoverageAttempt{{Version: 2, Clocks: map[string]observe.CoverageTimeline{}}}}
-	for _, slot := range selectionSlots {
+	for _, slot := range operator.HostSlots(false) {
 		log := observe.CoverageTimeline{ReadComplete: true}
 		for at := int64(1793930000); at <= 1793930035; at++ {
 			log.Rows = append(log.Rows, observe.CoverageRow{UnixSeconds: at, LeapStatus: "N"})
@@ -92,7 +93,7 @@ func TestBoundCoverage(t *testing.T) {
 func TestBoundCoverageConsumers(t *testing.T) {
 	e := boundCoverageFixture(t)
 	rows := map[string]Sample{}
-	for _, slot := range selectionSlots {
+	for _, slot := range operator.HostSlots(false) {
 		rows[slot] = Sample{ErrorBoundNS: 100000}
 	}
 	if _, err := e.Check(rows); err == nil {
@@ -121,7 +122,7 @@ func TestBoundCoverageConsumers(t *testing.T) {
 func TestBoundCheckReserve(t *testing.T) {
 	e := boundCoverageFixture(t)
 	rows := map[string]Sample{}
-	for _, slot := range selectionSlots {
+	for _, slot := range operator.HostSlots(false) {
 		rows[slot] = Sample{ErrorBoundNS: 30000}
 	}
 	if _, err := e.Check(rows); err != nil {

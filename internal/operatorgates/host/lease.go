@@ -4,7 +4,6 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -21,7 +20,7 @@ func LeaseReadScripts(req operator.Request, probeFiles map[string]string) ([]ope
 	switch req.Operation {
 	case operator.HostLeaseRead:
 	case operator.HostLeaseReadBatch:
-		slots = inventory.Slots
+		slots = operator.HostSlots(len(args.Reads) == 5)
 	default:
 		return nil, invalid
 	}
@@ -30,7 +29,7 @@ func LeaseReadScripts(req operator.Request, probeFiles map[string]string) ([]ope
 	}
 	reads := []operator.HostRead{}
 	for i, input := range args.Reads {
-		if input.Target != slots[i] || !slices.Contains(inventory.Slots, input.Target) {
+		if input.Target != slots[i] || !slices.Contains(operator.HostSlots(true), input.Target) {
 			return nil, invalid
 		}
 		if input.ProbeFile != "" && input.ProbeFile != probeFiles[input.Target] {

@@ -102,7 +102,9 @@ func CoverageNS(s string) (int64, bool) {
 	n, err := strconv.ParseInt(s, 10, 64)
 	return n, err == nil && n >= 2*coverageSecond && n <= math.MaxInt64-2*coverageSecond
 }
-func coverageSlot(s string) bool { return s == "relay" || s == "shared" || s == "w1" || s == "w2" }
+func coverageSlot(s string) bool {
+	return s == "relay-two" || s == "relay" || s == "shared" || s == "w1" || s == "w2"
+}
 
 func coverageSpans(w CoverageWindow, control string, cb, wb int64, brackets []CoverageBracket, allowMissingBracket bool) ([]coverageSpan, string) {
 	a, okA := CoverageNS(w.StartUnixNS)

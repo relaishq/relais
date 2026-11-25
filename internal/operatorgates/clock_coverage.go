@@ -161,7 +161,7 @@ func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, win
 	for !e.DrainComplete && bounded.Err() == nil && s.clock.Elapsed() < end && len(e.DrainAttempts) < clocks.CoverageDrainAttemptLimit {
 		anyLog := false
 		attempt := clocks.Evidence{Version: clocks.EvidenceVersion, At: s.clock.Wall(), Clocks: map[string]clocks.Sample{}}
-		for _, slot := range inventory.Slots {
+		for _, slot := range s.hostSlots() {
 			// A read that cannot finish inside the limit is not submitted.
 			remaining := end - s.clock.Elapsed()
 			if bounded.Err() != nil || remaining < s.timing.leaseReadMinimum() {
@@ -193,7 +193,7 @@ func (s *Session) collectCoverage(ctx context.Context, bounds clocks.Bounds, win
 		e.Evaluate()
 		// An adapter returning only the legacy scalar shape cannot close a
 		// tracking timeline; repeating that unsupported read cannot help.
-		if !anyLog && len(attempt.Clocks) == len(inventory.Slots) {
+		if !anyLog && len(attempt.Clocks) == len(s.hostSlots()) {
 			break
 		}
 		if !e.DrainComplete {

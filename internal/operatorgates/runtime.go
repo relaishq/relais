@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,14 +54,14 @@ func ValidateProcessParameters(p ProcessParameters) error {
 			return false
 		}
 		port, err := strconv.ParseUint(u.Port(), 10, 16)
-		return err == nil && port > 0 && u.Scheme == "http" && u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.Hostname() != ""
+		return err == nil && port > 0 && port != 443 && port != 53 && u.Scheme == "http" && u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.Hostname() != ""
 	}
-	if !endpoint(p.Control) || !endpoint(p.Relay) || !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(p.Store) || p.StorePort < 1 || p.StorePort > 65535 || len(p.Workers) != 2 {
+	if !endpoint(p.Control) || !endpoint(p.Relay) || p.RelayTwo != "" && !endpoint(p.RelayTwo) || !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(p.Store) || p.StorePort < 1 || p.StorePort > 65535 || p.StorePort == 443 || p.StorePort == 53 || len(p.Workers) != 2 {
 		return fault("invalid-process-endpoints")
 	}
 	for _, w := range []string{"w1", "w2"} {
 		e, ok := p.Workers[w]
-		if !ok || !endpoint(e.HTTP) || !e.Media.IsValid() || e.Media.Port() == 0 {
+		if !ok || !endpoint(e.HTTP) || !e.Media.IsValid() || e.Media.Port() == 0 || e.Media.Port() == 53 || e.Media.Port() == 443 {
 			return fault("invalid-process-endpoints")
 		}
 	}
@@ -133,10 +134,15 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	switch op {
 	case "worker-down", "worker-stop", "worker-start":
 		expected = extra.Worker
-	case "relay-status", "relay-inspect", "relay-stage", "relay-stop", "relay-replenish":
+	case "relay-status", "relay-isolate", "relay-restore":
+		expected = slot
+		if slot != "relay" && slot != "relay-two" || extra.IsolationSeconds < 0 || extra.IsolationSeconds > 300 {
+			return StepResult{}, fault("invalid-process-scope")
+		}
+	case "relay-inspect", "relay-stage", "relay-stop", "relay-replenish":
 		expected = "relay"
 	}
-	if (op != "telemetry" && slot != expected) || slot != "shared" && slot != "relay" && slot != "w1" && slot != "w2" || extra.Worker != "" && extra.Worker != "w1" && extra.Worker != "w2" {
+	if (op != "telemetry" && slot != expected) || !slices.Contains(r.Session.hostSlots(), slot) || extra.Worker != "" && extra.Worker != "w1" && extra.Worker != "w2" {
 		return StepResult{}, fault("invalid-process-scope")
 	}
 	var stage *host.Stage
@@ -212,7 +218,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	}
 	// All ordinary preflight host reads are protected. Restoration (including
 	// stable-from rollback trials) and post-operation coverage keep their timing.
-	plannedFault := !restore && (op == "move" || op == "drain" || op == "worker-down")
+	plannedFault := !restore && (op == "move" || op == "drain" || op == "worker-down" || op == "relay-isolate")
 	quiet := FaultQuietTiming{Action: op, Slot: slot}
 	if plannedFault {
 		if r.FaultObserved != nil {
@@ -495,7 +501,7 @@ func DecodeStepResult(op string, data json.RawMessage) (r StepResult, err error)
 			err = fault("missing-readiness-evidence")
 		}
 		r.ReadyMS = &ready.ReadyMS
-	case "worker-start", "worker-stop", "worker-down", "control-stop", "freeze", "unfreeze", "signal-stop", "signal-start", "relay-stage", "relay-stop", "relay-replenish", "worker-empty":
+	case "worker-start", "worker-stop", "worker-down", "control-stop", "freeze", "unfreeze", "signal-stop", "signal-start", "relay-stage", "relay-stop", "relay-replenish", "relay-isolate", "relay-restore", "worker-empty":
 		var proof struct {
 			Completed bool `json:"completed"`
 		}

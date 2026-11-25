@@ -90,7 +90,7 @@ func TestProductionDrainCoversLastTakeover(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			s, peer, windows := lastTakeoverFixture(t)
 			var err error
-			s.timing, err = slowTiming.budget(1)
+			s.timing, err = slowTiming.budget(1, false)
 			require.NoError(t, err)
 			if mode == "reference-limit" {
 				s.timing = referenceTiming

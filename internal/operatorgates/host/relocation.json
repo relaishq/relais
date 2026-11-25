@@ -1,6 +1,7 @@
 {
   "preview_telemetry.py": {
-    "sha256": "769668d2f845b6ef39fc3567eadaedf4edd00eaa711206e97d60d0ab3844f18e"
+    "sha256": "5fd290db9e669175c7bc96628e9fb4aa1c20f89ca8e3827acf425002fa413521",
+    "change": "For #558 fix1, read the selected second relay endpoint; first-relay and worker behavior is unchanged."
   },
   "preview_telemetry_test.py": {
     "sha256": "29c75cfec32bf5f24873c87b7bc7686e17848701595ec78a40ea78cb937425f4"
@@ -14,16 +15,16 @@
     "change": "Retain priority, signal and restoration tests; add offline move phase, bounded journal read and HTTP error evidence tests for #517. For #538, test restart suppression before SIGKILL, explicit restoration and unconfirmed policy refusal. Cover installed Restart=no and on-failure policies and refusal when the operator drop-in remains loaded."
   },
   "preview_process.py": {
-    "sha256": "07bce385bc449d42117ef7bea597596dd7c9fab8b38a138e1ed84fa9cc27f5cc",
-    "normalized_ast_sha256": "6be2daca108f7ed63b6deb96f8ee3eaa86a552a4bffb2ba9f7a2b47e1b5c6e8b",
+    "sha256": "ccfa96b882dd940d938861e91df84011b0e870dee3a3a5ba019641322420182b",
+    "normalized_ast_sha256": "a6103e6062d75b680d3277e6125234d409cfa023f731bae677e4c6203d671554",
     "ast_serialization": "canonical-json-nonempty-fields-v1",
     "baseline_normalized_ast_sha256": "127b8e479c9e65362523d05097ebe09b1eb830d3f6e23bb439bc524e3460a9e8",
-    "change": "Retain signal diagnostics and scoped priority boost; add move phase and HTTP error status/code evidence and a bounded pure-read service journal tail for #517. For #538, verify a runtime restart override before deliberate worker faults and restore policy only on explicit worker-start. Restoration verifies absence of the operator drop-in without assuming the installed restart policy."
+    "change": "Retain signal diagnostics and scoped priority boost; add move phase and HTTP error status/code evidence and a bounded pure-read service journal tail for #517. For #538, verify a runtime restart override before deliberate worker faults and restore policy only on explicit worker-start. Restoration verifies absence of the operator drop-in without assuming the installed restart policy. For #558, add the optional second relay inventory and fixed bounded isolation dispatch; default host behavior is characterized separately."
   },
   "preview_inventory.py": {
-    "sha256": "35f608160aa1c0cdaadd6596117275f5acbe348ee7bd499000b76cf3e3f98ab0",
+    "sha256": "201b75ebb64a4f2ea22357bd3f2158dd5fec300d9a5ac50c75f412bd253eb51c",
     "baseline_sha256": "21e32637253696f91c8f049dac75ac988b87c83212018cf9d18092228070858e",
-    "change": "Parameterize the required node architecture for the x86_64 rehearsal; default remains arm64."
+    "change": "Parameterize the required node architecture for the x86_64 rehearsal; default remains arm64. For #558, add the optional second relay inventory and fixed bounded isolation dispatch; default host behavior is characterized separately."
   },
   "clock.py": {
     "function_sha256": "06e0e0b0c2ae9f4965f5d43238c03ed199ef6d8b264918703045eb8a353cf9ca"

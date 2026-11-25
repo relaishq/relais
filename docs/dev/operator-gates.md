@@ -2054,3 +2054,88 @@ maximum leaves five minutes for startup, collection and stop at that ceiling.
 `TestCallerWindowPreservesCampaignFitReserve` pin these limits. An excluded kill
 that leaves `trial-count-insufficient` remains a rehearsal failure, as checked
 by `TestRehearsalExcludedKillCounts`.
+
+## Optional second relay host and bounded isolation
+
+Clock admission, helper startup and receipt binding use the scenario host set.
+The four-host receipt bytes remain unchanged. A scenario can set `relayTwo: true` to require `relay-two` after the default
+`relay`, `w1`, `w2`, `shared` slots. Its inventory contains one participant,
+`relay-two`, with role `relay` and unit `relais-relay.service`. The `relay` slot
+still contains `relay-primary` and `relay-standby`. The scenario identity binds
+this choice. Missing second-host inventory or clock evidence refuses admission.
+Parts A, B and M omit this option and retain the four-host inventory, clock
+reads and procedures. The container comparison still strips the second relay.
+
+Process parameters carry `relay` and optional `relayTwo` private HTTP endpoints.
+Private relay, control and store endpoints refuse ports 443 and 53 so call
+traffic cannot use the management or DNS exceptions.
+The second endpoint is required for a scenario with the second host. Existing
+single-relay callers omit it. This foundation does not add a relay-loss gate or
+part R; those are a separate step.
+
+`relay-status` selects the corresponding endpoint. The fixed `relay-isolate`
+and `relay-restore` steps target `relay` or the opted-in
+`relay-two` slot. `isolationSeconds` defaults to 120 seconds, accepts integer
+values from 1 through 300, and cannot be extended by repeating isolation while
+the dedicated table exists. This gives a 60-second procedure twice its expected
+fault duration. Restore is idempotent and follows the existing restoration
+admission path, with fresh inventory but without a clock refresh or quiet gap.
+
+Isolation requires `nft` on the standard host image. The step checks for it
+before mutation and refuses if absent; it does not install packages or modify
+an existing firewall. The rehearsal image explicitly includes `nftables`.
+The selected image and kernel must support the timed `nf_proto` set used here;
+the Linux container proof checks the executable rules, rather than inferring
+support from the image family. No iptables fallback is used.
+
+One dedicated `inet relais_gate_isolation` table drops call input and output
+for both IP families. It keeps loopback, outbound TCP destination port 443,
+and its established reply-direction traffic. DNS keeps outbound UDP/TCP port
+53 and its reply-direction traffic. IPv4 link-local `169.254.0.0/16`, IPv6
+link-local `fe80::/10` and ICMPv6 neighbour discovery types 133–136 stay reachable
+for time, metadata, credentials and address discovery.
+It does not permit arbitrary established traffic: existing media, private HTTP
+and store connections must also stop. The rules use no deployment addresses or
+call ports. The supplied endpoint parameters remain the source of probe targets.
+
+The nft transaction creates the table, then adds the set with its generation
+comment, chains and rules explicitly in the same atomic batch. Set comments
+remain visible in JSON on nft 1.0.4; table comments do not. It does not rely
+on nested declarations inside `create table` to install child objects.
+
+Before applying the table atomically, the step arms a transient host-owned
+systemd timer. The timer matches the generation on the `isolated` set and
+deletes only the table generation it owns, even if the operator process has
+exited. Explicit restore deletes the dedicated table under the same lock,
+whatever its generation, so a table left by a failed timer can always be cleared.
+Kernel set elements also expire after the supplied duration, so packet drops
+end within that duration even if timer dispatch is
+late. Timer cleanup normally removes the empty table within about one more
+second; a delayed or failed timer can leave an inert table. Early restore deletes
+only the dedicated table. An old timer cannot delete a later isolation attempt.
+A host reboot also removes this nonpersistent table.
+
+`TestContainerTemplateBoot` runs the actual isolation code against the booted
+relay and its private peers. It checks UDP, private HTTP and store isolation,
+management-port egress, loopback, explicit restore, repeated restore and expiry
+after the operator process exits. It validates the installed nft JSON
+semantically: table flags and scope, set generation, chain scope, each allowed
+path, protocol/direction/state, and the final timed drops. Prefix, range and set
+forms are normalized to the same address space. Missing or
+over-broad rules fail. Existing HTTP and UDP flows must also stop. A failure
+prints the exact JSON readback and a fresh table dump for diagnosis. This proof
+needs Linux, privileged disposable containers and a pinned release archive.
+
+The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
+path PRs and matching main pushes. It builds a native archive from the tested
+checkout, supplies the required archive digest and opt-in environment, and
+runs the container test separately from the full media rehearsal. A proof
+failure fails that job. The existing manual target remains available.
+
+The initial job budget is 20 minutes: archive build 5 minutes, proof step 14
+minutes and Go test 12 minutes. The test leaves two minutes for cleanup before
+its Go deadline. This uses the existing measured 8 min 20 s setup reference
+above as its initial sizing basis; the isolated job's own cold-run duration
+has not yet been measured. CI must confirm that budget against its first runs.
+Local macOS checks are NOT-RUN for container execution and do not establish
+deployed management-agent or production-network behavior.

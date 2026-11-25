@@ -18,7 +18,8 @@ CATEGORIES = {"node topology differs": "topology", "stable target process not ru
               "linked build identity differs": "build-identity"}
 UNITS = {"w1": [("w1", "worker")], "w2": [("w2", "worker")],
          "relay": [("relay-primary", "relay"), ("relay-standby", "relay")],
-         "shared": [("control", "control"), ("signal", "signal")]}
+         "shared": [("control", "control"), ("signal", "signal")],
+         "relay-two": [("relay-two", "relay")]}
 
 
 def collect(slot, expected, root=pathlib.Path("/"), run=None, require_running=False, architecture="arm64"):
@@ -62,7 +63,7 @@ def collect(slot, expected, root=pathlib.Path("/"), run=None, require_running=Fa
             else:
                 effective.append(start)
         allowed = ["/opt/relais/boot/run.sh " + suffix]
-        if role == "relay":
+        if role == "relay" and slot == "relay":
             allowed.append("/opt/relais/boot/run.sh relay-standby")
         if len(effective) != 1 or effective[0] not in allowed:
             raise ValueError("unreviewed unit start")

@@ -25,8 +25,9 @@ type Pin struct {
 	BootSHA256     string `json:"bootSha256"`
 }
 
-var Slots = []string{"relay", "w1", "w2", "shared"}
-var expected = map[string][]string{"relay": {"relay-primary", "relay-standby"}, "w1": {"w1"}, "w2": {"w2"}, "shared": {"control", "signal"}}
+// Slots is the default four-host inventory. Scenario opt-in uses operator.HostSlots.
+var Slots = operator.HostSlots(false)
+var expected = map[string][]string{"relay": {"relay-primary", "relay-standby"}, "relay-two": {"relay-two"}, "w1": {"w1"}, "w2": {"w2"}, "shared": {"control", "signal"}}
 var category = regexp.MustCompile(`^INVENTORY_UNKNOWN:([a-z][a-z-]{0,29})\s*$`)
 var sha = regexp.MustCompile(`^[a-f0-9]{64}$`)
 

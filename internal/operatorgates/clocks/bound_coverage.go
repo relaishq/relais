@@ -44,7 +44,7 @@ func (e CoverageEvidence) Check(rows map[string]Sample) (Evidence, error) {
 		return Evidence{}, err
 	}
 	b.FrontendWorkerBoundNS -= k
-	return Check(rows, b, e.FrontendSlot, e.ControlSlot)
+	return Check(rows, b, e.FrontendSlot, e.ControlSlot, e.Binding != nil && len(e.Binding.Receipt.Hosts) == 5)
 }
 func (e CoverageEvidence) SignalMidpoint(before, after string, workerBound int64) (string, error) {
 	b, _, err := e.coverageParameters()

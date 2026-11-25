@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 // CheckConvergence checks the latest tracking interval on every host with
@@ -15,12 +17,12 @@ func CheckConvergence(input SelectionEvidence, policy SelectionPolicy) error {
 	if err != nil {
 		return err
 	}
-	if len(input.Hosts) != len(selectionSlots) || !slices.Contains(selectionSlots, input.FrontendSlot) || !slices.Contains(selectionSlots, input.ControlSlot) {
+	if !validSelectionHosts(input.Hosts) || !selectionHasSlot(input.Hosts, input.FrontendSlot) || !selectionHasSlot(input.Hosts, input.ControlSlot) {
 		return fmt.Errorf("clock-select-admission")
 	}
 	bounds := map[string]int64{}
 	for _, h := range input.Hosts {
-		if _, exists := bounds[h.Slot]; exists || !slices.Contains(selectionSlots, h.Slot) || !h.Tracking.ReadComplete {
+		if _, exists := bounds[h.Slot]; exists || !slices.Contains(operator.HostSlots(true), h.Slot) || !h.Tracking.ReadComplete {
 			return fmt.Errorf("clock-select-admission")
 		}
 		rows := h.Tracking.Rows

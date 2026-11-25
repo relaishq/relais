@@ -13,6 +13,7 @@ import (
 	"strconv"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 // SelectionPolicy is launcher policy. There are no built-in paid-run numbers.
@@ -50,7 +51,6 @@ type ClockSelection struct {
 // SelectionMinimumUpdates is the fewest tracking updates each host needs inside the window.
 const SelectionMinimumUpdates = 10
 
-var selectionSlots = []string{"relay", "shared", "w1", "w2"}
 var column14Pattern = regexp.MustCompile(`^[0-9]\.[0-9]{3}e([+-][0-9]{2,3})$`)
 var selectionRunPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
@@ -77,7 +77,7 @@ func Select(input SelectionEvidence, policy SelectionPolicy) (ClockSelection, er
 	if err != nil {
 		return out, err
 	}
-	if !selectionRunPattern.MatchString(input.RunID) || !slices.Contains(selectionSlots, input.FrontendSlot) || !slices.Contains(selectionSlots, input.ControlSlot) || len(input.Hosts) != 4 || input.StartUnixSeconds < 3 || input.EndUnixSeconds <= input.StartUnixSeconds || input.EndUnixSeconds > math.MaxInt64/1000000000-3 || input.EndUnixSeconds-input.StartUnixSeconds != policy.WindowSeconds {
+	if !selectionRunPattern.MatchString(input.RunID) || !selectionHasSlot(input.Hosts, input.FrontendSlot) || !selectionHasSlot(input.Hosts, input.ControlSlot) || !validSelectionHosts(input.Hosts) || input.StartUnixSeconds < 3 || input.EndUnixSeconds <= input.StartUnixSeconds || input.EndUnixSeconds > math.MaxInt64/1000000000-3 || input.EndUnixSeconds-input.StartUnixSeconds != policy.WindowSeconds {
 		return out, fmt.Errorf("clock-select-admission")
 	}
 	if input.CallerLeapMode != "smeared" && input.CallerLeapMode != "unsmeared" {
@@ -91,7 +91,7 @@ func Select(input SelectionEvidence, policy SelectionPolicy) (ClockSelection, er
 	latest := int64(maxSafeInteger)
 	r := SelectionReceipt{Version: 1, Formula: observe.ClockSelectionFormula, RunID: input.RunID, FrontendSlot: input.FrontendSlot, ControlSlot: input.ControlSlot, CallerLeapMode: input.CallerLeapMode, StartUnixSeconds: input.StartUnixSeconds, EndUnixSeconds: input.EndUnixSeconds, Policy: policy, Hosts: []SelectedHost{}}
 	for i, h := range input.Hosts {
-		if !slices.Contains(selectionSlots, h.Slot) || hosts[h.Slot].Slot != "" || len(h.Tracking.Rows) > 16384 || len(h.Tracking.Breaks) > 16384 || !h.Tracking.ReadComplete {
+		if !slices.Contains(operator.HostSlots(true), h.Slot) || hosts[h.Slot].Slot != "" || len(h.Tracking.Rows) > 16384 || len(h.Tracking.Breaks) > 16384 || !h.Tracking.ReadComplete {
 			return out, fmt.Errorf("clock-select-admission")
 		}
 		if h.LeapMode != input.CallerLeapMode {
@@ -305,4 +305,16 @@ func selectionProbes(input SelectionEvidence, hosts map[string]SelectionHost) er
 		}
 	}
 	return nil
+}
+
+func validSelectionHosts(hosts []SelectionHost) bool {
+	slots := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		slots = append(slots, h.Slot)
+	}
+	return operator.ValidHostSet(slots)
+}
+
+func selectionHasSlot(hosts []SelectionHost, slot string) bool {
+	return slices.ContainsFunc(hosts, func(h SelectionHost) bool { return h.Slot == slot })
 }
