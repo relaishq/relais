@@ -8,15 +8,21 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/relayloss"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
 func passingReport() Report {
 	r := Report{ScenarioSHA256: strings.Repeat("a", 64), Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{CompleteMedia: true, Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 16, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 36, IncludedPhases: 4}}
+	r.RelayLoss = &relayloss.Report{Completed: true}
+	for i := range relayloss.CallCount {
+		r.RelayLoss.Calls = append(r.RelayLoss.Calls, relayloss.Call{Number: i + 1, Gap: time.Second, Recovered: true})
+	}
 	for _, g := range CoveredGates {
 		r.Gates = append(r.Gates, GateReport{Gate: g, ProcedureCompleted: true, ProcedureResult: operatorgates.ProcedureResult{Status: operator.Passed, Process: operatorgates.ProcessEvidence{CompletedSteps: 1}, Media: &operatorgates.MediaSummary{Status: operator.Passed}}, CallerStopped: true})
 	}
@@ -123,6 +129,10 @@ func TestRehearsalPassRule(t *testing.T) {
 		t.Fatal(r)
 	}
 	for name, mutate := range map[string]func(*Report){
+		"relay loss missing":     func(r *Report) { r.RelayLoss = nil },
+		"relay loss slow":        func(r *Report) { r.RelayLoss.Calls[7].Gap = 5*time.Second + 1 },
+		"relay loss incomplete":  func(r *Report) { r.RelayLoss.Completed = false },
+		"relay loss unknown":     func(r *Report) { r.RelayLoss.Calls[7].Recovered = false },
 		"unknown":                func(r *Report) { r.Latched = true },
 		"precondition":           func(r *Report) { r.Gates[0].Reason = "precondition-failed" },
 		"known failure":          func(r *Report) { r.Gates[0].Status = operator.Failure },
@@ -162,6 +172,7 @@ func TestRehearsalPassRule(t *testing.T) {
 func TestReportDropsFreeText(t *testing.T) {
 	r := passingReport()
 	secret := "BEARER-private-value"
+	r.RelayLoss.FailedPhase = secret
 	r.Errors = []string{"error " + secret}
 	r.Gates[0].Reason = secret
 	r.Gates[1].Category = secret

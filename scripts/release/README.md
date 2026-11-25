@@ -40,13 +40,13 @@ publishing a supported pair, nominate its exact version and floors in the policy
 then run both upgrade and rollback on that candidate. `tested_peers: ["self"]`
 refuses distinct builds. The required pair evidence is a passing **Release pair**
 workflow run (Actions, `workflow_dispatch` with both versions; build the
-unpublished side from its ref) or `make release-pair-source PAIR_A_VERSION=0.3.0
-PAIR_A_SOURCE=<ref-or-checkout> PAIR_B_VERSION=0.3.1 PAIR_B_SOURCE=<ref-or-checkout>`.
+unpublished side from its ref) or `make release-pair-source PAIR_A_VERSION=0.4.0
+PAIR_A_SOURCE=<ref-or-checkout> PAIR_B_VERSION=0.4.1 PAIR_B_SOURCE=<ref-or-checkout>`.
 It upgrades A to B and rolls back with live callers, runs the target archive's
 own `relais-compat preflight` before every step, and keeps `release-pair-verdict.json`.
 `make release-pair PAIR_A=<dir> PAIR_B=<dir>` runs existing archives;
 `PAIR_FLAGS=-pair-expect-refusal=unsupported_pair` is the unnominated control. See the [operator procedure](../../deploy/aws/README.md#compatibility-gate-before-upgrade-or-rollback)
-for the `0.3.0`/`0.3.1` nomination example and offline inventory sources.
+for the `0.4.0`/`0.4.1` nomination example and offline inventory sources.
 
 Dial-out is additive within manifest schema 2. Inbound profiles keep HTTP v2
 request bodies and UDP v1 media writes; new readers also understand HTTP v3/v4/v5 and

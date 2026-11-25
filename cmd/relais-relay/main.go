@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"time"
@@ -28,6 +30,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	var storeConfig processrun.StoreConfig
 	storeConfig.ConnectionFlags(flag.CommandLine)
 	public := flag.String("media", processrun.Env("RELAIS_RELAY_MEDIA", "127.0.0.1:0"), "public UDP address")
+	advertise := flag.String("advertise-media", "", "caller-visible UDP address behind a static public address mapping; default is the bound media address")
 	leg := flag.String("leg", processrun.Env("RELAIS_RELAY_LEG", "127.0.0.1:0"), "private worker-leg UDP address")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")
 	hold := flag.Duration("hold-timeout", 3*time.Second, "abandoned move backstop")
@@ -68,7 +71,8 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	if *bindTimeout <= 0 {
 		return fmt.Errorf("relay bind timeout must be positive")
 	}
-	if err := validateAddresses(*standby, *public, *leg, *httpAddr); err != nil {
+	advertised, err := validateAddresses(*standby, *public, *leg, *httpAddr, *advertise)
+	if err != nil {
 		return err
 	}
 	ctx, cancel := processrun.Context()
@@ -120,7 +124,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 		return bindFailed(err)
 	}
 	defer func() { _ = listener.Close() }()
-	r, err := relay.New(relay.Config{SlotID: *slotID, InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold, Buffer: buffer})
+	r, err := relay.New(relay.Config{SlotID: *slotID, InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, AdvertiseAddr: advertised, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold, Buffer: buffer})
 	if err != nil {
 		return bindFailed(err)
 	}
@@ -148,33 +152,40 @@ func main() {
 
 // Reject invalid socket configuration before a candidate can claim or signal.
 // Validation itself must not bind anything, including the private HTTP socket.
-func validateAddresses(standby bool, public, leg, httpAddr string) error {
+func validateAddresses(standby bool, public, leg, httpAddr, advertise string) (netip.AddrPort, error) {
 	for _, addr := range []string{public, leg} {
 		udp, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
-			return err
+			return netip.AddrPort{}, err
 		}
 		if udp.IP == nil || udp.IP.IsUnspecified() {
-			return fmt.Errorf("relay UDP address must name a specific IP: %s", addr)
+			return netip.AddrPort{}, fmt.Errorf("relay UDP address must name a specific IP: %s", addr)
 		}
 		if standby && udp.Port == 0 {
-			return fmt.Errorf("standby requires fixed socket addresses: %s", addr)
+			return netip.AddrPort{}, fmt.Errorf("standby requires fixed socket addresses: %s", addr)
 		}
 	}
 	_, port, err := net.SplitHostPort(httpAddr)
 	if err != nil {
-		return err
+		return netip.AddrPort{}, err
 	}
 	// Same rule as processrun.ListenPrivate: loopback, or an explicitly
 	// allowed private prefix (the netns topology), checked before startup.
 	if err := processrun.ValidatePrivateListener(httpAddr, os.Getenv("RELAIS_PRIVATE_NETS")); err != nil {
-		return err
+		return netip.AddrPort{}, err
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 0 || n > 65535 || standby && n == 0 {
-		return fmt.Errorf("invalid relay HTTP port: %s", httpAddr)
+		return netip.AddrPort{}, fmt.Errorf("invalid relay HTTP port: %s", httpAddr)
 	}
-	return nil
+	var advertised netip.AddrPort
+	if advertise != "" {
+		advertised, err = netip.ParseAddrPort(advertise)
+		if err != nil || advertised.Port() == 0 || advertised.Addr().IsUnspecified() || advertised.Addr().IsMulticast() {
+			return netip.AddrPort{}, errors.New("invalid advertised media address")
+		}
+	}
+	return advertised, nil
 }
 
 const (

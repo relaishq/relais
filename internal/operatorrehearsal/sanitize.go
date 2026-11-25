@@ -7,6 +7,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/relayloss"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -67,6 +68,11 @@ func sanitizePool(p *operatorevidence.Summary) *operatorevidence.Summary {
 	return &copy
 }
 func (r *Report) sanitize() {
+	if r.RelayLoss != nil {
+		copy := *r.RelayLoss
+		copy.FailedPhase = relayloss.PublicPhase(copy.FailedPhase)
+		r.RelayLoss = &copy
+	}
 	if r.ClockSelection != nil {
 		diagnostic := *r.ClockSelection
 		diagnostic.Cause = clockSelectionCause(diagnostic.Cause)

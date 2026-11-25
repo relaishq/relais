@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/relayloss"
 	"github.com/relaishq/relais/internal/relaytrace"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -64,7 +66,24 @@ func (p *lossProbe) replay(a net.Addr) error {
 	return nil
 }
 
-func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bin, dir, key, addr string, runs int, after time.Duration, shipped bool, topology *nettopology.Topology, password string) error {
+func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bin, dir, key, addr string, runs int, after time.Duration, shipped bool, topology *nettopology.Topology, password string, options relayLossOptions) (runErr error) {
+	if options.ReportPath != "" {
+		options.Evidence = &relayloss.Report{FailedPhase: "setup", Calls: make([]relayloss.Call, relayloss.CallCount)}
+		for i := range options.Evidence.Calls {
+			options.Evidence.Calls[i].Number = i + 1
+		}
+		defer func() {
+			options.Evidence.Completed = runErr == nil
+			if options.Evidence.Completed {
+				options.Evidence.FailedPhase = ""
+			}
+			data, err := json.Marshal(options.Evidence)
+			if err == nil {
+				err = os.WriteFile(options.ReportPath, data, 0600)
+			}
+			runErr = errors.Join(runErr, err)
+		}()
+	}
 	modes := []bool{true, false}
 	if topology != nil {
 		modes = []bool{false}
@@ -82,8 +101,8 @@ func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bi
 			if err := os.Mkdir(trialDir, 0700); err != nil {
 				return err
 			}
-			bounded, cancel := context.WithTimeout(ctx, after+35*time.Second)
-			err := relayLossTrial(bounded, manager, bin, trialDir, key, addr, after, freeze, shipped, topology, password)
+			bounded, cancel := context.WithTimeout(ctx, (after+35*time.Second)*time.Duration(options.margin()))
+			err := relayContinuityTrial(bounded, manager, bin, trialDir, key, addr, after, freeze, shipped, nil, topology, password, options)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("relay loss %s trial %d: %w (logs %s)", mode, i+1, err, trialDir)
@@ -94,13 +113,10 @@ func runRelayLossTrials(ctx context.Context, manager *clusterprocess.Manager, bi
 	return nil
 }
 
-func relayLossTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, topology *nettopology.Topology, password string) (trialErr error) {
-	return relayContinuityTrial(ctx, manager, bin, dir, keyHex, addr, after, freeze, shipped, nil, topology, password)
-}
-
 // Both drills share the shipped two-relay topology and eight live callers.
 // A drain uses the operator API before any relay-loss fault is injected.
-func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, drainSamples *[]relayDrainSample, topology *nettopology.Topology, password string) (trialErr error) {
+func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir, keyHex, addr string, after time.Duration, freeze, shipped bool, drainSamples *[]relayDrainSample, topology *nettopology.Topology, password string, options relayLossOptions) (trialErr error) {
+	margin := time.Duration(options.margin())
 	prefix := fmt.Sprintf("relais:slot-loss:%s:", filepath.Base(dir))
 	env := processEnv(keyHex, addr, prefix)
 	if topology != nil {
@@ -328,11 +344,12 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		}()
 		defer func() { stop(); <-heartbeatDone }()
 	}
+	options.phase("baseline")
 	media, stopMedia := context.WithCancel(ctx)
 	sent := make(chan error, 8)
 	for _, c := range calls {
 		go func() {
-			e := c.SendMedia(media, after+15*time.Second)
+			e := c.SendMedia(media, after+15*time.Second*margin)
 			if e != nil && media.Err() == nil {
 				fmt.Printf("RELAY_LOSS_MEDIA_ERROR %v\n", e)
 			}
@@ -396,6 +413,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 	})
 	defer stopTrace()
 	fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=baseline\n", freeze)
+	options.phase("fault")
 	fault := time.Now()
 	blackholed := false
 	if topology != nil {
@@ -405,7 +423,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		blackholed = true
 		defer func() {
 			if blackholed {
-				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second*margin)
 				defer cancel()
 				trialErr = errors.Join(trialErr, topology.BlackholeRelay(cleanup, false))
 			}
@@ -423,34 +441,69 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		}
 	}
 	fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=fault\n", freeze)
-	recoveryCtx, stopRecovery := context.WithDeadline(ctx, fault.Add(5*time.Second))
+	options.phase("recovery")
+	recoveryCtx, stopRecovery := context.WithDeadline(ctx, fault.Add(relayloss.Budget*margin))
 	defer stopRecovery()
-	var gaps []time.Duration
-	for _, c := range calls {
+	gaps := make([]time.Duration, len(calls))
+	var recoveryErr error
+	if options.Evidence != nil {
+		defer func() {
+			prior := append([]relayloss.Call(nil), options.Evidence.Calls...)
+			for i, c := range calls {
+				row := &options.Evidence.Calls[i]
+				row.Gap = relayLossObservedGap(c.RelaySnapshot(), time.Now())
+				row.Gap = max(row.Gap, prior[i].Gap)
+				row.Recovered = prior[i].Recovered
+			}
+		}()
+	}
+	for i, c := range calls {
 		if err = lossWait(recoveryCtx, func() bool {
 			_, a, e := store.RelayOwner(ctx, c.SessionID())
 			return e == nil && a.Slot == "r2" && a.Pending == ""
 		}); err != nil {
 			_, a, readErr := store.RelayOwner(context.WithoutCancel(ctx), c.SessionID())
 			report := c.RelaySnapshot()
-			return relayLossCallError(c.SessionID(), "assignment", relayLossObservedGap(report, time.Now()), fmt.Errorf("%w; assignment=%+v read=%v; recovery unobserved; caller media: %s", err, a, readErr, report.Summary()))
+			failure := relayLossCallError(c.SessionID(), "assignment", relayLossObservedGap(report, time.Now()), fmt.Errorf("%w; assignment=%+v read=%v; recovery unobserved; caller media: %s", err, a, readErr, report.Summary()))
+			if options.Evidence == nil {
+				return failure
+			}
+			recoveryErr = errors.Join(recoveryErr, failure)
+			continue
 		}
 		fmt.Printf("RELAY_LOSS_STAGE freeze=%t phase=committed\n", freeze)
 		observed := time.Now()
 		var gap time.Duration
 		if err = lossWait(recoveryCtx, func() bool { gap = c.RelayRecoveryGap(fault, observed); return gap > 0 }); err != nil {
 			report := c.RelaySnapshot()
-			return relayLossCallError(c.SessionID(), "decoded-progress", relayLossObservedGap(report, time.Now()), fmt.Errorf("%w; decoded recovery unobserved; caller media: %s", err, report.Summary()))
+			failure := relayLossCallError(c.SessionID(), "decoded-progress", relayLossObservedGap(report, time.Now()), fmt.Errorf("%w; decoded recovery unobserved; caller media: %s", err, report.Summary()))
+			if options.Evidence == nil {
+				return failure
+			}
+			recoveryErr = errors.Join(recoveryErr, failure)
+			continue
 		}
-		if gap > 5*time.Second {
-			return relayLossCallError(c.SessionID(), "recovery", gap, errors.New("exceeded 5s"))
+		gaps[i] = gap
+		if options.Evidence != nil {
+			row := &options.Evidence.Calls[i]
+			row.Recovered, row.RecoveryGap, row.Gap = true, gap, gap
 		}
-		gaps = append(gaps, gap)
+		if gap > relayloss.Budget {
+			failure := relayLossCallError(c.SessionID(), "recovery", gap, errors.New("exceeded 5s"))
+			if options.Evidence == nil {
+				return failure
+			}
+			recoveryErr = errors.Join(recoveryErr, failure)
+		}
 		fmt.Printf("RELAY_LOSS_CALL call=%s phase=recovered gap=%s\n", c.SessionID(), gap)
+	}
+	if recoveryErr != nil {
+		return recoveryErr
 	}
 	if !shipped && !cutoff.Load() {
 		return fmt.Errorf("worker cut-off boundary missing")
 	}
+	options.phase("restore")
 	var resumedBaseline relay.RelayStatus
 	if freeze || topology != nil {
 		remote := bindings[0].Relay.(*controlplane.RemoteRelay)
@@ -470,7 +523,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 				return fmt.Errorf("phase=network-restore: %w", err)
 			}
 			blackholed = false
-			renewalCtx, stopRenewal := context.WithTimeout(ctx, 3*time.Second)
+			renewalCtx, stopRenewal := context.WithTimeout(ctx, 3*time.Second*margin)
 			err = lossWait(renewalCtx, func() bool {
 				next, e := store.GetRelay(renewalCtx, "r1")
 				return e == nil && next.Holder == lease.Holder && next.Epoch == lease.Epoch && !next.Expired && next.ExpiresAt.After(lease.ExpiresAt)
@@ -483,7 +536,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		}
 		// SIGSTOP leaves pre-cut-off worker datagrams queued in r1's UDP
 		// socket. Its HTTP status can answer before that backlog drains.
-		before, e := lossStableStatus(ctx, remote.Status)
+		before, e := lossStableStatusLimit(ctx, remote.Status, 3*time.Second*margin)
 		if e != nil {
 			return fmt.Errorf("%w; oldInput=%d oldOutput=%d cutoff=%t", e, oldInput.Load(), oldOutput.Load(), cutoff.Load())
 		}
@@ -518,6 +571,7 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 		}
 		resumedBaseline = before
 	}
+	options.phase("observation")
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -602,8 +656,11 @@ func relayContinuityTrial(ctx context.Context, manager *clusterprocess.Manager, 
 // lossStableStatus waits for the resumed relay to drain pre-cut-off output
 // before choosing the replay baseline. Only WorkerPackets must settle.
 func lossStableStatus(ctx context.Context, status func(context.Context) (relay.RelayStatus, error)) (relay.RelayStatus, error) {
+	return lossStableStatusLimit(ctx, status, 3*time.Second)
+}
+
+func lossStableStatusLimit(ctx context.Context, status func(context.Context) (relay.RelayStatus, error), limit time.Duration) (relay.RelayStatus, error) {
 	const quiet = 200 * time.Millisecond
-	const limit = 3 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	tick := time.NewTicker(25 * time.Millisecond)

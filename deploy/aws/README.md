@@ -20,22 +20,26 @@ Both profiles use two AZs. These resources exist with **zero calls**:
 | Resource | `lean` (default) | `resilience` | Reachability |
 | --- | ---: | ---: | --- |
 | Worker EC2 instances / encrypted 16-GiB gp3 root volumes | 2 / 2 | 3 / 3 | Private subnets |
-| Relay EC2 instance / encrypted root volume | 1 / 1 | 1 / 1 | Public subnet; only UDP 24780 inbound |
+| Relay EC2 instances / encrypted root volumes | 2 / 2 | 2 / 2 | One per public subnet; only UDP 24780 inbound |
 | Shared control-and-signaling instance / encrypted root volume | 1 / 1 | 0 | Private subnet |
 | Separate control and signaling instances / encrypted root volumes | 0 | 2 / 2 | Private subnets |
-| Total EC2 instances / root volumes | 4 / 4 | 6 / 6 | As above |
+| Total EC2 instances / root volumes | 5 / 5 | 7 / 7 | As above |
 | Valkey nodes: one shard, primary and replica | 2 | 2 | Private; different AZs |
 | Application Load Balancer (ALB) / HTTPS listener / target group | 1 / 1 / 1 | 1 / 1 / 1 | Public 443; private HTTPS targets |
 | WAF web ACL / rate rule | 1 / 1 | 1 / 1 | Attached to the ALB |
 | NAT gateways / their Elastic IPs | 1 / 1 | 2 / 2 | Public subnets; outbound connections |
-| Retained relay Elastic IP / primary network interface | 1 / 1 | 1 / 1 | Fixed caller address; dedicated interface |
+| Retained relay Elastic IPs / primary network interfaces | 2 / 2 | 2 / 2 | One stable caller address per relay host |
 | Secrets Manager generated secrets | 5 | 5 | AWS API; exact role grants |
 | VPC / public subnets / private subnets / internet gateway | 1 / 2 / 2 / 1 | 1 / 2 / 2 / 1 | Dedicated network |
 | Security groups | 7 | 7 | Relay, worker, control, signaling, ALB, store; one host group for the clock probe |
 | Store role users / user group / subnet group | 3 / 1 / 1 | 3 / 1 / 1 | Valkey disables default user automatically |
-| Explicit subnet address reservations / metadata handle | 6 / 1 | 6 / 1 | No interfaces or running compute |
+| Explicit subnet address reservations / metadata handle | 7 / 1 | 7 / 1 | No interfaces or running compute |
 | Worker recovery launch template | 1 | 1 | No running compute |
 | IAM instance roles / instance profiles | 5 / 5 | 5 / 5 | Only the profile's hosts use them |
+
+The second relay adds one more always-on relay instance, one encrypted root
+volume, one network interface and one more public address. Both relays stay
+running with zero calls. There is no relay-count parameter.
 
 NAT provides egress to GitHub release artifacts, AWS APIs and
 future provider HTTPS APIs. The lean profile routes both private subnets through
@@ -51,7 +55,7 @@ behavior is documented in [AWS NAT gateways](https://docs.aws.amazon.com/vpc/lat
 | Parameter | Selection |
 | --- | --- |
 | `Profile` | `lean` or `resilience`; default `lean` |
-| `ReleaseVersion` | Required stable version after `0.2.0`, without `v`; **no default** |
+| `ReleaseVersion` | Required stable version `0.4.0` or later, without `v`; **no default** |
 | `ArchiveSHA256` | Required lowercase SHA-256 of that release's Linux archive for the selected architecture |
 | `Architecture` | `arm64` (Graviton default) or `x86_64` (archive suffix `amd64`) |
 | `ArmInstanceType`, `X86InstanceType` | Defaults `m7g.large` and `m7i.large`; check regional availability and architecture compatibility |
@@ -77,7 +81,9 @@ Obtain the archive digest independently from the chosen release's reviewed
 checksum manifest. Boot downloads
 `https://github.com/relaishq/relais/releases/download/vVERSION/relais_VERSION_linux_ARCH.tar.gz`,
 checks its exact SHA-256, rejects unsafe archive members and starts nothing on
-a mismatch. No published post-0.2.0 artifact is selected by this template.
+a mismatch. This template needs release **v0.4.0 or later**, the first release
+with relay-set support. Older releases need the template from their own tag.
+No release is selected by this template.
 
 Cloud-init uses the standard AL2023 AMI's AWS CLI v2, system Python and
 `aws-cfn-bootstrap`. It downloads no OS packages, Python SDK or PyPI dependency.
@@ -118,7 +124,10 @@ and [cfn-signal](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateRe
 (read 2026-10-20).
 
 After a separately approved creation, configure your certificate's DNS name to
-the `SignalLoadBalancer` output. Caller media uses `RelayIPv4:24780`. Outputs
+the `SignalLoadBalancer` output. Caller media uses `RelayIPv4:24780` or `RelayTwoIPv4:24780`, as selected by
+control. Each relay binds its private address and advertises its own stable
+public address. Control lists both private relay API URLs. It enrolls every
+worker into both private relay paths before those pairs can carry calls. Outputs
 contain no token, password, snapshot key or credential-bearing URL.
 
 ## Time sync for clock admission
@@ -194,7 +203,7 @@ are configured separately as described above.
 Every instance requires IMDSv2 with a one-hop response limit and encrypted EBS.
 Application services deny access to the IPv4 metadata address through systemd,
 run as separate unprivileged users, have no Linux capabilities and use a read-only
-system filesystem. The two relays deliberately share one user, host PID
+system filesystem. Each host's active relay and standby deliberately share one user, host PID
 namespace and binary inode so ADR 0004 fencing can work; they do not hide `/proc`
 from each other. Review the actual Linux and AMI behavior in a paid run.
 [AWS metadata settings](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-ec2-instance-metadataoptions.html)
@@ -298,12 +307,53 @@ writes uses selectors and requires no binary change. See
 
 ## Operation, restart and deletion limits
 
-There is one relay **host**, including in resilience. Its standby protects
-same-host process failure only; a host/AZ failure drops media. Media is UDP
-only, with no TURN or TCP/TLS fallback. Lean control and signaling share a
+Both profiles have two always-on relay hosts with separate stable public
+addresses, one in each AZ. Each host has its own active relay and same-host
+standby. The supported failure domain is **one relay host lost at a time**,
+while its calls' workers, control, signaling and store remain available.
+Relay-change-capable callers recover through the surviving relay, with the
+unchanged 5 s relay-loss budget. A call whose relay and worker both die is
+still lost. This does not claim survival of an entire AZ failure or simultaneous
+relay-host failures. Callers without relay-change support still lose the call.
+Media is UDP only, with no TURN or TCP/TLS fallback. Lean control and signaling share a
 failure. One surviving worker leaves no destination for a further move.
 Demo/test registration and SRTP diagnostics are disabled. Boot and service logs
 record outcomes; there is no ALB access log or WAF sampled-body log in this slice.
+
+### Free relay-host-loss rehearsal
+
+`make operator-rehearsal-run` adds a tested-head relay-loss procedure after the
+four pinned-release gates and the head-caller comparison. The pinned releases
+predate relay sets, so their four-host topology keeps its single-relay launcher
+path. The local renderer accepts only the exact v0.3.4/v0.3.5 release-and-digest
+pairs as exceptions to the head template's version rule. Other old archives are
+refused. These comparisons are not evidence for the new two-relay template.
+
+The added procedure runs `crash-run -topology=netns -relay-loss-netns -runs=1
+-after=5s -relay-loss-report=FILE` with the prebuilt tested-head binaries. CI
+passes the pinned Redis executable path explicitly through sudo; it never starts
+a system Redis service. It
+starts eight live audio/video calls, then drops **all INPUT and OUTPUT** traffic
+in one relay host's owned namespace. This cuts off caller media, private worker
+legs, control and store traffic while the relay process stays alive. The second
+relay stays reachable. The procedure restores the network and checks the old
+relay fence, decryption failures and duplicate packets.
+
+`report.json` records `relayLoss.completed`, a sanitized `failedPhase` on failure,
+and each call's ordinal, `gapNs`, `recoveryGapNs` and `recovered`.
+`recoveryGapNs` is a conservative upper bound from the last caller media
+before loss to both decodable video and advancing audio RTP after the observed
+relay commit. It is absent when recovery was not observed. `gapNs` is the maximum of that recovery gap and the call's worst
+observed media gap on either track, including trailing silence when the
+procedure finishes. The 5 s grade applies to this maximum, so a later stall
+still fails even when the initial recovery was fast. The step summary prints
+both gaps and the 5 s grade. Every call
+must recover within 5 s, and the whole procedure must complete. Missing or
+unknown evidence fails. Operational waits get 2x margin (10 s to observe
+recovery); the product threshold stays 5 s. The added child has a 3-minute
+outer limit. This is a Linux/sudo namespace rehearsal; Mac unit tests cover
+report grading and command wiring. Real netns execution and AWS host loss are
+separate evidence. The rehearsal does not prove the 60 s consent threshold.
 
 The service restart policy is deliberately different by role:
 
@@ -496,9 +546,9 @@ rollback tests, and regenerate `scripts/release/compatibility.json`. A floor alo
 never authorizes an unlisted version; semver proximity supplies no evidence.
 `0.0.0-dev` templates/manual CI artifacts can carry that policy but cannot
 authorize a live rollout. Stamp each #251 build with its own real release version.
-For example, build the first main revision as `0.3.0`; before building the second
-as `0.3.1`, nominate `0.3.0` in `tested_peers: ["self", "0.3.0"]` and set
-both floors to `0.3.0`. Regenerate the template, then build and test that candidate
+For example, build the first main revision as `0.4.0`; before building the second
+as `0.4.1`, nominate `0.4.0` in `tested_peers: ["self", "0.4.0"]` and set
+both floors to `0.4.0`. Regenerate the template, then build and test that candidate
 pair in both directions before publishing or using its allowed verdict, with the
 [release pair test](../../scripts/release/README.md) as the required evidence. Without
 this policy change, two different main builds refuse with `unsupported_pair`.
@@ -556,7 +606,7 @@ rollback, capacity and managed-store durability remain **NOT-RUN** until separat
 approved acceptance evidence is recorded.
 
 `DeletionPolicy: RetainExceptOnCreate` and `UpdateReplacePolicy: Retain` protect
-the store, its subnet/security groups, all five secrets and the relay Elastic IP.
+the store, its subnet/security groups, all five secrets and both relay Elastic IPs.
 The retained store also requires its VPC, two private subnets, three ACL users
 and user group, so these dependencies use the same policies. Component security
 groups, standalone ingress/egress rules, EC2/root volumes, ALB/WAF, public subnets,

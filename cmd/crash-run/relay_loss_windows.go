@@ -9,6 +9,6 @@ import (
 	"github.com/relaishq/relais/internal/processidentity"
 )
 
-func runRelayLossTrials(context.Context, *clusterprocess.Manager, string, string, string, string, int, time.Duration, bool, *nettopology.Topology, string) error {
+func runRelayLossTrials(context.Context, *clusterprocess.Manager, string, string, string, string, int, time.Duration, bool, *nettopology.Topology, string, relayLossOptions) error {
 	return processidentity.ErrUnsupported
 }

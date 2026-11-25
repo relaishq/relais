@@ -1017,6 +1017,34 @@ and the restored clock must pass the same source check. The ACL control restores
 exact template rules and repeats its positive authenticated probe even after a
 failed negative observation. All hosts are verified again before gates start.
 
+**2026-11-24, #540:** The 2026-10-28 decision above remains unchanged for the
+pinned comparison. The added relay-host-loss procedure grades its per-call
+gaps strictly against 5 s, including on the free shared runner.
+
+The free run also requires the separate tested-head relay-host-loss procedure.
+It reuses the namespace blackhole from #537 with eight live audio/video calls.
+Both traffic directions on one relay host are dropped, including private paths;
+the surviving relay stays up. `report.json` includes `relayLoss` with all eight
+call gaps and recovery observations. `recoveryGapNs` records a conservative
+upper bound from the last caller media before loss to both decodable video and
+advancing audio RTP after the observed commit, when recovery is observed. `gapNs` is the maximum of the recovery gap and the worst observed
+media gap on either track, including trailing silence at procedure completion.
+This maximum must be at most 5 s; a later stall cannot hide behind fast initial
+recovery. A failed run records a fixed `failedPhase` code in the report and host
+diagnostics (`setup`, `baseline`, `fault`, `recovery`, `restore`, `observation`,
+`completion`, or `unavailable`). `unavailable` means no usable child report was
+received, so no more specific phase is known. The driver has a 10 s recovery
+observation limit and a 3-minute outer limit; these are
+operational margins, not relaxed product thresholds. A missing report, unknown
+completion, missing call or over-budget call fails the free run. Its measurements
+are outside the pinned four-phase media pool. See the
+[procedure and limits](../../deploy/aws/README.md#free-relay-host-loss-rehearsal).
+The existing 180-minute job limit is unchanged; the new child can consume at
+most 3 minutes of its remaining reserve. These are configured bounds, not a
+measured CI duration. The summary shows each call's gap even when the procedure
+fails. Local unit tests cover grading; live namespace and AWS execution remain
+separate evidence.
+
 The workflow uploads `runtime/operator-report/report.json`,
 `runtime/operator-report/host-diagnostics.log`,
 `runtime/operator-report/media-evidence.json` and

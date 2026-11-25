@@ -576,3 +576,30 @@ func TestRelayRecordWritesKeepRequestBound(t *testing.T) {
 		})
 	}
 }
+
+func TestRelayAdmissionEnrollsAdvertisedAddressAcrossPrivateBinding(t *testing.T) {
+	store := sessionstore.NewMemory()
+	relays := newAdmissionRelays(t, store)
+	advertised := netip.MustParseAddrPort("192.0.2.10:24780")
+	realRelay, err := relay.New(relay.Config{SlotID: "r1", Owners: store,
+		PublicAddr: "127.0.0.1:0", AdvertiseAddr: advertised,
+		InstanceID: relays[0].lease.Holder.Owner,
+		Continuity: &relay.ContinuityStatus{Epoch: relays[0].lease.Epoch}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, realRelay.Close()) })
+	server := httptest.NewServer(realRelay.PrivateHandler())
+	t.Cleanup(server.Close)
+	remote := &RemoteRelay{URL: server.URL, Client: server.Client()}
+	p := New(remote, store)
+	require.NoError(t, p.ConfigureRelaySet(t.Context(), []RelayBinding{
+		{Slot: mediaworker.RelaySlot{ID: "r1"}, Relay: remote},
+		{Slot: mediaworker.RelaySlot{ID: "r2"}, Relay: relays[1]},
+	}))
+	registerAdmissionWorker(t, p, store, mediaworker.RelaySlot{ID: "r1", Leg: realRelay.WorkerAddr(), Public: advertised})
+	require.NoError(t, (&RelayWorkerRegistry{Slot: "r1"}).Sync(t.Context(), p, remote))
+	enrolled := p.relaySet["r1"]
+	require.Equal(t, advertised, enrolled.Slot.Public)
+	require.Equal(t, realRelay.WorkerAddr(), enrolled.Slot.Leg)
+	require.False(t, enrolled.pending)
+	require.True(t, p.relayPairLocked(p.workers["w"], "r1"))
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
+	"github.com/relaishq/relais/internal/relayloss"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -194,6 +195,10 @@ func evaluateFreeRehearsalTiming(t *testing.T, strict previewMediaSummary) opera
 		r.Gates = append(r.Gates, operatorrehearsal.GateReport{Gate: gate, ProcedureCompleted: true, CallerStopped: true, ProcedureResult: operatorgates.ProcedureResult{Status: operator.Inconclusive, Process: operatorgates.ProcessEvidence{CompletedSteps: 1}, Media: &operatorgates.MediaSummary{Status: operator.Inconclusive}}})
 	}
 	zero, one := uint64(0), uint64(1)
+	r.RelayLoss = &relayloss.Report{Completed: true}
+	for i := range relayloss.CallCount {
+		r.RelayLoss.Calls = append(r.RelayLoss.Calls, relayloss.Call{Number: i + 1, Gap: time.Second, Recovered: true})
+	}
 	r.Gates[3].Process = operatorgates.ProcessEvidence{CompletedSteps: 7, Restarts: 1, DuplicatePackets: &zero, RelayEpochDelta: &one, RoutesRestored: &one, RelayLocalTiming: "inconclusive", RelayConnectionInvariants: "inconclusive"}
 	r.Evaluate()
 	return r

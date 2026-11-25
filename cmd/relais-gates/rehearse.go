@@ -30,6 +30,7 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 	assets := flags.String("assets", "runtime/operator-releases", "verified release directory")
 	output := flags.String("output", "runtime/operator-report", "sanitized output directory")
 	compiler := flags.String("go", "go", "Go 1.27.4 executable")
+	redis := flags.String("redis-server", "redis-server", "Redis executable for the isolated relay-host-loss drill")
 	commit := flags.String("commit", "", "full tested commit (PR merge ref when applicable)")
 	head := flags.String("head-commit", "", "PR head commit, separately from tested merge commit")
 	event := flags.String("event", "local", "workflow event")
@@ -77,7 +78,7 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 		fmt.Fprintln(diagnostics, "compiler-unavailable")
 		return 1
 	}
-	r, e := operatorrehearsal.Rehearse(ctx, operatorrehearsal.RehearseConfig{Checkout: abs(*checkout), Assets: abs(*assets), Output: abs(*output), GoExecutable: abs(executable), Commit: *commit, HeadCommit: *head, Event: *event}, diagnostics)
+	r, e := operatorrehearsal.Rehearse(ctx, operatorrehearsal.RehearseConfig{Checkout: abs(*checkout), Assets: abs(*assets), Output: abs(*output), GoExecutable: abs(executable), RedisExecutable: *redis, Commit: *commit, HeadCommit: *head, Event: *event}, diagnostics)
 	if e != nil {
 		fmt.Fprintln(diagnostics, "rehearsal-incomplete")
 	}

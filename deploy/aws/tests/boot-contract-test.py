@@ -20,6 +20,37 @@ spec.loader.exec_module(boot)
 
 
 class BootContracts(unittest.TestCase):
+    def launcher(self, component, extra=None):
+        # Capture the exact launcher contract without running a media process.
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / ('relais-' + ('relay' if component == 'relay-standby' else component))
+            binary.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n')
+            binary.chmod(0o755)
+            env = {'PATH': '/usr/bin:/bin', 'RELAIS_BIN_DIR': directory,
+                   'RELAY_PRIVATE': '10.42.0.10', 'RELAY_PUBLIC': '192.0.2.10',
+                   'CONTROL_PRIVATE': '10.42.10.20', 'WORKER_ONE': '10.42.10.11',
+                   'WORKER_TWO': '10.42.11.12', 'WORKER_CALL_CAP': '2'}
+            env.update(extra or {})
+            return subprocess.check_output(['bash', str(ROOT / 'boot/run.sh'), component], env=env, text=True).splitlines()
+
+    def test_single_relay_launcher_contract(self):
+        self.assertEqual(self.launcher('control'), ['-http', '10.42.10.20:24710', '-relay',
+            'http://10.42.0.10:24700', '-worker-call-cap', '2', '-worker',
+            'w1=http://10.42.10.11:24701', '-worker', 'w2=http://10.42.11.12:24701'])
+        args = self.launcher('relay-standby')
+        self.assertEqual(args[-3:], ['-relay-lease', 'preview', '-standby'])
+
+    def test_relay_set_launcher_uses_private_urls_and_distinct_leases(self):
+        args = self.launcher('control', {'RELAY_TWO_PRIVATE': '10.42.1.10'})
+        self.assertEqual([args[i+1] for i, x in enumerate(args) if x == '-relay'],
+                         ['preview=http://10.42.0.10:24700', 'preview-two=http://10.42.1.10:24700'])
+        for component in ('relay', 'relay-standby'):
+            args = self.launcher(component, {'RELAY_PRIVATE': '10.42.1.10', 'RELAY_SLOT': 'preview-two', 'RELAY_TWO_PRIVATE': '10.42.1.10'})
+            self.assertEqual(args[args.index('-relay-lease')+1], 'preview-two')
+            self.assertEqual(args[args.index('-leg')+1], '10.42.1.10:24781')
+            self.assertEqual(args[args.index('-advertise-media')+1], '192.0.2.10:24780')
+            self.assertEqual(args[args.index('-relay-slot')+1], 'preview-two')
+
     def test_unknown_component_is_a_permanent_launcher_refusal(self):
         result = subprocess.run(['bash', str(ROOT / 'boot/run.sh'), 'unknown-component'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 78)

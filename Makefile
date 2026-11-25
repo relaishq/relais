@@ -219,17 +219,22 @@ OPERATOR_REHEARSAL_RUN = $(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates 
 # -buildvcs=false: Go stamps VCS data only when .git is a directory, so a linked worktree and a
 # clone of one commit would differ; ldflags already carry the version and commit.
 operator-rehearsal-build: BUILD_TIME = $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%d_%H:%M:%S)
-operator-rehearsal-build: ensure_bin_dir ## Build the gate/bridge and the diagnostic head caller before rehearsal media
+operator-rehearsal-build: ensure_bin_dir ## Build the gate/bridge, head caller and host-loss components before rehearsal media
 	CGO_ENABLED=0 $(GOBUILD) -trimpath -buildvcs=false -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
 	CGO_ENABLED=0 $(GOBUILD) -trimpath -buildvcs=false -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
+	CGO_ENABLED=0 $(GOBUILD) -trimpath -buildvcs=false -o $(BIN_DIR)/ $(LDFLAGS) ./cmd/crash-run ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control
 
 operator-rehearsal-reproducible: operator-rehearsal-build ## Build the rehearsal binaries, rebuild them 1 s later elsewhere and require identical bytes
 	sleep 1
 	$(MAKE) --no-print-directory operator-rehearsal-build BIN_DIR=$(OPERATOR_REHEARSAL_REBUILD_DIR)
 	cmp $(BIN_DIR)/relais-gates $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-gates
 	cmp $(BIN_DIR)/relais-load $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-load
+	cmp $(BIN_DIR)/crash-run $(OPERATOR_REHEARSAL_REBUILD_DIR)/crash-run
+	cmp $(BIN_DIR)/relais-relay $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-relay
+	cmp $(BIN_DIR)/relais-worker $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-worker
+	cmp $(BIN_DIR)/relais-control $(OPERATOR_REHEARSAL_REBUILD_DIR)/relais-control
 
-operator-rehearsal: operator-rehearsal-build ## Run the fixed four-gate Linux Docker profile; needs root systemd and four allowed CPUs
+operator-rehearsal: operator-rehearsal-build ## Run the four-gate comparison and netns host-loss drill; needs Linux root and four allowed CPUs
 	$(OPERATOR_REHEARSAL_RUN)
 
 operator-rehearsal-run: ## Run operator-rehearsal with the already built binaries; never rebuilds

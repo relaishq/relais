@@ -39,7 +39,7 @@ EXPECTED_ACLS = {
         +hincrby +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan
         ~relais:preview:* +type +hexists +hlen""".split(),
 }
-RETAINED = {'Store', 'StoreUsers', 'RelayPassword', 'SnapshotKey', 'WorkerStoreUser', 'SignalToken', 'PrivateB', 'StoreSubnets', 'RelayStoreUser', 'ControlPassword', 'Vpc', 'RelayAddress', 'ControlStoreUser', 'PrivateA', 'StoreGroup', 'WorkerPassword'}
+RETAINED = {'Store', 'StoreUsers', 'RelayPassword', 'SnapshotKey', 'WorkerStoreUser', 'SignalToken', 'PrivateB', 'StoreSubnets', 'RelayStoreUser', 'ControlPassword', 'Vpc', 'RelayAddress', 'RelayTwoAddress', 'ControlStoreUser', 'PrivateA', 'StoreGroup', 'WorkerPassword'}
 
 SSM_ACTIONS = {'ssmmessages:CreateControlChannel', 'ssmmessages:CreateDataChannel',
                'ssmmessages:OpenControlChannel', 'ssmmessages:OpenDataChannel'}
@@ -123,6 +123,11 @@ def check(template):
     assert not re.search(r'(?<![0-9])[0-9]{12}(?![0-9])|AKIA[A-Z0-9]{16}|-----BEGIN .*PRIVATE KEY', encoded)
     assert not re.search(r'(?i)(password|token|secret_access_key)\s*[:=]\s*["\']?[A-Za-z0-9+/]{24,}', encoded)
     assert not re.search(r'RELAIS_(?:SESSIONSTORE_KEY|REDIS_PASSWORD)\s*=', encoded), 'literal credential assignment'
+    pattern = template['Parameters']['ReleaseVersion']['AllowedPattern']
+    for version in ('0.3.5', '0.2.1', '0.4.0-rc.1', 'v0.4.0'):
+        assert not re.fullmatch(pattern, version), 'unsupported template release: ' + version
+    for version in ('0.4.0', '0.4.9', '0.5.0', '0.10.0', '1.0.0', '10.0.0'):
+        assert re.fullmatch(pattern, version), 'supported template release refused: ' + version
     resources = template['Resources']
     assert resources['WorkerRecoveryTemplate']['Properties']['LaunchTemplateData'] == {
         'MaintenanceOptions': {'AutoRecovery': 'default'}}, 'worker recovery must be enabled'
@@ -140,7 +145,7 @@ def check(template):
         properties = resource.get('Properties', {})
         if kind in ('AWS::EC2::Instance', 'AWS::EC2::NetworkInterface', 'AWS::EC2::NatGateway',
                     'AWS::ElasticLoadBalancingV2::LoadBalancer', 'AWS::ElastiCache::ReplicationGroup'):
-            assert set(resource['DependsOn']) >= {'RelayAddressReservation', 'WorkerOneReservation',
+            assert set(resource['DependsOn']) >= {'RelayAddressReservation', 'RelayTwoAddressReservation', 'WorkerOneReservation',
                 'WorkerTwoReservation', 'WorkerThreeReservation', 'ControlAddressReservation', 'SignalAddressReservation'}
         if kind == 'AWS::EC2::Instance':
             assert 'BootFiles' in resource['DependsOn']
@@ -157,8 +162,9 @@ def check(template):
             assert properties['SecurityGroupEgress'] == [{'IpProtocol': 'icmp', 'FromPort': 252, 'ToPort': 86,
                 'CidrIp': '127.0.0.1/32', 'Description': 'Unusable rule suppresses the default allow-all egress'}]
         assert kind != 'AWS::CloudFormation::Stack', 'nested policy bypass'
-    assert set(template['Outputs']) == {'RelayIPv4', 'SignalLoadBalancer', 'StoreConfigurationEndpoint'}
+    assert set(template['Outputs']) == {'RelayIPv4', 'RelayTwoIPv4', 'SignalLoadBalancer', 'StoreConfigurationEndpoint'}
     assert template['Outputs']['RelayIPv4']['Value'] == {'Ref': 'RelayAddress'}
+    assert template['Outputs']['RelayTwoIPv4']['Value'] == {'Ref': 'RelayTwoAddress'}
     assert template['Outputs']['SignalLoadBalancer']['Value'] == {'Fn::GetAtt': ['SignalAlb', 'DNSName']}
     assert template['Outputs']['StoreConfigurationEndpoint']['Value'] == {'Fn::GetAtt': ['Store', 'ConfigurationEndPoint.Address']}
     assert not any('AutoScaling' in r['Type'] or 'LifecycleHook' in r['Type'] or
@@ -181,14 +187,21 @@ def check(template):
                 r = resolve(template, profile, architecture, ssm)
                 p = {n: v['Properties'] for n, v in r.items()}
                 instances = {n: x for n, x in r.items() if x['Type'] == 'AWS::EC2::Instance'}
-                expected = {'RelayHost', 'WorkerOne', 'WorkerTwo'} | ({'SharedHost'} if profile == 'lean' else {'WorkerThree', 'ControlHost', 'SignalHost'})
+                expected = {'RelayHost', 'RelayTwoHost', 'WorkerOne', 'WorkerTwo'} | ({'SharedHost'} if profile == 'lean' else {'WorkerThree', 'ControlHost', 'SignalHost'})
                 assert instances.keys() == expected
                 assert sum(x['Type'] == 'AWS::EC2::NatGateway' for x in r.values()) == (1 if profile == 'lean' else 2)
                 assert sum(x['Type'] == 'AWS::EC2::Subnet' for x in r.values()) == 4
-                assert p['RelayInterface']['GroupSet'] == ['RelayGroup', 'HostGroup']
+                assert p['RelayInterface']['GroupSet'] == p['RelayTwoInterface']['GroupSet'] == ['RelayGroup', 'HostGroup']
+                assert p['RelayHost']['NetworkInterfaces'][0]['NetworkInterfaceId'] == 'RelayInterface'
+                assert p['RelayTwoHost']['NetworkInterfaces'][0]['NetworkInterfaceId'] == 'RelayTwoInterface'
+                for prefix, subnet, address in (('Relay', 'PublicA', '10.42.0.10'), ('RelayTwo', 'PublicB', '10.42.1.10')):
+                    assert p[prefix + 'Interface']['SubnetId'] == subnet
+                    assert p[prefix + 'Interface']['PrivateIpAddress'] == address
+                    assert p[prefix + 'Association'] == {'AllocationId': prefix + 'Address.AllocationId', 'NetworkInterfaceId': prefix + 'Interface'}
+                assert sum(x['Type'] == 'AWS::EC2::EIP' for x in r.values()) == (3 if profile == 'lean' else 4)
                 # Only hosts join the clock-probe group; the store and ALB never do.
                 assert {n for n, x in r.items() if 'HostGroup' in json.dumps(x.get('Properties', {}))} == (
-                    instances.keys() - {'RelayHost'}) | {'RelayInterface', 'HostClockProbeIngress', 'HostClockProbeEgress'}
+                    instances.keys() - {'RelayHost', 'RelayTwoHost'}) | {'RelayInterface', 'RelayTwoInterface', 'HostClockProbeIngress', 'HostClockProbeEgress'}
                 paths = set()
                 egress_paths = set()
                 for n, resource in r.items():
@@ -213,7 +226,7 @@ def check(template):
                     v = instance['Properties']
                     assert 'KeyName' not in v and v['MetadataOptions']['HttpTokens'] == 'required'
                     assert v['MetadataOptions']['HttpPutResponseHopLimit'] == 1
-                    assert name == 'RelayHost' or v['SubnetId'] in ('PrivateA', 'PrivateB')
+                    assert name in ('RelayHost', 'RelayTwoHost') or v['SubnetId'] in ('PrivateA', 'PrivateB')
                     assert all(not x.get('AssociatePublicIpAddress', False) for x in v.get('NetworkInterfaces', []))
                     assert all(b['Ebs']['Encrypted'] is True for b in v['BlockDeviceMappings'])
                     assert v['ImageId'] == 'TEST_VALUE'
@@ -237,8 +250,11 @@ def check(template):
                     settings = dict(line.split('=', 1) for line in env.splitlines())
                     assert set(settings) == {'RELAIS_REDIS_ADDR', 'RELAIS_REDIS_CLUSTER', 'RELAIS_REDIS_TLS',
                         'RELAIS_REDIS_PREFIX', 'RELAIS_PRIVATE_NETS', 'RELAY_PRIVATE', 'RELAY_PUBLIC',
-                        'CONTROL_PRIVATE', 'WORKER_ONE', 'WORKER_TWO', 'WORKER_THREE', 'WORKER_CALL_CAP',
+                        'RELAY_TWO_PRIVATE', 'RELAY_SLOT', 'CONTROL_PRIVATE', 'WORKER_ONE', 'WORKER_TWO', 'WORKER_THREE', 'WORKER_CALL_CAP',
                         'NODE_PRIVATE', 'WORKER_NAME'}
+                    assert settings['RELAY_PRIVATE'] == p['RelayTwoInterface' if name == 'RelayTwoHost' else 'RelayInterface']['PrivateIpAddress']
+                    assert settings['RELAY_TWO_PRIVATE'] == p['RelayTwoInterface']['PrivateIpAddress']
+                    assert settings['RELAY_SLOT'] == ('preview-two' if name == 'RelayTwoHost' else 'preview')
                     assert settings['WORKER_ONE'] == p['WorkerOne']['PrivateIpAddress']
                     assert settings['WORKER_TWO'] == p['WorkerTwo']['PrivateIpAddress']
                     assert 'WORKER_THREE=10.42.10.13' in env if profile == 'resilience' else 'WORKER_THREE=\n' in env
@@ -294,7 +310,7 @@ def check(template):
                     assert user['AccessString'].split() == tokens, role + ' ACL drift'
                 reservations = {n:x['Properties'] for n,x in r.items() if x['Type'] == 'AWS::EC2::SubnetCidrReservation'}
                 assert {(x['SubnetId'],x['Cidr'],x['ReservationType']) for x in reservations.values()} == {
-                    ('PublicA','10.42.0.10/32','explicit'),('PrivateA','10.42.10.11/32','explicit'),
+                    ('PublicA','10.42.0.10/32','explicit'),('PublicB','10.42.1.10/32','explicit'),('PrivateA','10.42.10.11/32','explicit'),
                     ('PrivateB','10.42.11.12/32','explicit'),('PrivateA','10.42.10.13/32','explicit'),
                     ('PrivateA','10.42.10.20/32','explicit'),('PrivateB','10.42.11.21/32','explicit')}
     assert not any(re.search(r'Secret|Password|SnapshotKey|SignalToken', json.dumps(v)) for v in template['Outputs'].values())
@@ -331,6 +347,11 @@ def regression_tests(template):
              'single_inline_role_policy','no_secret_output','host_uses_own_role']
     mutations = list(zip(names, mutations))
     mutations += [
+        ('relay_set_release_floor', lambda t: t['Parameters']['ReleaseVersion'].update(AllowedPattern=r'0\.3\.[0-9]+|0\.4\.[0-9]+')),
+        ('second_relay_always_on', lambda t: t['Resources']['RelayTwoHost'].update(Condition='Resilience')),
+        ('second_relay_private_paths', lambda t: t['Resources']['RelayTwoInterface']['Properties'].update(GroupSet=[{'Ref': 'HostGroup'}])),
+        ('second_relay_distinct_address', lambda t: t['Resources']['RelayTwoInterface']['Properties'].update(PrivateIpAddress='10.42.0.10')),
+        ('second_relay_public_address', lambda t: t['Resources']['RelayTwoAssociation']['Properties'].update(NetworkInterfaceId={'Ref': 'RelayInterface'})),
         ('no_scaling', lambda t: t['Resources'].update(ScalingPool={'Type': 'AWS::AutoScaling::AutoScalingGroup', 'Properties': {}})),
         ('no_fleet', lambda t: t['Resources'].update(FleetPool={'Type': 'AWS::EC2::EC2Fleet', 'Properties': {}})),
         ('no_spot_fleet', lambda t: t['Resources'].update(SpotPool={'Type': 'AWS::EC2::SpotFleet', 'Properties': {}})),

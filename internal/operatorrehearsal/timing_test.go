@@ -82,7 +82,7 @@ func TestRehearsalReportsEveryUndecidedTiming(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.Verdict != operator.Passed || saved.Pool.Status != operator.Inconclusive || len(saved.TimingUndecided) != 3 || !slices.Contains(saved.Limitations, "on a shared runner, media timing is judged strictly only in the paid run") {
+	if saved.Verdict != operator.Passed || saved.Pool.Status != operator.Inconclusive || len(saved.TimingUndecided) != 3 || !slices.Contains(saved.Limitations, "on a shared runner, pinned media timing is judged strictly only in the paid run") {
 		t.Fatal("timing report incomplete", out.String())
 	}
 	for i, row := range saved.TimingUndecided {

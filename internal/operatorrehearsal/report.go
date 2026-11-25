@@ -10,6 +10,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
+	"github.com/relaishq/relais/internal/relayloss"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -31,6 +32,7 @@ type CPUReport struct {
 	Phases           []Calibration `json:"phases"`
 }
 type Report struct {
+	RelayLoss       *relayloss.Report         `json:"relayLoss,omitempty"`
 	ClockSelection  *ClockSelectionReport     `json:"clockSelection,omitempty"`
 	TimingUndecided []TimingUndecided         `json:"timingUndecided"`
 	Uncertainties   []operator.Uncertainty    `json:"uncertainties"`
@@ -128,6 +130,9 @@ func (r *Report) Evaluate() {
 	if !rehearsalMedia(r.Pool) {
 		fail("pooled-media-not-passed")
 	}
+	if r.RelayLoss == nil || !r.RelayLoss.Passed() {
+		fail("relay-host-loss-not-passed")
+	}
 	r.Verdict = operator.Passed
 	if len(r.Failures) > 0 {
 		r.Verdict = operator.Failure
@@ -176,7 +181,7 @@ func (r Report) write(w io.Writer) error {
 		r.Event = "unavailable"
 	}
 	r.Evaluate()
-	r.Limitations = []string{"local TLS proxy and time reference; shared runner clock", "linux_amd64 only", "store failover and load admission not covered", "one execution; three fixed complete executions are required for initial calibration", "CPU affinity does not prove physical-core or VM scheduling isolation", "on a shared runner, media timing is judged strictly only in the paid run"}
+	r.Limitations = []string{"local TLS proxy and time reference; shared runner clock", "linux_amd64 only", "store failover and load admission not covered", "one execution; three fixed complete executions are required for initial calibration", "CPU affinity does not prove physical-core or VM scheduling isolation", "on a shared runner, pinned media timing is judged strictly only in the paid run"}
 	e := json.NewEncoder(w)
 	e.SetIndent("", "  ")
 	return e.Encode(r)

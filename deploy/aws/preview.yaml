@@ -10,8 +10,8 @@ Parameters:
     - resilience
   ReleaseVersion:
     Type: String
-    AllowedPattern: 0\.2\.[1-9][0-9]*|0\.([3-9]|[1-9][0-9]+)\.[0-9]+|[1-9][0-9]*\.[0-9]+\.[0-9]+
-    Description: Required post-v0.2.0 release version without v; no release is selected for you.
+    AllowedPattern: 0\.([4-9]|[1-9][0-9]+)\.[0-9]+|[1-9][0-9]*\.[0-9]+\.[0-9]+
+    Description: Required 0.4.0 or later release version without v; relay-set support is required.
   ArchiveSHA256:
     Type: String
     AllowedPattern: '[a-f0-9]{64}'
@@ -211,6 +211,7 @@ Resources:
     - WorkerThreeReservation
     - ControlAddressReservation
     - SignalAddressReservation
+    - RelayTwoAddressReservation
   PrivateDefaultA:
     Type: AWS::EC2::Route
     Properties:
@@ -241,6 +242,7 @@ Resources:
     - WorkerThreeReservation
     - ControlAddressReservation
     - SignalAddressReservation
+    - RelayTwoAddressReservation
     Condition: Resilience
   PrivateDefaultB:
     Type: AWS::EC2::Route
@@ -717,7 +719,8 @@ Resources:
         Fn::Sub: ${AWS::StackName}-control
       UserName: control
       AccessString: on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset +hincrby
-        +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan ~relais:preview:* +type +hexists +hlen
+        +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan ~relais:preview:* +type +hexists
+        +hlen
       AuthenticationMode:
         Type: password
         Passwords:
@@ -787,6 +790,7 @@ Resources:
     - WorkerThreeReservation
     - ControlAddressReservation
     - SignalAddressReservation
+    - RelayTwoAddressReservation
   RelayAddress:
     Type: AWS::EC2::EIP
     Properties:
@@ -1203,6 +1207,8 @@ Resources:
               RELAIS_PRIVATE_NETS=10.42.0.0/16
               RELAY_PRIVATE=10.42.0.10
               RELAY_PUBLIC=${RelayAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview
               CONTROL_PRIVATE=10.42.10.20
               WORKER_ONE=10.42.10.11
               WORKER_TWO=10.42.11.12
@@ -1226,6 +1232,7 @@ Resources:
     - ControlAddressReservation
     - SignalAddressReservation
     - BootFiles
+    - RelayTwoAddressReservation
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -1352,6 +1359,8 @@ Resources:
               RELAIS_PRIVATE_NETS=10.42.0.0/16
               RELAY_PRIVATE=10.42.0.10
               RELAY_PUBLIC=${RelayAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview
               CONTROL_PRIVATE=10.42.10.20
               WORKER_ONE=10.42.10.11
               WORKER_TWO=10.42.11.12
@@ -1374,6 +1383,7 @@ Resources:
     - ControlAddressReservation
     - SignalAddressReservation
     - BootFiles
+    - RelayTwoAddressReservation
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -1494,6 +1504,8 @@ Resources:
               RELAIS_PRIVATE_NETS=10.42.0.0/16
               RELAY_PRIVATE=10.42.0.10
               RELAY_PUBLIC=${RelayAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview
               CONTROL_PRIVATE=10.42.10.20
               WORKER_ONE=10.42.10.11
               WORKER_TWO=10.42.11.12
@@ -1516,6 +1528,7 @@ Resources:
     - ControlAddressReservation
     - SignalAddressReservation
     - BootFiles
+    - RelayTwoAddressReservation
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -1636,6 +1649,8 @@ Resources:
               RELAIS_PRIVATE_NETS=10.42.0.0/16
               RELAY_PRIVATE=10.42.0.10
               RELAY_PUBLIC=${RelayAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview
               CONTROL_PRIVATE=10.42.10.20
               WORKER_ONE=10.42.10.11
               WORKER_TWO=10.42.11.12
@@ -1658,6 +1673,7 @@ Resources:
     - ControlAddressReservation
     - SignalAddressReservation
     - BootFiles
+    - RelayTwoAddressReservation
     Condition: Resilience
     CreationPolicy:
       ResourceSignal:
@@ -1775,6 +1791,8 @@ Resources:
               RELAIS_PRIVATE_NETS=10.42.0.0/16
               RELAY_PRIVATE=10.42.0.10
               RELAY_PUBLIC=${RelayAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview
               CONTROL_PRIVATE=10.42.10.20
               WORKER_ONE=10.42.10.11
               WORKER_TWO=10.42.11.12
@@ -1797,6 +1815,7 @@ Resources:
     - ControlAddressReservation
     - SignalAddressReservation
     - BootFiles
+    - RelayTwoAddressReservation
     Condition: Lean
     CreationPolicy:
       ResourceSignal:
@@ -1911,6 +1930,8 @@ Resources:
               RELAIS_PRIVATE_NETS=10.42.0.0/16
               RELAY_PRIVATE=10.42.0.10
               RELAY_PUBLIC=${RelayAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview
               CONTROL_PRIVATE=10.42.10.20
               WORKER_ONE=10.42.10.11
               WORKER_TWO=10.42.11.12
@@ -1933,6 +1954,7 @@ Resources:
     - ControlAddressReservation
     - SignalAddressReservation
     - BootFiles
+    - RelayTwoAddressReservation
     Condition: Resilience
     CreationPolicy:
       ResourceSignal:
@@ -2045,6 +2067,8 @@ Resources:
               RELAIS_PRIVATE_NETS=10.42.0.0/16
               RELAY_PRIVATE=10.42.0.10
               RELAY_PUBLIC=${RelayAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview
               CONTROL_PRIVATE=10.42.10.20
               WORKER_ONE=10.42.10.11
               WORKER_TWO=10.42.11.12
@@ -2067,6 +2091,7 @@ Resources:
     - ControlAddressReservation
     - SignalAddressReservation
     - BootFiles
+    - RelayTwoAddressReservation
     Condition: Resilience
     CreationPolicy:
       ResourceSignal:
@@ -2097,6 +2122,7 @@ Resources:
     - WorkerThreeReservation
     - ControlAddressReservation
     - SignalAddressReservation
+    - RelayTwoAddressReservation
   SignalAlb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -2119,6 +2145,7 @@ Resources:
     - WorkerThreeReservation
     - ControlAddressReservation
     - SignalAddressReservation
+    - RelayTwoAddressReservation
   SignalTargets:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -2484,10 +2511,13 @@ Resources:
             case ${1:-} in
               relay|relay-standby)
                 unset RELAIS_SESSIONSTORE_KEY
-                standby=()
-                [[ $1 == relay ]] || standby=(-standby)
-                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-24780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-24781}" \
-                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-24700}" -relay-lease preview "${standby[@]}"
+                args=(-media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-24780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-24781}"
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-24700}" -relay-lease "${RELAY_SLOT:-preview}")
+                [[ $1 == relay ]] || args+=(-standby)
+                if [[ -n ${RELAY_TWO_PRIVATE:-} ]]; then
+                  args+=(-relay-slot "${RELAY_SLOT:-preview}" -advertise-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-24780}")
+                fi
+                exec "$bin/relais-relay" "${args[@]}"
                 ;;
               worker)
                 exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-24711}" \
@@ -2497,7 +2527,12 @@ Resources:
               control)
                 workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-24701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-24701}")
                 [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-24701}")
-                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-24710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-24700}" \
+                relays=(-relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-24700}")
+                if [[ -n ${RELAY_TWO_PRIVATE:-} ]]; then
+                  relays=(-relay "preview=http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-24700}"
+                    -relay "preview-two=http://$RELAY_TWO_PRIVATE:${RELAY_TWO_HTTP_PORT:-24700}")
+                fi
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-24710}" "${relays[@]}" \
                   -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
                 ;;
               signal)
@@ -2753,6 +2788,182 @@ Resources:
       Cidr: 10.42.11.21/32
       ReservationType: explicit
       Description: Relais fixed component address
+  RelayTwoAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+    DependsOn: InternetAttachment
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+  RelayTwoInterface:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId:
+        Ref: PublicB
+      PrivateIpAddress: 10.42.1.10
+      GroupSet:
+      - Ref: RelayGroup
+      - Ref: HostGroup
+    DependsOn:
+    - RelayTwoAddressReservation
+    - WorkerOneReservation
+    - WorkerTwoReservation
+    - WorkerThreeReservation
+    - ControlAddressReservation
+    - SignalAddressReservation
+    - RelayAddressReservation
+  RelayTwoAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - RelayTwoAddress
+        - AllocationId
+      NetworkInterfaceId:
+        Ref: RelayTwoInterface
+  RelayTwoAddressReservation:
+    Type: AWS::EC2::SubnetCidrReservation
+    Properties:
+      SubnetId:
+        Ref: PublicB
+      Cidr: 10.42.1.10/32
+      ReservationType: explicit
+      Description: Relais fixed component address
+  RelayTwoHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Ref: ImageId
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: RelayInstanceProfile
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            # CloudFormation substitutes only the three named placeholders below.
+            set -eo pipefail
+            umask 077
+            root=$RELAIS_INSTALL_ROOT
+            if [[ -z $root ]]; then root=/; fi
+            # shellcheck disable=SC2016 # CloudFormation placeholders, substituted before execution.
+            stack='${AWS::StackName}'
+            # shellcheck disable=SC2016
+            region='${AWS::Region}'
+            resource='RelayTwoHost'
+            finish() {
+              outcome=$?
+              trap - EXIT
+              "$root/opt/aws/bin/cfn-signal" -e "$outcome" --stack "$stack" --resource "$resource" --region "$region"
+              exit "$outcome"
+            }
+            trap finish EXIT
+            install -d -m 0755 "$root/opt/relais" "$root/opt/relais/boot" "$root/opt/relais/bin"
+            install -d -m 0700 "$root/etc/relais"
+            aws cloudformation describe-stack-resource --stack-name "$stack" --logical-resource-id BootFiles --region "$region" --query StackResourceDetail.Metadata --output text > "$root/etc/relais/common.json"
+            aws cloudformation describe-stack-resource --stack-name "$stack" --logical-resource-id "$resource" --region "$region" --query StackResourceDetail.Metadata --output text > "$root/etc/relais/host.json"
+            python3 - "$root" <<'PY'
+            import json, os, sys
+            from pathlib import Path
+            root = Path(sys.argv[1])
+            entry = json.loads((root / 'etc/relais/common.json').read_text())['RelaisFiles']['/opt/relais/boot/load.py']
+            p = root / 'opt/relais/boot/load.py'
+            p.write_text(entry['content']); p.chmod(0o755)
+            PY
+            python3 "$root/opt/relais/boot/load.py" "$root"
+            "$root/opt/relais/boot/install.sh"
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-RelayTwoHost
+      - Key: RelaisRole
+        Value: relay
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+      NetworkInterfaces:
+      - DeviceIndex: '0'
+        NetworkInterfaceId:
+          Ref: RelayTwoInterface
+    Metadata:
+      RelaisFiles:
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["relay"], "secrets": {"relay": "${v5}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: RelayPassword
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.1.10
+              RELAY_PUBLIC=${RelayTwoAddress}
+              RELAY_TWO_PRIVATE=10.42.1.10
+              RELAY_SLOT=preview-two
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.1.10
+              WORKER_NAME=
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - InternetRoute
+    - RelayTwoAssociation
+    - RelayTwoAddressReservation
+    - WorkerOneReservation
+    - WorkerTwoReservation
+    - WorkerThreeReservation
+    - ControlAddressReservation
+    - SignalAddressReservation
+    - BootFiles
+    - RelayAddressReservation
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT15M
 Outputs:
   RelayIPv4:
     Value:
@@ -2768,3 +2979,6 @@ Outputs:
       - Store
       - ConfigurationEndPoint.Address
     Description: Public configuration only; this endpoint is private and uses TLS/Cluster discovery.
+  RelayTwoIPv4:
+    Value:
+      Ref: RelayTwoAddress

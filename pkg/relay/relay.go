@@ -160,11 +160,14 @@ type Config struct {
 	// RouteRestoreTimeout bounds startup store work (default 5 seconds).
 	RouteRestoreTimeout time.Duration
 
-	// PublicAddr is the relay's public UDP address: callers send everything
-	// there, and every answer advertises it as the single host candidate, so
-	// the IP must be specific (not 0.0.0.0 or ::) and reachable by callers.
+	// PublicAddr is the media UDP bind address. Without AdvertiseAddr, every
+	// answer advertises it as the single host candidate, so the IP must be
+	// specific (not 0.0.0.0 or ::) and reachable by callers.
 	// Defaults to "127.0.0.1:0", which suits in-process callers.
 	PublicAddr string
+	// AdvertiseAddr is the caller-visible address when PublicAddr binds behind
+	// a static public address mapping. Zero uses the bound socket address.
+	AdvertiseAddr netip.AddrPort
 
 	// WorkerAddr is the relay's private UDP address for the relay leg: media
 	// workers send to it and receive from it. Defaults to "127.0.0.1:0".
@@ -589,6 +592,9 @@ func listen(ctx context.Context, name, addr string) (*net.UDPConn, netip.AddrPor
 // PublicAddr is the relay's public UDP address: the single host candidate
 // every answer advertises.
 func (r *Relay) PublicAddr() netip.AddrPort {
+	if r.cfg.AdvertiseAddr.IsValid() {
+		return r.cfg.AdvertiseAddr
+	}
 	return r.publicAddr
 }
 

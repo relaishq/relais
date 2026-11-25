@@ -15,7 +15,7 @@ import (
 )
 
 func fixtureConfig() Config {
-	return Config{Name: "relais-fixture", Version: "0.3.0", Architecture: "x86_64", ArchiveSHA256: strings.Repeat("9", 64)}
+	return Config{Name: "relais-fixture", Version: "0.4.0", Architecture: "x86_64", ArchiveSHA256: strings.Repeat("9", 64)}
 }
 func fixtureTopology(t *testing.T) *Topology {
 	t.Helper()
@@ -377,5 +377,45 @@ func TestRunningClockCheckRejectsWrongSourcesAndMissingNoAdjust(t *testing.T) {
 				t.Fatalf("MUTATION: chrony-source-table pass=%v err=%v output=%s", row.pass, err, output)
 			}
 		})
+	}
+}
+
+func TestTemplateReleaseFloorKeepsExactPinnedComparisons(t *testing.T) {
+	for _, pin := range []struct{ version, digest string }{{"0.3.4", ReleaseASHA256}, {"0.3.5", ReleaseBSHA256}} {
+		c := fixtureConfig()
+		c.Version, c.ArchiveSHA256 = pin.version, pin.digest
+		topology, err := Load(os.DirFS("../.."), c)
+		if err != nil {
+			t.Fatal("exact pinned comparison refused", err)
+		}
+		for _, host := range topology.Hosts {
+			if !strings.Contains(host.Metadata.Files["/etc/relais/node.env"].Content, "RELAY_TWO_PRIVATE=\n") {
+				t.Fatal("pinned comparison enabled relay sets")
+			}
+		}
+		c.ArchiveSHA256 = strings.Repeat("1", 64)
+		if _, err = Load(os.DirFS("../.."), c); err == nil {
+			t.Fatal("unrecognized old archive accepted")
+		}
+	}
+	c := fixtureConfig()
+	c.Version = "0.3.0"
+	if _, err := Load(os.DirFS("../.."), c); err == nil {
+		t.Fatal("old unpinned release accepted")
+	}
+}
+
+func TestPinnedComparisonDerivesSecondRelayAddress(t *testing.T) {
+	files := copiedTemplate(t)
+	entry := files["deploy/aws/preview.yaml"]
+	entry.Data = bytes.ReplaceAll(entry.Data, []byte("10.42.1.10"), []byte("10.42.1.19"))
+	topology, err := Load(files, fixtureConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range topology.Hosts {
+		if !strings.Contains(host.Metadata.Files["/etc/relais/node.env"].Content, "RELAY_TWO_PRIVATE=\n") {
+			t.Fatal("address-dependent comparison override")
+		}
 	}
 }
