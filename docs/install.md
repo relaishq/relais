@@ -231,6 +231,9 @@ v0.3.0, v0.3.3 with v0.3.2, and v0.3.5 with v0.3.4. v0.3.2 and v0.3.4 support
 only themselves. Read `scripts/release/compatibility-policy.json` in each
 archive's source tag, and let `relais-compat preflight` decide.
 
+v0.4.0 supports only itself. It does not join a live pool with 0.3.x and
+cannot roll back to 0.3.x. Start a new pool or stack with v0.4.0.
+
 Stop this local topology before replacing its programs. Keep the state directory
 to reuse its secrets, then start with the new archive's `start.sh -state DIR`.
 For a multi-host deployment, see the [deployment guide](deploy.md).
