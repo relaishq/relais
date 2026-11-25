@@ -11,7 +11,7 @@ Choose `linux` or `darwin` (macOS), and `amd64` (Intel/AMD) or `arm64` (Apple
 silicon/ARM). For example, on an Apple silicon Mac:
 
 ```bash
-VERSION=0.3.0
+VERSION=0.4.0
 OS=darwin
 ARCH=arm64
 ARCHIVE="relais_${VERSION}_${OS}_${ARCH}.tar.gz"
