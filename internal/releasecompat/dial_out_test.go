@@ -28,6 +28,8 @@ func TestDialOutKeepsPublishedInboundPairs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Nominate the published peers so only format compatibility is checked.
+			next.OldestLivePeer, next.OldestRollback = "0.3.0", "0.3.0"
 			next.TestedPeers = []string{"0.3.0", "0.3.1", "0.3.2"}
 			for _, test := range []struct {
 				from, to Manifest
