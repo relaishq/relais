@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
-	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 )
 
@@ -71,7 +70,7 @@ func (g *LeaseGuard) accept(r LeaseRead) error {
 			}
 		}
 	}
-	for _, slot := range inventory.Slots {
+	for _, slot := range g.session.hostSlots() {
 		s := r.Evidence.Clocks[slot]
 		sent, ok := r.Sent[slot]
 		if !ok || s.Lease == nil || s.TrackingLog == nil || !s.TrackingLog.ReadComplete {
@@ -107,7 +106,7 @@ func (g *LeaseGuard) checkAt(at time.Duration) error {
 	}
 	values := map[string]int64{}
 	declared, _ := new(big.Rat).SetString(g.growth)
-	for _, slot := range inventory.Slots {
+	for _, slot := range g.session.hostSlots() {
 		v, err := g.leases[slot].At(at)
 		if err != nil {
 			return err
@@ -218,7 +217,7 @@ func (g *LeaseGuard) Refresh(ctx context.Context, end time.Duration) error {
 
 func leaseRestoration(op string, rollback, recovery bool) bool {
 	switch op {
-	case "worker-start", "control-start", "signal-start", "unfreeze", "relay-replenish":
+	case "worker-start", "control-start", "signal-start", "unfreeze", "relay-replenish", "relay-restore":
 		return true
 	case "replace":
 		return rollback || recovery

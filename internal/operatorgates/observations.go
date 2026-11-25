@@ -162,7 +162,7 @@ func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds,
 	if err != nil {
 		return clocks.Evidence{Version: clocks.EvidenceVersion, At: s.clock.Wall(), Clocks: rows, Falsification: probes}, err
 	}
-	evidence, err = clocks.Check(rows, bounds, frontend, control)
+	evidence, err = clocks.Check(rows, bounds, frontend, control, s.scenario.RelayTwo)
 	evidence.At = s.clock.Wall()
 	evidence.Falsification = probes
 	return evidence, err
@@ -172,7 +172,7 @@ func (s *Session) FreshClocks(ctx context.Context, p Peer, bounds clocks.Bounds,
 // independent evidence, and no mutation can start before the whole batch joins.
 func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end time.Duration, script func(string) (string, error), decode func(string, string) error, sent ...func(string, time.Duration)) (err error) {
 	if !s.capabilities[operator.HostReadBatch] {
-		for _, slot := range inventory.Slots {
+		for _, slot := range s.hostSlots() {
 			source, err := script(slot)
 			if err != nil {
 				return err
@@ -184,7 +184,7 @@ func (s *Session) observeHosts(ctx context.Context, p Peer, action string, end t
 		return nil
 	}
 	args := operator.HostReadBatchArgs{}
-	for _, slot := range inventory.Slots {
+	for _, slot := range s.hostSlots() {
 		source, err := script(slot)
 		if err != nil {
 			return err
@@ -211,7 +211,7 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 			return operator.Failed
 		}
 		var batch operator.HostReadBatchOutput
-		if observe.Decode(reply.Payload, &batch, observe.Contract{"replies"}) != nil || len(batch.Replies) != len(inventory.Slots) {
+		if observe.Decode(reply.Payload, &batch, observe.Contract{"replies"}) != nil || len(batch.Replies) != len(s.hostSlots()) {
 			return operator.Unknown
 		}
 		unknown := func(slot string, child operator.Reply, rule string) operator.Certainty {
@@ -225,26 +225,26 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 		// Check every transport before decoding any observations. A definite failure
 		// on one host must never hide uncertainty on another host.
 		for i, child := range batch.Replies {
-			if child.ID != inventory.Slots[i] || !child.Transport.Valid() || child.Blob != nil {
-				return unknown(inventory.Slots[i], child, "malformed-reply")
+			if child.ID != s.hostSlots()[i] || !child.Transport.Valid() || child.Blob != nil {
+				return unknown(s.hostSlots()[i], child, "malformed-reply")
 			}
 			if child.Transport == operator.Unknown {
-				return unknown(inventory.Slots[i], child, "transport-unknown")
+				return unknown(s.hostSlots()[i], child, "transport-unknown")
 			}
 			if child.NotSubmitted {
 				if child.Transport != operator.Failed || !refusalCode(child.RefusalCode) {
-					return unknown(inventory.Slots[i], child, "malformed-reply")
+					return unknown(s.hostSlots()[i], child, "malformed-reply")
 				}
 				continue
 			}
 			if child.ExitCode == nil {
-				return unknown(inventory.Slots[i], child, "missing-exit-status")
+				return unknown(s.hostSlots()[i], child, "missing-exit-status")
 			}
 			if observe.Decode(child.Payload, &outputs[i], observe.Contract{"stdout"}) != nil {
-				return unknown(inventory.Slots[i], child, "malformed-reply")
+				return unknown(s.hostSlots()[i], child, "malformed-reply")
 			}
 			if len(outputs[i].Stdout) > operator.MaxHostOutputBytes {
-				return unknown(inventory.Slots[i], child, "truncated-output")
+				return unknown(s.hostSlots()[i], child, "truncated-output")
 			}
 		}
 		for i, child := range batch.Replies {
@@ -252,13 +252,13 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 			if child.NotSubmitted {
 				e = errors.New("precondition-failed:" + child.RefusalCode)
 			} else {
-				e = decode(inventory.Slots[i], outputs[i].Stdout)
+				e = decode(s.hostSlots()[i], outputs[i].Stdout)
 			}
 			if e == nil && (child.Transport != operator.Succeeded || *child.ExitCode != 0) {
 				e = errors.New("precondition-failed")
 			}
 			if e != nil {
-				s.observationFailure(inventory.Slots[i], action, e)
+				s.observationFailure(s.hostSlots()[i], action, e)
 				diagnosed = true
 				if observed == nil {
 					observed = e
@@ -269,7 +269,7 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 			return operator.Failed
 		}
 		return operator.Succeeded
-	}, observationSendHooks(inventory.Slots, sent)...)
+	}, observationSendHooks(s.hostSlots(), sent)...)
 	if childFailure != nil {
 		// Exchange has latched the unknown result before diagnostic callbacks.
 		s.noteUnknownHost(childFailure.RequestID, childFailure.Target, action, childFailure.Rule)

@@ -81,12 +81,12 @@ func (u Uncertainty) Public() Uncertainty {
 		u.DeadlineUnixMS = "unavailable"
 	}
 	switch u.Target {
-	case "hosts", "relay", "w1", "w2", "shared", "caller", "store", "judge", "session":
+	case "hosts", "relay", "relay-two", "w1", "w2", "shared", "caller", "store", "judge", "session":
 	default:
 		u.Target = "unavailable"
 	}
 	switch u.Action {
-	case "", "ready", "start", "stop", "collect", "latch", "judge", "observe", "failover", "caller-token.json", "transport.json", "setup-ready.json", "begin.json", "ready.json", "registration.json", "caller-probes", "caller-start", "ack", "hangup", "inventory", "clock", "telemetry", "signal-stop", "signal-start", "move", "status", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "freeze", "unfreeze", "drain", "worker-stop", "replace", "worker-start", "control-stop", "control-start", "worker-down", "relay-stage", "relay-stop", "relay-replenish":
+	case "", "ready", "start", "stop", "collect", "latch", "judge", "observe", "failover", "caller-token.json", "transport.json", "setup-ready.json", "begin.json", "ready.json", "registration.json", "caller-probes", "caller-start", "ack", "hangup", "inventory", "clock", "telemetry", "signal-stop", "signal-start", "move", "status", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "freeze", "unfreeze", "drain", "worker-stop", "replace", "worker-start", "control-stop", "control-start", "worker-down", "relay-stage", "relay-stop", "relay-replenish", "relay-isolate", "relay-restore":
 	default:
 		if !Gate(u.Action).Valid() {
 			u.Action = "operation"

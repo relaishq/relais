@@ -405,6 +405,7 @@ func TestContainerTemplateBoot(t *testing.T) {
 	if err = d.Boot(ctx); err != nil {
 		t.Fatal(err)
 	}
+	verifyRelayIsolation(t, ctx, d)
 	if err = d.NegativeControls(ctx, func(context.Context, string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}

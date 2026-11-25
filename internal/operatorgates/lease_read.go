@@ -73,7 +73,7 @@ func (s *Session) ReadLeases(ctx context.Context, p Peer, end time.Duration) (Le
 func (s *Session) observeLeases(ctx context.Context, p Peer, end time.Duration, input func(string) operator.HostLeaseReadInput, decode func(string, string) error, sent func(string, time.Duration)) error {
 	if s.capabilities[operator.HostLeaseReadBatch] {
 		args := operator.HostLeaseReadArgs{}
-		for _, slot := range inventory.Slots {
+		for _, slot := range s.hostSlots() {
 			args.Reads = append(args.Reads, input(slot))
 		}
 		raw, err := json.Marshal(args)
@@ -82,7 +82,7 @@ func (s *Session) observeLeases(ctx context.Context, p Peer, end time.Duration, 
 		}
 		return s.observeHostBatch(ctx, p, operator.HostLeaseReadBatch, "clock", raw, end, decode, sent)
 	}
-	for _, slot := range inventory.Slots {
+	for _, slot := range s.hostSlots() {
 		raw, err := json.Marshal(operator.HostLeaseReadArgs{Reads: []operator.HostLeaseReadInput{input(slot)}})
 		if err != nil {
 			return err

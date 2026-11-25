@@ -2054,3 +2054,56 @@ maximum leaves five minutes for startup, collection and stop at that ceiling.
 `TestCallerWindowPreservesCampaignFitReserve` pin these limits. An excluded kill
 that leaves `trial-count-insufficient` remains a rehearsal failure, as checked
 by `TestRehearsalExcludedKillCounts`.
+
+## Optional second relay host and bounded isolation
+
+A scenario can set `relayTwo: true` to require `relay-two` after the default
+`relay`, `w1`, `w2`, `shared` slots. Its inventory contains one participant,
+`relay-two`, with role `relay` and unit `relais-relay.service`. The `relay` slot
+still contains `relay-primary` and `relay-standby`. The scenario identity binds
+this choice. Missing second-host inventory or clock evidence refuses admission.
+Parts A, B and M omit this option and retain the four-host inventory, clock
+reads and procedures. The container comparison still strips the second relay.
+
+Process parameters carry `relay` and optional `relayTwo` private HTTP endpoints.
+The second endpoint is required for a scenario with the second host. Existing
+single-relay callers omit it. This foundation does not add a relay-loss gate or
+part R; those are a separate step.
+
+`relay-status` selects the corresponding endpoint. The fixed `relay-isolate`
+and `relay-restore` steps target `relay` or the opted-in
+`relay-two` slot. `isolationSeconds` defaults to 120 seconds, accepts integer
+values from 1 through 300, and cannot be extended by repeating isolation while
+the dedicated table exists. This gives a 60-second procedure twice its expected
+fault duration. Restore is idempotent and follows the existing restoration
+admission path, with fresh inventory but without a clock refresh or quiet gap.
+
+Isolation requires `nft` on the standard host image. The step checks for it
+before mutation and refuses if absent; it does not install packages or modify
+an existing firewall. The rehearsal image explicitly includes `nftables`.
+The selected image and kernel must support the timed `nf_proto` set used here;
+the Linux container proof checks the executable rules, rather than inferring
+support from the image family. No iptables fallback is used.
+
+One dedicated `inet relais_gate_isolation` table drops all non-loopback input
+and output for both IP families. It permits outbound TCP destination port 443
+and established replies in the reply direction for the management channel.
+It does not permit arbitrary established traffic: existing media, private HTTP
+and store connections must also stop. The rules use no deployment addresses or
+call ports. The supplied endpoint parameters remain the source of probe targets.
+
+Before applying the table atomically, the step arms a transient host-owned
+systemd timer. The timer deletes only the table generation it owns, even if the
+operator process has exited. Kernel set elements also expire after the supplied
+duration, so packet drops end within that duration even if timer dispatch is
+late. Timer cleanup normally removes the empty table within about one more
+second; a delayed or failed timer can leave an inert table. Early restore deletes
+only the dedicated table. An old timer cannot delete a later isolation attempt.
+A host reboot also removes this nonpersistent table.
+
+`TestContainerTemplateBoot` runs the actual isolation code against the booted
+relay and its private peers. It checks UDP, private HTTP and store isolation,
+management-port egress, loopback, explicit restore, repeated restore and expiry
+after the operator process exits. This proof needs Linux, privileged disposable
+containers and a pinned release archive. It is NOT-RUN on macOS; it does not
+establish deployed management-agent or production-network behavior.

@@ -239,6 +239,8 @@ def execute(op, p, evidence=None):
         return service_journals()
     if op == "telemetry":
         return telemetry(p)
+    if op in ("relay-isolate", "relay-restore"):
+        return relay_isolation(op, p, command)
     worker = p.get("worker")
     if op == "move":
         evidence["phase"] = "status"
@@ -255,7 +257,7 @@ def execute(op, p, evidence=None):
     if op == "worker-status":
         return http(p["workers"][worker]["http"] + "/status")
     if op == "relay-status":
-        return http(p["relay"] + "/status")
+        return http((p["relayTwo"] if p.get("slot") == "relay-two" else p["relay"]) + "/status")
     if op in ("freeze", "unfreeze", "signal-stop", "signal-start"):
         if op == "signal-start":
             configure("relais-signal.service", "signal", p["targetDir"])

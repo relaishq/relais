@@ -37,6 +37,7 @@ type Identity struct {
 }
 
 type Scenario struct {
+	RelayTwo      bool     `json:"relayTwo,omitempty"`
 	SchemaVersion int      `json:"schemaVersion"`
 	Digest        string   `json:"digest"`
 	Gates         []Gate   `json:"gates"`

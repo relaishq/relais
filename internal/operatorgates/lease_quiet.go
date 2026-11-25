@@ -7,7 +7,6 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
-	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -183,7 +182,7 @@ func (g *LeaseGuard) recordFaultLease(timing *FaultQuietTiming) {
 	defer g.mu.Unlock()
 	now := g.clock.Elapsed()
 	timing.RemainingNS, timing.LimitingSlot = 0, ""
-	for _, slot := range inventory.Slots {
+	for _, slot := range g.session.hostSlots() {
 		v, err := g.leases[slot].At(now)
 		if err != nil {
 			timing.RemainingNS, timing.LimitingSlot = 0, ""

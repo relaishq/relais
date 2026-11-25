@@ -28,6 +28,9 @@ func (s *Session) BindClock(ctx context.Context, p Peer, c ResourceConfig, end t
 	if observe.DecodeClosedLimit(raw, &receipt, nil, operator.ClockArtifactLimit) != nil || observe.DecodeClosedLimit(evidence, &input, nil, operator.ClockArtifactLimit) != nil {
 		return refuse("clock-binding-invalid")
 	}
+	if len(input.Hosts) != len(s.hostSlots()) {
+		return refuse("clock-binding-roles-differ")
+	}
 	selected, err := clocks.Select(input, c.ClockPolicy)
 	if err != nil {
 		return refuse("clock-binding-selection-differ")

@@ -71,7 +71,7 @@ func (c resourceCallerClock) Sleep(ctx context.Context, d time.Duration) error {
 
 func (r ResourceRunner) validate(s *Session) error {
 	c := r.Config
-	if ValidateProcessParameters(c.Parameters) != nil || inventory.ValidatePins(c.Pins, s.scenario) != nil {
+	if ValidateProcessParameters(c.Parameters) != nil || s.scenario.RelayTwo && c.Parameters.RelayTwo == "" || inventory.ValidatePins(c.Pins, s.scenario) != nil {
 		return errors.New("invalid-resource-config")
 	}
 	if c.Architecture != "x86_64" && c.Architecture != "arm64" {
@@ -134,7 +134,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		pause = resourcePause
 	}
 	// The timing budget is settled before any host request, never during a fault.
-	budget, setupErr := r.Config.ClockTiming.budget(s.restoreReads())
+	budget, setupErr := r.Config.ClockTiming.budget(s.restoreReads(), s.scenario.RelayTwo)
 	if setupErr == nil {
 		s.timing = budget
 		setupErr = r.validate(s)
@@ -415,7 +415,7 @@ func (r *ProcessRuntime) observe(ctx context.Context, end time.Duration, statusE
 		return out, err
 	}
 	out.Status = &status.Status
-	for _, slot := range inventory.Slots {
+	for _, slot := range r.Session.hostSlots() {
 		row, err := r.Step(ctx, "telemetry", slot, end, ProcessExtra{})
 		if err != nil {
 			return out, err

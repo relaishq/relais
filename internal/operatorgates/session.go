@@ -102,6 +102,7 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 		return nil, err
 	}
 	s := &Session{exchange: make(chan struct{}, 1), digest: init.Scenario.Digest, ID: id, Budget: budget, clock: clock, capabilities: map[operator.Operation]bool{}, requests: map[string]*pending{}, gates: append([]operator.Gate{}, init.Scenario.Gates...), timing: referenceTiming}
+	s.timing.extraHost = init.Scenario.RelayTwo
 	if init.ClockBinding != nil {
 		s.clockArtifacts = *init.ClockBinding
 	}
@@ -450,3 +451,6 @@ func (s *Session) requestIDs() []string {
 	})
 	return ids
 }
+
+// hostSlots is fixed by the scenario identity, never inferred from live replies.
+func (s *Session) hostSlots() []string { return operator.HostSlots(s.scenario.RelayTwo) }
