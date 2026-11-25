@@ -23,7 +23,6 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
-	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -83,9 +82,10 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 	if clock.now != nil {
 		now = clock.now
 	}
+	slots := operator.HostSlots(plan.Scenario.RelayTwo)
 	until, err := strconv.ParseInt(plan.HelpersUntilUnixMS, 10, 64)
-	valid := err == nil && until <= now().Add(operatorgates.SessionMaximum).UnixMilli() && *latencyMS >= 0 && *latencyMS <= 150000 && *pollSeconds >= 0 && *pollSeconds <= 300 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(inventory.Slots, plan.FrontendSlot) && slices.Contains(inventory.Slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(inventory.Slots)
-	for _, slot := range inventory.Slots {
+	valid := err == nil && until <= now().Add(operatorgates.SessionMaximum).UnixMilli() && *latencyMS >= 0 && *latencyMS <= 150000 && *pollSeconds >= 0 && *pollSeconds <= 300 && clockAdmitRun.MatchString(plan.RunID) && slices.Contains(slots, plan.FrontendSlot) && slices.Contains(slots, plan.ControlSlot) && (plan.CallerLeapMode == "smeared" || plan.CallerLeapMode == "unsmeared") && len(plan.Addresses) == len(slots)
+	for _, slot := range slots {
 		address, err := netip.ParseAddr(plan.Addresses[slot])
 		valid = valid && err == nil && address.Is4()
 	}
@@ -104,14 +104,14 @@ func clockAdmit(args []string, diagnostics io.Writer, clock clockAdmitClock) int
 		return 2
 	}
 	latency, poll := time.Duration(*latencyMS)*time.Millisecond, time.Duration(*pollSeconds)*time.Second
-	if err := operatorrehearsal.CheckClockAdmissionTiming(latency, poll); err != nil {
+	if err := operatorrehearsal.CheckClockAdmissionTiming(latency, poll, plan.Scenario.RelayTwo); err != nil {
 		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	status := operatorrehearsal.AdmitClock(ctx, operatorrehearsal.ClockAdmission{
-		RunID: plan.RunID, FrontendSlot: plan.FrontendSlot, ControlSlot: plan.ControlSlot, CallerLeapMode: plan.CallerLeapMode,
+		Scenario: plan.Scenario, RunID: plan.RunID, FrontendSlot: plan.FrontendSlot, ControlSlot: plan.ControlSlot, CallerLeapMode: plan.CallerLeapMode,
 		Policy: policy, Addresses: plan.Addresses, HelpersUntil: time.UnixMilli(until), Output: *output,
 		Host: clockAdmitHost(*program), HostReadLatency: latency, PollPeriod: poll, Now: clock.now, Pause: clock.pause,
 	})

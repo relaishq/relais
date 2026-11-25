@@ -76,7 +76,22 @@ while True:
   if time.monotonic()>until: raise
   time.sleep(.1)
 baseline()
+import http.client
+existing=http.client.HTTPConnection(address.hostname,address.port,timeout=.5)
+existing.request('GET','/status');existing.getresponse().read()
+assert existing.sock is not None, 'private HTTP did not keep its existing flow'
+media=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);media.settimeout(.5)
+def existing_udp():
+ media.sendto(b'existing-flow',(address.hostname,address.port))
+ assert media.recv(1024)==b'existing-flow'
+existing_udp()
 assert execute('relay-isolate',dict(p,isolationSeconds=15))['completed']
+rules=command([shutil.which('nft'),'-n','list','table','inet',ISOLATION_TABLE])
+for required in ('169.254.0.0/16','fe80::/10','icmpv6 type','udp dport 53','udp sport 53','tcp dport 53','tcp sport 53'):
+ assert required in rules, 'missing management/clock rule: '+required
+blocked(lambda: (existing.request('GET','/status'),existing.getresponse().read()))
+blocked(existing_udp)
+existing.close();media.close()
 blocked(lambda: tcp(address.hostname,address.port))
 blocked(lambda: tcp(p['store'],p['storePort']))
 blocked(udp)

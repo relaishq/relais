@@ -62,7 +62,7 @@ func (r *TimingRecorder) RecordClocks(e clocks.Evidence) {
 	}
 	r.refreshes++
 	rows := map[string]clocks.Sample{}
-	for _, slot := range []string{"relay", "shared", "w1", "w2", "relay-two"} {
+	for _, slot := range operator.HostSlots(true) {
 		if sample, ok := e.Clocks[slot]; ok {
 			sample = clocks.PublicSample(sample)
 			rows[slot] = sample
@@ -87,7 +87,7 @@ func (r *TimingRecorder) RecordLeaseRead(read LeaseRead, received time.Duration)
 	}
 	r.refreshes++
 	sent := map[string]int64{}
-	for _, slot := range []string{"relay", "shared", "w1", "w2", "relay-two"} {
+	for _, slot := range operator.HostSlots(true) {
 		if at, ok := read.Sent[slot]; ok {
 			sent[slot] = int64(at)
 		}
@@ -125,7 +125,7 @@ func (r *TimingRecorder) RecordRestorationLeaseRead(read LeaseRead, started, com
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sent := map[string]int64{}
-	for _, slot := range []string{"relay", "shared", "w1", "w2", "relay-two"} {
+	for _, slot := range operator.HostSlots(true) {
 		if at, ok := read.Sent[slot]; ok {
 			sent[slot] = int64(at)
 		}

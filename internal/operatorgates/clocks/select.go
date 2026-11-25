@@ -51,7 +51,6 @@ type ClockSelection struct {
 // SelectionMinimumUpdates is the fewest tracking updates each host needs inside the window.
 const SelectionMinimumUpdates = 10
 
-var selectionSlots = []string{"relay", "shared", "w1", "w2"}
 var column14Pattern = regexp.MustCompile(`^[0-9]\.[0-9]{3}e([+-][0-9]{2,3})$`)
 var selectionRunPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 

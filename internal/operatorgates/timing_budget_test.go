@@ -21,7 +21,7 @@ var slowTiming = ClockTiming{PollSeconds: 8, HostReadLatencyMS: 4000}
 // The hosted poll uses local-read latency. Pin the actual session derivation
 // separately from both the zero-value reference and slow remote transports.
 func TestHostedPollTimingBudget(t *testing.T) {
-	b, err := (ClockTiming{PollSeconds: 8, HostReadLatencyMS: 400}).budget(4)
+	b, err := (ClockTiming{PollSeconds: 8, HostReadLatencyMS: 400}).budget(4, false)
 	require.NoError(t, err)
 	require.Equal(t, 3200*time.Millisecond, b.leaseAttempt())
 	require.Equal(t, 550*time.Millisecond, b.leaseReadMinimum())
@@ -31,12 +31,12 @@ func TestHostedPollTimingBudget(t *testing.T) {
 }
 
 func TestTimingBudgetDerivation(t *testing.T) {
-	reference, err := ClockTiming{}.budget(4)
+	reference, err := ClockTiming{}.budget(4, false)
 	require.NoError(t, err)
-	stated, err := ClockTiming{PollSeconds: 1, HostReadLatencyMS: 400}.budget(4)
+	stated, err := ClockTiming{PollSeconds: 1, HostReadLatencyMS: 400}.budget(4, false)
 	require.NoError(t, err)
 	require.Equal(t, reference, stated)
-	slow, err := slowTiming.budget(4)
+	slow, err := slowTiming.budget(4, false)
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name            string
@@ -91,7 +91,7 @@ func TestTimingBudgetRefusesUnfitConfiguration(t *testing.T) {
 		{"restore-batch", ClockTiming{PollSeconds: 8, HostReadLatencyMS: 7251}, 1, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := tc.timing.budget(tc.reads)
+			_, err := tc.timing.budget(tc.reads, false)
 			got := ""
 			if err != nil {
 				got = err.Error()
@@ -158,7 +158,7 @@ func slowWorldAt(t *testing.T, timing ClockTiming) (*roundTripWorld, ProcedurePo
 	w, p := newRoundTripWorld(t, true)
 	s := w.runtime.Session
 	var err error
-	s.timing, err = timing.budget(s.restoreReads())
+	s.timing, err = timing.budget(s.restoreReads(), false)
 	require.NoError(t, err)
 	poll := time.Duration(timing.PollSeconds) * time.Second
 	latency := time.Duration(timing.HostReadLatencyMS) * time.Millisecond
@@ -271,7 +271,7 @@ func TestConfiguredLeaseSendMinimum(t *testing.T) {
 		for _, short := range []bool{true, false} {
 			s, c := fixtureSession(t)
 			var err error
-			s.timing, err = slowTiming.budget(1)
+			s.timing, err = slowTiming.budget(1, false)
 			require.NoError(t, err)
 			s.capabilities[tc.op] = true
 			p := &observationPeer{respond: func(q operator.Request) operator.Reply { return reply(q, operator.Succeeded) }}
@@ -292,7 +292,7 @@ func TestConfiguredDrainKeepsJudgeReserve(t *testing.T) {
 	for budget, drained := range map[time.Duration]time.Duration{PoolReserve: 32 * time.Second, 100 * time.Second: 12 * time.Second, 88 * time.Second: 0} {
 		s, c, pool := finalDrainFixture(t)
 		var err error
-		s.timing, err = slowTiming.budget(1)
+		s.timing, err = slowTiming.budget(1, false)
 		require.NoError(t, err)
 		s.gates = nil
 		s.Budget.end = budget

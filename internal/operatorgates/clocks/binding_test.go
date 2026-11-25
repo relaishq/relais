@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/relaishq/relais/pkg/operator"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,7 +146,7 @@ func TestReceiptBindingEqualSecondBoundaries(t *testing.T) {
 }
 
 func TestReceiptBindingEveryHost(t *testing.T) {
-	for i, slot := range selectionSlots {
+	for i, slot := range operator.HostSlots(false) {
 		t.Run(slot, func(t *testing.T) {
 			in := bindingFixture(t)
 			in.BeforeRun[i].Tracking.Rows[10].SkewPPM++

@@ -10,18 +10,28 @@ ISOLATION_LOCK = "/run/relais-gate-isolation.lock"
 
 
 def isolation_rules(seconds, generation):
-    # Only outbound management HTTPS and its reply direction survive. A generic
+    # Management, resolver and link-local clock/credential traffic survive. A generic
     # established rule would also preserve existing store and private HTTP flows.
     return f'''create table inet {ISOLATION_TABLE} {{
  comment "{generation}"
  set isolated {{ type nf_proto; flags timeout; elements = {{ ipv4 timeout {seconds}s, ipv6 timeout {seconds}s }}; }}
  chain input {{ type filter hook input priority -10; policy accept;
   iifname "lo" accept
+  ip saddr 169.254.0.0/16 accept
+  ip6 saddr fe80::/10 accept
+  meta l4proto ipv6-icmp icmpv6 type {{ 133, 134, 135, 136 }} accept
+  udp sport 53 ct direction reply ct state established accept
+  tcp sport 53 ct direction reply ct state established accept
   tcp sport 443 ct direction reply ct state established accept
   meta nfproto @isolated drop
  }}
  chain output {{ type filter hook output priority -10; policy accept;
   oifname "lo" accept
+  ip daddr 169.254.0.0/16 accept
+  ip6 daddr fe80::/10 accept
+  meta l4proto ipv6-icmp icmpv6 type {{ 133, 134, 135, 136 }} accept
+  udp dport 53 ct direction original accept
+  tcp dport 53 ct direction original accept
   tcp dport 443 ct direction original accept
   meta nfproto @isolated drop
  }}

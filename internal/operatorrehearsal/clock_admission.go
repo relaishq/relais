@@ -23,6 +23,7 @@ type ClockHostCommand func(ctx context.Context, slot string, detach bool, input 
 // ClockAdmission is the launcher's admission input. The rehearsal and
 // `relais-gates clock-admit` both run it through collectClockSelection.
 type ClockAdmission struct {
+	Scenario                  operator.Scenario
 	RunID                     string
 	FrontendSlot, ControlSlot string
 	CallerLeapMode            string
@@ -73,15 +74,15 @@ const clockRetryPause = 2 * time.Second
 
 // clockAdmissionTiming derives the seed, helper setup and the admission
 // window from the host command latency L and the tracking-row period P.
-func clockAdmissionTiming(latency, poll time.Duration) (seed, setup, window time.Duration) {
+func clockAdmissionTiming(latency, poll time.Duration, relayTwo bool) (seed, setup, window time.Duration) {
 	poll = max(poll, time.Second)
 	// An oversized history takes one read that skips it and one that
 	// completes, with the retry pause between them and the seed pause after;
 	// one second is left for the rest.
 	seed = max(clockSeedMinimum, latency+clockRetryPause+latency+clockRetryPause+time.Second)
-	// Eight commands run one after another: each slot writes its helper, then
+	// Two commands per selected host run in sequence: each writes its helper, then
 	// starts it. Two seconds let the frontend helper send its first probes.
-	setup = max(clockSetupMinimum, 2*time.Duration(len(Slots))*latency+2*time.Second)
+	setup = max(clockSetupMinimum, 2*time.Duration(len(operator.HostSlots(relayTwo)))*latency+2*time.Second)
 	// Probes start after setup, so the window may start no earlier than
 	// setup minus the allowance. It ends one second before a tracking row,
 	// which can come up to P later. An attempt that just misses that row is
@@ -94,11 +95,11 @@ func clockAdmissionTiming(latency, poll time.Duration) (seed, setup, window time
 // CheckClockAdmissionTiming refuses, before any host command, a poll period
 // whose rows cannot give the selector its minimum updates in the window, and
 // a timing whose seed and admission window exceed the maximum.
-func CheckClockAdmissionTiming(latency, poll time.Duration) error {
+func CheckClockAdmissionTiming(latency, poll time.Duration, relayTwo bool) error {
 	if poll*clocks.SelectionMinimumUpdates > clockAdmissionWindowSeconds*time.Second {
 		return errors.New("clock-admit-poll")
 	}
-	if seed, _, window := clockAdmissionTiming(latency, poll); seed+window > clockAdmissionMaximum {
+	if seed, _, window := clockAdmissionTiming(latency, poll, relayTwo); seed+window > clockAdmissionMaximum {
 		return errors.New("clock-admit-budget")
 	}
 	return nil
@@ -134,7 +135,7 @@ func (a ClockAdmission) ports() clockAdmissionPorts {
 		a.Timeout = context.WithTimeout
 	}
 	return clockAdmissionPorts{
-		policy: a.Policy, leapMode: a.CallerLeapMode, selectBounds: a.selectBounds, pause: a.Pause, now: a.Now, timeout: a.Timeout, latency: a.HostReadLatency, poll: a.PollPeriod,
+		relayTwo: a.Scenario.RelayTwo, policy: a.Policy, leapMode: a.CallerLeapMode, selectBounds: a.selectBounds, pause: a.Pause, now: a.Now, timeout: a.Timeout, latency: a.HostReadLatency, poll: a.PollPeriod,
 		read: func(ctx context.Context, slot, script string) (string, error) {
 			return a.Host(ctx, slot, false, []byte(script), "sh", "-eu")
 		},
@@ -154,7 +155,7 @@ func (a ClockAdmission) startHelpers(ctx context.Context) error {
 	}
 	// Start every endpoint before starting the frontend's three probe loops.
 	order := []string{}
-	for _, slot := range Slots {
+	for _, slot := range operator.HostSlots(a.Scenario.RelayTwo) {
 		if slot != a.FrontendSlot {
 			order = append(order, slot)
 		}

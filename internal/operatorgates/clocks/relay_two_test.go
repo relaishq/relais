@@ -1,6 +1,9 @@
 package clocks
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
@@ -58,5 +61,28 @@ func TestRelayTwoClockRoleRequiresHost(t *testing.T) {
 	}
 	if err := CheckConvergence(in, policy); err == nil || err.Error() != "clock-select-admission" {
 		t.Fatal("absent convergence frontend admitted", err)
+	}
+}
+
+func TestFourHostReceiptBytesUnchanged(t *testing.T) {
+	in, _ := selectionFixture()
+	in.RunID = "run-fixture"
+	policy := SelectionPolicy{WindowSeconds: 120, FloorNS: 50000, ScaleNumerator: 2, ScaleDenominator: 1, AllowanceNS: 10000, SignalReserveNS: 50000, ControlCeilingNS: 250000, WorkerCeilingNS: 350000, MaxDispersionGrowthPPM: "5"}
+	selected, err := Select(in, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := os.ReadFile("testdata/bound-receipt.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want ClockSelection
+	if err = json.Unmarshal(frozen, &want); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := json.Marshal(selected.Receipt)
+	old, _ := json.Marshal(want.Receipt)
+	if !bytes.Equal(got, old) || selected.SHA256 != want.SHA256 {
+		t.Fatalf("four-host receipt bytes changed: %s != %s", selected.SHA256, want.SHA256)
 	}
 }

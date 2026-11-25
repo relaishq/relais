@@ -17,6 +17,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 // rehearsalHelperMaximum matches the hosted job limit. Helpers cover setup
@@ -39,8 +40,8 @@ const rehearsalClockAdmissionWindowSeconds = 240
 // convergence history covers the opening probes at a skipped-poll cadence.
 const rehearsalClockProbeRecovery = 50 * time.Second
 
-func rehearsalClockAdmissionTiming(latency, poll time.Duration) (seed, setup, window time.Duration) {
-	seed, setup, window = clockAdmissionTiming(latency, poll)
+func rehearsalClockAdmissionTiming(latency, poll time.Duration, relayTwo bool) (seed, setup, window time.Duration) {
+	seed, setup, window = clockAdmissionTiming(latency, poll, relayTwo)
 	window += time.Duration(rehearsalClockAdmissionWindowSeconds-clockAdmissionWindowSeconds)*time.Second + rehearsalClockProbeRecovery
 	return seed, setup, window
 }
@@ -92,6 +93,7 @@ func clockSelectionCause(cause string) string {
 }
 
 type clockAdmissionPorts struct {
+	relayTwo     bool
 	start        func(context.Context, time.Time) error
 	read         func(context.Context, string, string) (string, error)
 	selectBounds func(context.Context, clocks.SelectionEvidence, clocks.SelectionPolicy) (clocks.ClockSelection, string)
@@ -116,7 +118,7 @@ func rehearsalClockPolicy() clocks.SelectionPolicy {
 // latch the session, add policy clock samples or change the fixed caller flags.
 func (r *rehearsal) recordClockSelection(ctx context.Context) {
 	components, addresses := map[string][]string{}, map[string]string{}
-	for _, slot := range Slots {
+	for _, slot := range operator.HostSlots(r.boundInit.Scenario.RelayTwo) {
 		var node struct {
 			Components []string `json:"components"`
 		}
@@ -137,7 +139,7 @@ func (r *rehearsal) recordClockSelection(ctx context.Context) {
 
 func (r *rehearsal) clockAdmission(front, control string, addresses map[string]string) ClockAdmission {
 	timing := rehearsalClockTiming()
-	return ClockAdmission{RunID: r.run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: addresses, Output: r.c.Output, Host: r.clockHostCommand, HelpersUntil: r.clock.Wall().Add(rehearsalHelperMaximum), PollPeriod: time.Duration(timing.PollSeconds) * time.Second, HostReadLatency: time.Duration(timing.HostReadLatencyMS) * time.Millisecond}
+	return ClockAdmission{Scenario: r.boundInit.Scenario, RunID: r.run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: "unsmeared", Policy: rehearsalClockPolicy(), Addresses: addresses, Output: r.c.Output, Host: r.clockHostCommand, HelpersUntil: r.clock.Wall().Add(rehearsalHelperMaximum), PollPeriod: time.Duration(timing.PollSeconds) * time.Second, HostReadLatency: time.Duration(timing.HostReadLatencyMS) * time.Millisecond}
 }
 
 func (r *rehearsal) recordClockSelectionReport(result *ClockSelectionReport) {
@@ -166,12 +168,13 @@ func (r *rehearsal) clockHostCommand(ctx context.Context, slot string, detach bo
 }
 
 func collectClockSelection(parent context.Context, run, front, control string, p clockAdmissionPorts) *ClockSelectionReport {
+	slots := operator.HostSlots(p.relayTwo)
 	// Seed/drain old history before helper startup or the admission deadline.
-	seedBudget, setupBudget, window := clockAdmissionTiming(p.latency, p.poll)
+	seedBudget, setupBudget, window := clockAdmissionTiming(p.latency, p.poll, p.relayTwo)
 	selectionSeconds := int64(clockAdmissionWindowSeconds)
 	if p.converge {
 		selectionSeconds = rehearsalClockAdmissionWindowSeconds
-		seedBudget, setupBudget, window = rehearsalClockAdmissionTiming(p.latency, p.poll)
+		seedBudget, setupBudget, window = rehearsalClockAdmissionTiming(p.latency, p.poll, p.relayTwo)
 	}
 	firstRead := time.Duration(selectionSeconds+3) * time.Second
 	ctx, seedDone := p.timeout(parent, seedBudget)
@@ -204,9 +207,9 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 		batch := map[string]clocks.Sample{}
 		e := clocks.SelectionEvidence{RunID: run, FrontendSlot: front, ControlSlot: control, CallerLeapMode: p.leapMode, EndUnixSeconds: 1 << 62}
 		admitting := !end.IsZero() && !p.now().Before(started.Add(firstRead))
-		samples, failed := make([]clocks.Sample, len(Slots)), make([]error, len(Slots))
+		samples, failed := make([]clocks.Sample, len(slots)), make([]error, len(slots))
 		var readers sync.WaitGroup
-		for i, slot := range Slots {
+		for i, slot := range slots {
 			readers.Go(func() {
 				path := ""
 				if slot == front && admitting {
@@ -256,7 +259,7 @@ func collectClockSelection(parent context.Context, run, front, control string, p
 			return result
 		}
 		complete := true
-		for i, slot := range Slots {
+		for i, slot := range slots {
 			sample := samples[i]
 			if failed[i] != nil || sample.TrackingLog == nil {
 				result.Cause, complete = "clock-selection-read", false

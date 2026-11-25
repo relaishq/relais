@@ -1,6 +1,7 @@
 {
   "preview_telemetry.py": {
-    "sha256": "769668d2f845b6ef39fc3567eadaedf4edd00eaa711206e97d60d0ab3844f18e"
+    "sha256": "5fd290db9e669175c7bc96628e9fb4aa1c20f89ca8e3827acf425002fa413521",
+    "change": "For #558 fix1, read the selected second relay endpoint; first-relay and worker behavior is unchanged."
   },
   "preview_telemetry_test.py": {
     "sha256": "29c75cfec32bf5f24873c87b7bc7686e17848701595ec78a40ea78cb937425f4"

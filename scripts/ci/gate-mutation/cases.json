@@ -4045,7 +4045,7 @@
     "ID": "clock-admission-setup-ignores-commands",
     "File": "internal/operatorrehearsal/clock_admission.go",
     "Function": "clockAdmissionTiming",
-    "Old": "2*time.Duration(len(Slots))*latency+2*time.Second",
+    "Old": "2*time.Duration(len(operator.HostSlots(relayTwo)))*latency+2*time.Second",
     "New": "latency+2*time.Second",
     "Test": "TestClockAdmissionTiming",
     "Marker": "MUTATION: admission-timing",

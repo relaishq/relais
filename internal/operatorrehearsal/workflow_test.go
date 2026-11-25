@@ -44,6 +44,19 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 	if strings.Fields(schedule)[1] == "8" {
 		t.Fatal("nightly clashes with existing CI")
 	}
+	boot := w.Jobs["template-boot"]
+	if boot.RunsOn != "ubuntu-24.04" || boot.TimeoutMinutes <= 0 {
+		t.Fatal("missing bounded Linux container proof job")
+	}
+	proof := false
+	for _, step := range boot.Steps {
+		if strings.Contains(step.Run, "-run '^TestContainerTemplateBoot$'") {
+			proof = step.Env["RELAIS_REHEARSAL_CONTAINERS"] == "1" && strings.Contains(step.Run, "RELAIS_REHEARSAL_ARCHIVE=") && strings.Contains(step.Run, "RELAIS_REHEARSAL_SHA256=") && !step.ContinueOnError
+		}
+	}
+	if !proof {
+		t.Fatal("container proof can silently skip or fail open")
+	}
 	job := w.Jobs["rehearsal"]
 	if job.RunsOn != "ubuntu-24.04" {
 		t.Fatal(job.RunsOn)

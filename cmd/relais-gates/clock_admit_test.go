@@ -393,3 +393,24 @@ func TestClockAdmitZeroClockUsesRealClock(t *testing.T) {
 		})
 	}
 }
+
+func TestClockAdmitRelayTwo(t *testing.T) {
+	f := newClockAdmitFixture(t)
+	f.plan.Scenario.RelayTwo = true
+	var err error
+	f.plan.Scenario.Digest, err = operator.PlanIdentity(f.plan.Scenario)
+	require.NoError(t, err)
+	f.plan.Addresses["relay-two"] = "192.0.2.5"
+	result, cause := f.run(t)
+	require.Equal(t, 0, result, cause)
+	var selected clocks.ClockSelection
+	var bound operatorrehearsal.ClockAdmissionBinding
+	f.read(t, "clock-selection.json", &selected)
+	f.read(t, "clock-binding.json", &bound)
+	require.Len(t, selected.Receipt.Hosts, 5)
+	require.True(t, bound.Scenario.RelayTwo)
+	calls, err := os.ReadFile(filepath.Join(f.dir, "calls"))
+	require.NoError(t, err)
+	require.Contains(t, string(calls), "relay-two detach python3")
+	require.Contains(t, string(calls), "relay-two run sh")
+}

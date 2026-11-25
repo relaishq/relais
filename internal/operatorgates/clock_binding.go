@@ -159,7 +159,7 @@ func (g *LeaseGuard) Snapshot() (clocks.Evidence, error) {
 	}
 	b := g.bounds
 	b.FrontendWorkerBoundNS = g.workerBound
-	e, err := clocks.Check(rows, b, g.frontend, g.control)
+	e, err := clocks.Check(rows, b, g.frontend, g.control, g.session.scenario.RelayTwo)
 	e.Control = values[g.frontend] + values[g.control]
 	e.Worker = values[g.frontend] + max(values["w1"], values["w2"])
 	e.At = g.clock.Wall()

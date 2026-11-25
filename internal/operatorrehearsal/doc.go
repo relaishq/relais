@@ -29,7 +29,9 @@
 // covered by the generated certificate, so no runner DNS or hosts-file change
 // is needed. Trust Work/tls/signal/ca.crt, or pin the leaf certificate as P4 needs.
 //
-// The manual test-operator-rehearsal-container target tests template boot and
-// negative controls on Linux Docker. Ordinary tests validate offline logic only.
+// The template-boot job in operator-rehearsal.yml runs template boot, relay
+// isolation/expiry/restore and negative controls on Linux Docker for operator
+// path PRs and main pushes. test-operator-rehearsal-container is the manual
+// equivalent. Ordinary tests validate offline logic only.
 // They are not evidence of container execution or a complete four-gate media run.
 package operatorrehearsal

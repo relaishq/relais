@@ -2057,7 +2057,8 @@ by `TestRehearsalExcludedKillCounts`.
 
 ## Optional second relay host and bounded isolation
 
-A scenario can set `relayTwo: true` to require `relay-two` after the default
+Clock admission, helper startup and receipt binding use the scenario host set.
+The four-host receipt bytes remain unchanged. A scenario can set `relayTwo: true` to require `relay-two` after the default
 `relay`, `w1`, `w2`, `shared` slots. Its inventory contains one participant,
 `relay-two`, with role `relay` and unit `relais-relay.service`. The `relay` slot
 still contains `relay-primary` and `relay-standby`. The scenario identity binds
@@ -2066,6 +2067,8 @@ Parts A, B and M omit this option and retain the four-host inventory, clock
 reads and procedures. The container comparison still strips the second relay.
 
 Process parameters carry `relay` and optional `relayTwo` private HTTP endpoints.
+Private relay, control and store endpoints refuse ports 443 and 53 so call
+traffic cannot use the management or DNS exceptions.
 The second endpoint is required for a scenario with the second host. Existing
 single-relay callers omit it. This foundation does not add a relay-loss gate or
 part R; those are a separate step.
@@ -2085,9 +2088,12 @@ The selected image and kernel must support the timed `nf_proto` set used here;
 the Linux container proof checks the executable rules, rather than inferring
 support from the image family. No iptables fallback is used.
 
-One dedicated `inet relais_gate_isolation` table drops all non-loopback input
-and output for both IP families. It permits outbound TCP destination port 443
-and established replies in the reply direction for the management channel.
+One dedicated `inet relais_gate_isolation` table drops call input and output
+for both IP families. It keeps loopback, outbound TCP destination port 443,
+and its established reply-direction traffic. DNS keeps outbound UDP/TCP port
+53 and its reply-direction traffic. IPv4 link-local `169.254.0.0/16`, IPv6
+link-local `fe80::/10` and ICMPv6 neighbour discovery types 133–136 stay reachable
+for time, metadata, credentials and address discovery.
 It does not permit arbitrary established traffic: existing media, private HTTP
 and store connections must also stop. The rules use no deployment addresses or
 call ports. The supplied endpoint parameters remain the source of probe targets.
@@ -2104,6 +2110,20 @@ A host reboot also removes this nonpersistent table.
 `TestContainerTemplateBoot` runs the actual isolation code against the booted
 relay and its private peers. It checks UDP, private HTTP and store isolation,
 management-port egress, loopback, explicit restore, repeated restore and expiry
-after the operator process exits. This proof needs Linux, privileged disposable
-containers and a pinned release archive. It is NOT-RUN on macOS; it does not
-establish deployed management-agent or production-network behavior.
+after the operator process exits. It also checks that the DNS/link-local rules
+are installed and that existing HTTP and UDP flows stop. This proof needs Linux,
+privileged disposable containers and a pinned release archive.
+
+The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
+path PRs and matching main pushes. It builds a native archive from the tested
+checkout, supplies the required archive digest and opt-in environment, and
+runs the container test separately from the full media rehearsal. A proof
+failure fails that job. The existing manual target remains available.
+
+The initial job budget is 20 minutes: archive build 5 minutes, proof step 14
+minutes and Go test 12 minutes. The test leaves two minutes for cleanup before
+its Go deadline. This uses the existing measured 8 min 20 s setup reference
+above as its initial sizing basis; the isolated job's own cold-run duration
+has not yet been measured. CI must confirm that budget against its first runs.
+Local macOS checks are NOT-RUN for container execution and do not establish
+deployed management-agent or production-network behavior.

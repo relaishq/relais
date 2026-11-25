@@ -400,7 +400,11 @@ func TestContainerTemplateBoot(t *testing.T) {
 			t.Error(x)
 		}
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	budget := 25 * time.Minute
+	if deadline, ok := t.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)-2*time.Minute)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	if err = d.Boot(ctx); err != nil {
 		t.Fatal(err)

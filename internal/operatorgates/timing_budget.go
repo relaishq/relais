@@ -59,10 +59,10 @@ func (b timingBudget) judgeReserve() time.Duration { return PoolReserve - b.drai
 // budget refuses a configuration that cannot fit the existing deadlines.
 // restoreReads is the number of host read actions before a restoration
 // command: one batch or four serial inventory reads. Restoration reads no leases.
-func (t ClockTiming) budget(restoreReads int, relayTwo ...bool) (timingBudget, error) {
+func (t ClockTiming) budget(restoreReads int, relayTwo bool) (timingBudget, error) {
 	if t == (ClockTiming{}) {
 		b := referenceTiming
-		b.extraHost = len(relayTwo) > 0 && relayTwo[0]
+		b.extraHost = relayTwo
 		return b, nil
 	}
 	refuse := func(cause string) (timingBudget, error) {
@@ -71,7 +71,7 @@ func (t ClockTiming) budget(restoreReads int, relayTwo ...bool) (timingBudget, e
 	if t.PollSeconds <= 0 || t.HostReadLatencyMS <= 0 || t.PollSeconds > int64(PoolReserve/time.Second) || t.HostReadLatencyMS > PoolReserve.Milliseconds() {
 		return refuse("clock-timing-invalid")
 	}
-	b := timingBudget{extraHost: len(relayTwo) > 0 && relayTwo[0], poll: time.Duration(t.PollSeconds) * time.Second, read: time.Duration(t.HostReadLatencyMS) * time.Millisecond}
+	b := timingBudget{extraHost: relayTwo, poll: time.Duration(t.PollSeconds) * time.Second, read: time.Duration(t.HostReadLatencyMS) * time.Millisecond}
 	// A lease is valid for five poll periods. It must outlast all host reads plus one retry, or a
 	// read and its retry leave no validity for the fault they protect.
 	if validity := time.Duration(clocks.LeaseValidityPolls) * b.poll; validity < (b.hostReads()+1)*b.read {
@@ -91,7 +91,7 @@ func (t ClockTiming) budget(restoreReads int, relayTwo ...bool) (timingBudget, e
 // CheckClockTiming is the check before a session starts. Capabilities are not
 // known yet, so it assumes batch reads; Run checks again with the session's own.
 func (c ResourceConfig) CheckClockTiming() error {
-	_, err := c.ClockTiming.budget(1)
+	_, err := c.ClockTiming.budget(1, false)
 	return err
 }
 

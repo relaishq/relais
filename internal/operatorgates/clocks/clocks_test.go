@@ -36,7 +36,7 @@ func TestTrackingBreaksDoNotChangeClockCheck(t *testing.T) {
 		rows[slot] = Sample{ErrorBoundNS: 1, RateErrorPPM: 0.1}
 	}
 	bounds := Bounds{FrontendControlBoundNS: 2, FrontendWorkerBoundNS: 2, DriftPPM: 1}
-	before, err := Check(rows, bounds, "relay", "shared")
+	before, err := Check(rows, bounds, "relay", "shared", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestTrackingBreaksDoNotChangeClockCheck(t *testing.T) {
 		sample.TrackingLog = &TrackingLog{Breaks: []TrackingBreak{{Kind: "self-consistency"}}}
 		rows[slot] = sample
 	}
-	after, err := Check(rows, bounds, "relay", "shared")
+	after, err := Check(rows, bounds, "relay", "shared", false)
 	if err != nil || before.Control != after.Control || before.Worker != after.Worker || before.Drift != after.Drift || after.Version != 2 {
 		t.Fatal("recorded tracking changed check", after, err)
 	}
@@ -73,7 +73,7 @@ func TestCheckUsesComponentSlots(t *testing.T) {
 			if tc.largeSlot != "" {
 				rows[tc.largeSlot] = Sample{ErrorBoundNS: 20, RateErrorPPM: 20}
 			}
-			e, err := Check(rows, Bounds{FrontendControlBoundNS: 10, FrontendWorkerBoundNS: 10, DriftPPM: 10}, tc.frontend, tc.control)
+			e, err := Check(rows, Bounds{FrontendControlBoundNS: 10, FrontendWorkerBoundNS: 10, DriftPPM: 10}, tc.frontend, tc.control, false)
 			if e.Control != tc.wantControl || e.Worker != tc.wantWorker || e.Drift != tc.wantDrift || (err != nil) != tc.wantError {
 				t.Fatalf("component clock bounds: %+v, %v", e, err)
 			}
@@ -98,7 +98,7 @@ func TestCheckRequiresSlotsAndAllFourRows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := map[string]Sample{"relay": {}, "shared": {}, "w1": {}, "w2": {}}
 			delete(rows, tc.missing)
-			if _, err := Check(rows, Bounds{}, tc.frontend, tc.control); err == nil || err.Error() != "missing independent clock evidence" {
+			if _, err := Check(rows, Bounds{}, tc.frontend, tc.control, false); err == nil || err.Error() != "missing independent clock evidence" {
 				t.Fatalf("missing evidence accepted: %v", err)
 			}
 		})

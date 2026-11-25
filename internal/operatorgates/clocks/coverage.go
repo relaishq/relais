@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/operator"
 )
 
 const CoverageAttemptLimit = 256
@@ -58,7 +59,7 @@ func NewCoverageAttempt(e Evidence) CoverageAttempt {
 func NewBoundCoverageAttempt(e Evidence) CoverageAttempt { return newCoverageAttempt(e, true) }
 func newCoverageAttempt(e Evidence, bound bool) CoverageAttempt {
 	out := CoverageAttempt{Version: e.Version, At: e.At, Clocks: map[string]observe.CoverageTimeline{}}
-	for _, slot := range []string{"relay", "shared", "w1", "w2", "relay-two"} {
+	for _, slot := range operator.HostSlots(true) {
 		s, ok := e.Clocks[slot]
 		if !ok {
 			continue
@@ -83,7 +84,7 @@ func newCoverageAttempt(e Evidence, bound bool) CoverageAttempt {
 }
 func PublicEvidence(e Evidence) Evidence {
 	rows := map[string]Sample{}
-	for _, slot := range []string{"relay", "shared", "w1", "w2", "relay-two"} {
+	for _, slot := range operator.HostSlots(true) {
 		if s, ok := e.Clocks[slot]; ok {
 			s = PublicSample(s)
 			if !nsPattern.MatchString(s.MeasuredUnixNS) {
@@ -109,7 +110,7 @@ func (e CoverageEvidence) Public() CoverageEvidence {
 	e.DrainAttempts = publicAttempts(e.DrainAttempts)
 	missing := map[string]observe.CoverageBreak{}
 	stages := map[string]string{}
-	for _, slot := range []string{"relay", "shared", "w1", "w2", "relay-two"} {
+	for _, slot := range operator.HostSlots(true) {
 		if b, ok := e.MissingIntervals[slot]; ok {
 			switch b.Kind {
 			case "cursor-gap", "log-rotation", "log-loss", "clock-step", "daemon-restart", "source-change", "leap-status", "self-consistency", "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ":
@@ -237,7 +238,7 @@ func publicAttempts(attempts []CoverageAttempt) []CoverageAttempt {
 		a := &out[i]
 
 		rows := map[string]observe.CoverageTimeline{}
-		for _, slot := range []string{"relay", "shared", "w1", "w2", "relay-two"} {
+		for _, slot := range operator.HostSlots(true) {
 			if t, ok := a.Clocks[slot]; ok {
 				t.Rows = append([]observe.CoverageRow{}, t.Rows...)
 				t.Breaks = append([]observe.CoverageBreak{}, t.Breaks...)

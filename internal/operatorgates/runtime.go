@@ -54,9 +54,9 @@ func ValidateProcessParameters(p ProcessParameters) error {
 			return false
 		}
 		port, err := strconv.ParseUint(u.Port(), 10, 16)
-		return err == nil && port > 0 && u.Scheme == "http" && u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.Hostname() != ""
+		return err == nil && port > 0 && port != 443 && port != 53 && u.Scheme == "http" && u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.Hostname() != ""
 	}
-	if !endpoint(p.Control) || !endpoint(p.Relay) || p.RelayTwo != "" && !endpoint(p.RelayTwo) || !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(p.Store) || p.StorePort < 1 || p.StorePort > 65535 || len(p.Workers) != 2 {
+	if !endpoint(p.Control) || !endpoint(p.Relay) || p.RelayTwo != "" && !endpoint(p.RelayTwo) || !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(p.Store) || p.StorePort < 1 || p.StorePort > 65535 || p.StorePort == 443 || p.StorePort == 53 || len(p.Workers) != 2 {
 		return fault("invalid-process-endpoints")
 	}
 	for _, w := range []string{"w1", "w2"} {
@@ -144,9 +144,6 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	}
 	if (op != "telemetry" && slot != expected) || !slices.Contains(r.Session.hostSlots(), slot) || extra.Worker != "" && extra.Worker != "w1" && extra.Worker != "w2" {
 		return StepResult{}, fault("invalid-process-scope")
-	}
-	if r.Session.scenario.RelayTwo && r.Config.Parameters.RelayTwo == "" {
-		return StepResult{}, fault("invalid-process-endpoints")
 	}
 	var stage *host.Stage
 	rollbackMove := (op == "move" || op == "drain") && r.Config.Operation == "rollback" && r.Config.Target == "from"

@@ -27,7 +27,7 @@ class IsolationTests(unittest.TestCase):
             self.present = False
         return ""
 
-    def test_rules_only_keep_loopback_and_management_direction(self):
+    def test_rules_keep_management_clock_and_resolver_directions(self):
         rules = isolation.isolation_rules(120, "abc")
         self.assertIn('create table inet relais_gate_isolation', rules)
         self.assertEqual(rules.count('timeout 120s'), 2)
@@ -39,6 +39,14 @@ class IsolationTests(unittest.TestCase):
         self.assertIn('tcp sport 443 ct direction reply ct state established accept', rules)
         self.assertIn('tcp dport 443 ct direction original accept', rules)
         self.assertNotIn('ct state established,related accept', rules)
+        for direction, field in (('input', 'saddr'), ('output', 'daddr')):
+            self.assertIn('ip ' + field + ' 169.254.0.0/16 accept', rules)
+            self.assertIn('ip6 ' + field + ' fe80::/10 accept', rules)
+        self.assertEqual(rules.count('icmpv6 type { 133, 134, 135, 136 } accept'), 2)
+        for protocol in ('udp', 'tcp'):
+            self.assertIn(protocol + ' sport 53 ct direction reply ct state established accept', rules)
+            self.assertIn(protocol + ' dport 53 ct direction original accept', rules)
+
 
     def test_dispatch_and_timer_precede_atomic_firewall_apply(self):
         def apply(args, **kw):

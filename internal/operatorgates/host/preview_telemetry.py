@@ -1,7 +1,7 @@
 """Read-only, bounded telemetry from the captured lean hosts."""
 def telemetry(p):
     slot = p["slot"]
-    endpoint = p["workers"][slot]["http"] if slot in ("w1", "w2") else p["control"] if slot == "shared" else p["relay"]
+    endpoint = p["workers"][slot]["http"] if slot in ("w1", "w2") else p["control"] if slot == "shared" else p["relayTwo"] if slot == "relay-two" else p["relay"]
     local, ages = None, []
     if slot in ("w1", "w2"):
         try:

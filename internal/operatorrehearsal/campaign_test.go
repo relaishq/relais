@@ -29,8 +29,8 @@ func TestCampaignsFitAfterCalibrationAndCallerPreparation(t *testing.T) {
 	clock := &campaignClock{FakeClock: operatorgates.FakeClock{Now: base}}
 	r := &rehearsal{clock: clock, boundInit: operator.Init{Scenario: operator.Scenario{SchemaVersion: 1, Digest: strings.Repeat("a", 64), Gates: CoveredGates}, ArmedAtUnixMS: strconv.FormatInt(base.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(base.Add(operatorgates.SessionMaximum).UnixMilli(), 10)}}
 	timing := rehearsalClockTiming()
-	_, _, originalWindow := clockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
-	_, _, window := rehearsalClockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
+	_, _, originalWindow := clockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second, false)
+	_, _, window := rehearsalClockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second, false)
 	setup := 8*time.Minute + 20*time.Second + clockConvergenceMaximum + window - originalWindow
 	if setup != 21*time.Minute+10*time.Second || operatorgates.SessionMaximum != 105*time.Minute {
 		t.Fatal("rehearsal setup or session maximum changed", setup, operatorgates.SessionMaximum)
@@ -196,8 +196,8 @@ func TestHeadCampaignFitsAfterPinnedSequence(t *testing.T) {
 	// two retries; three full 320 s attempts cannot extend the 920 s bound.
 	// The old paid 150 s attempt is already included in the model above.
 	timing := rehearsalClockTiming()
-	_, _, originalWindow := clockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
-	_, _, window := rehearsalClockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second)
+	_, _, originalWindow := clockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second, false)
+	_, _, window := rehearsalClockAdmissionTiming(time.Duration(timing.HostReadLatencyMS)*time.Millisecond, time.Duration(timing.PollSeconds)*time.Second, false)
 	combined := clockConvergenceMaximum + window
 	if clockSelectionExtraWindows != 2 || window != 320*time.Second || combined != 920*time.Second {
 		t.Fatal("fresh selection windows exceed combined allowance", window, combined)
