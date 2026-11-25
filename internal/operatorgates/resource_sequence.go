@@ -96,7 +96,7 @@ func CampaignDuration(g operator.Gate) time.Duration {
 	case operator.Rollout, operator.ControlRestart, operator.UpgradeRollback:
 		return 1500 * time.Second
 	case operator.RelayHostLoss:
-		return 300 * time.Second
+		return 600 * time.Second
 	case operator.RelayDeploy:
 		return 600 * time.Second
 	}

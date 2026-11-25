@@ -38,7 +38,7 @@ func TestRelayLossProcedure(t *testing.T) {
 		{"missing", "inconclusive", "relay-loss-missing", false, false, false},
 		{"missing-episode", "inconclusive", "relay-loss-episode-count", false, false, false},
 		{"unrecovered", "fail", "relay-loss-unrecovered", false, false, false},
-		{"target-insufficient", "inconclusive", "relay-loss-target-insufficient", false, false, false},
+		{"missing-population", "inconclusive", "relay-loss-missing", false, false, false},
 		{"restore-failed", "fail", "relay-loss-restore-failed", false, false, false},
 		{"unknown-isolate", "inconclusive", "", true, false, false},
 		{"judge-missing", "inconclusive", "relay-loss-missing", false, false, false},
@@ -49,6 +49,11 @@ func TestRelayLossProcedure(t *testing.T) {
 		{"rejoin-failed", "fail", "relay-loss-restore-failed", false, false, false},
 		{"second-host", "pass", "", false, true, false},
 		{"transient-inspection", "pass", "", false, false, false},
+		{"transient-control-status", "pass", "", false, false, false},
+		{"control-status-unavailable", "fail", "relay-loss-restore-failed", false, false, false},
+		{"rejoin-call-loss", "fail", "relay-loss-call-lost", false, false, false},
+		{"rejoin-call-loss-then-recovered-status", "fail", "relay-loss-call-lost", false, false, false},
+		{"unknown-control-status", "inconclusive", "", false, false, false},
 		{"already-promoted", "pass", "", false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,7 +79,7 @@ func TestRelayLossProcedure(t *testing.T) {
 				status.Calls = append(status.Calls, controlplane.CallStatus{ID: id, Relay: &controlplane.CallRelayStatus{Slot: slot}})
 			}
 			preflight := status
-			if tc.name == "target-insufficient" {
+			if tc.name == "missing-population" {
 				preflight.Calls = preflight.Calls[:1]
 			}
 			var isolateAt time.Duration
@@ -85,10 +90,27 @@ func TestRelayLossProcedure(t *testing.T) {
 				switch op {
 				case "status":
 					statusReads++
+					if extra.RecoveryStatus != (statusReads > 1) {
+						t.Fatal("status recovery opt-in scope", extra, statusReads)
+					}
+					if statusReads > 1 {
+						if tc.name == "unknown-control-status" {
+							return StepResult{Certainty: operator.Unknown}, fault("command-result-unknown")
+						}
+						if tc.name == "control-status-unavailable" || tc.name == "transient-control-status" && statusReads == 2 {
+							return StepResult{Certainty: operator.Failed}, failedStatusRead{fault("precondition-failed:connection-refused-error")}
+						}
+					}
 					if statusReads == 1 {
 						r.Status = preflight
 					} else {
 						r.Status = status
+						if tc.name == "rejoin-call-loss" || tc.name == "rejoin-call-loss-then-recovered-status" && statusReads == 2 {
+							r.Status.LostCount = 1
+							if tc.name == "rejoin-call-loss-then-recovered-status" {
+								r.Status.Ready = false
+							}
+						}
 					}
 				case "relay-status", "relay-inspect":
 					if op == "relay-inspect" {
@@ -167,7 +189,7 @@ func TestRelayLossProcedure(t *testing.T) {
 					if tc.second {
 						affected = i < 3
 					}
-					if affected && tc.name != "target-insufficient" {
+					if affected && tc.name != "missing-population" {
 						c.ICERestarts = 1
 						candidate := "192.0.2.2:3478"
 						if tc.second {
@@ -215,6 +237,29 @@ func TestRelayLossProcedure(t *testing.T) {
 				}
 				return
 			}
+			if tc.name == "unknown-control-status" {
+				if out.Reason != "command-result-unknown" || slices.Contains(ops, "relay-replenish:relay") {
+					t.Fatal(out, ops)
+				}
+				return
+			}
+			if tc.name == "control-status-unavailable" {
+				if statusReads < 10 || out.Reason != "relay-loss-restore-failed" || clock.Elapsed() > 2*time.Minute {
+					t.Fatal(out, statusReads, clock.Elapsed(), ops)
+				}
+				return
+			}
+			if tc.name == "transient-control-status" && statusReads < 3 {
+				t.Fatal("did not poll after failed control read", ops)
+			}
+			if strings.HasPrefix(tc.name, "rejoin-call-loss") {
+				if out.Status != operator.Failure || out.Reason != "known-call-loss" || out.Completed || !slices.Contains(ops, "relay-replenish:relay") {
+					t.Fatal(out, ops)
+				}
+				if tc.name == "rejoin-call-loss-then-recovered-status" && statusReads < 3 {
+					t.Fatal("call loss not retained across later good status", ops)
+				}
+			}
 			if tc.name == "unknown-restore" || tc.name == "unknown-start" || tc.name == "unknown-collect" {
 				want := 6
 				if tc.name == "unknown-collect" {
@@ -228,8 +273,8 @@ func TestRelayLossProcedure(t *testing.T) {
 				}
 				return
 			}
-			if tc.name == "target-insufficient" {
-				if slices.Contains(ops, "relay-isolate:relay") || out.Reason != "relay-loss-target-insufficient" {
+			if tc.name == "missing-population" {
+				if slices.Contains(ops, "relay-isolate:relay") || out.Reason != "relay-loss-missing" {
 					t.Fatal(ops, out)
 				}
 				return
@@ -256,6 +301,34 @@ func TestRelayLossProcedure(t *testing.T) {
 				}
 			} else if !slices.Contains(ops, "relay-replenish:relay") || slices.Contains(ops, "relay-loss-stop:relay") == tc.promoted {
 				t.Fatal(fmt.Sprint(ops))
+			}
+		})
+	}
+}
+
+func TestRelayLossMediaCoversCappedFinishPathWithMargin(t *testing.T) {
+	worst := CalibrationWarmup + 4*relayLossStepCap + 2*relayloss.Budget
+	media := CampaignDuration(operator.RelayHostLoss)
+	if media != 600*time.Second || media < 2*worst {
+		t.Fatal("R caller media does not cover the capped path with 2x margin", media, worst)
+	}
+	if _, fits := CallerWindow(operator.RelayHostLoss, 0, CampaignMinimum(operator.RelayHostLoss)); !fits {
+		t.Fatal("R campaign no longer fits its caller window")
+	}
+}
+
+func TestRelayLossControlReadFailureScope(t *testing.T) {
+	for _, rejoin := range []bool{false, true} {
+		t.Run(fmt.Sprint(rejoin), func(t *testing.T) {
+			w, p := newRoundTripWorld(t, false)
+			w.runtime.Peer.(*observationPeer).respond = func(req operator.Request) operator.Reply { return hostStatusFailure(t, req) }
+			r, err := p.Step(context.Background(), "status", "shared", GateMaximum, ProcessExtra{RelayLossStatus: true, RecoveryStatus: rejoin})
+			if rejoin {
+				if r.Certainty != operator.Failed || !errors.As(err, new(failedStatusRead)) || w.runtime.Session.Latched() {
+					t.Fatal(r, err)
+				}
+			} else if code(err) != "command-result-unknown" || !w.runtime.Session.Latched() {
+				t.Fatal(r, err)
 			}
 		})
 	}

@@ -34,10 +34,6 @@ func runResourceRelayLoss(ctx context.Context, s *Session, runtime *ProcessRunti
 		if readErr != nil || !bundle.Found || json.Unmarshal(bundle.Data, &samples) != nil {
 			return raw, nil, fault("relay-loss-missing")
 		}
-
-		if err != nil {
-			return raw, samples, caller.callerError(err)
-		}
 		return raw, samples, nil
 	}
 	runtime.commandPorts = &p

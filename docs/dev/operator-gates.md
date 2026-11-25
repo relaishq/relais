@@ -2145,6 +2145,10 @@ Part R is an explicit scenario: `relayTwo: true`, with `gates` equal to
 `["relay-host-loss"]` only. It requires both named relay slots from the pinned
 boot template (`preview` on `relay`, `preview-two` on `relay-two`). It runs four
 lean video calls, two on each worker, with caller relay-change evidence enabled.
+R's media plan has a 600-second limit. This exceeds twice the capped 280-second path
+to the finish feed: 30 seconds of warmup, four 60-second steps (two relay reads,
+one control read and isolation), and twice the relay-loss budget for observation.
+The existing caller-window admission includes this longer duration.
 It does not send `/arm-event` feeds. Parts A, B and M keep their existing plans,
 scenario encodings, receipts and pinned judge path.
 
@@ -2160,8 +2164,9 @@ After warmup, one control `/status` read supplies exactly four registered call
 assignments, including each relay slot and generation. Generation zero is valid.
 The gate selects the host carrying the most calls; a tie selects `relay` first.
 A target with fewer than two calls gives `relay-loss-target-insufficient` and
-performs no isolation. Unknown assignments, pending changes, extra calls or
-unhealthy relays refuse the fault. The survivor's public endpoint and the
+performs no isolation. Fewer than four unique registered calls is missing
+evidence, rather than target-insufficient. Unknown assignments, pending changes,
+extra calls or unhealthy relays refuse the fault. The survivor's public endpoint and the
 relays' epochs come from independent host status reads.
 
 The gate runs `relay-isolate` once on the selected host and waits `2*relayloss.Budget`
@@ -2235,7 +2240,9 @@ claimed a higher epoch stays active. If the old epoch remains, the R-only
 claims the next epoch. The gate never starts a second non-standby relay on the
 public port. It waits for a higher target epoch with both workers registered
 and for both relays to be joined and healthy in control `/status`. It then uses
-`relay-replenish` to restore the inactive unit as a fresh standby.
+`relay-replenish` to restore the inactive unit as a fresh standby. Definite failed
+control reads are missing samples in the bounded rejoin wait. Known call loss
+still fails the run, but does not skip restoration or replenishing the standby.
 
 `relay-two` has one unit and no standby. Both relay units use `Restart=no`.
 **A lost relay-two does not come back on its own after the network heals.**
@@ -2245,6 +2252,12 @@ that one unit. It then requires the same higher-epoch and control rejoin checks.
 The rejoin wait is bounded at 60 seconds. Known restoration failures produce
 `relay-loss-restore-failed`, with every call row retained. Unknown step results
 remain inconclusive and fenced; they do not authorize another service action.
+
+If a collection error or an unknown result latches the run, the gate skips
+further restoration. The firewall heals by expiry, but `relay-two` can remain
+stopped and the primary host can remain without a standby. The operator must
+then perform the required `relay-restore`, `relay-start` or `relay-replenish`
+steps by hand. Expiry restores network reachability; it does not restore services.
 
 These restoration choices follow the lease, cutoff and unit code and are tested
 with memory-store/control tests and offline host transcripts. Actual host/service

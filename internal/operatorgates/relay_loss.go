@@ -43,7 +43,7 @@ func RunRelayLossGate(ctx context.Context, c *ProcessConfig, p RelayLossPorts, e
 	out := ProcedureResult{Status: operator.Inconclusive}
 	var procErr error
 	var priorEpoch uint64
-	var isolated bool
+	var isolated, callLoss bool
 	step := func(op, slot string, extra ProcessExtra) (StepResult, error) {
 		return g.step(ctx, op, slot, min(g.end, g.p.Clock.Elapsed()+relayLossStepCap), extra)
 	}
@@ -95,6 +95,9 @@ func RunRelayLossGate(ctx context.Context, c *ProcessConfig, p RelayLossPorts, e
 			counts[host]++
 			in.Preflight = append(in.Preflight, relayjudge.Assignment{Session: call.ID, Slot: host, Generation: call.Relay.Generation})
 		}
+		if len(seen) != 4 || len(status.Calls) != 4 {
+			return fault("relay-loss-missing")
+		}
 		in.TargetSlot = "relay"
 		if counts["relay-two"] > counts["relay"] {
 			in.TargetSlot = "relay-two"
@@ -113,9 +116,6 @@ func RunRelayLossGate(ctx context.Context, c *ProcessConfig, p RelayLossPorts, e
 			if err := p.Broker.CheckStopped(ctx); err != nil {
 				return err
 			}
-		}
-		if len(seen) != 4 || len(status.Calls) != 4 {
-			return fault("relay-loss-missing")
 		}
 		if _, err = step("relay-isolate", in.TargetSlot, ProcessExtra{IsolationSeconds: RelayLossIsolationSeconds()}); err != nil {
 			return err
@@ -196,11 +196,16 @@ func RunRelayLossGate(ctx context.Context, c *ProcessConfig, p RelayLossPorts, e
 						}
 						continue
 					}
-					r, err := g.step(ctx, "status", "shared", rejoinEnd, ProcessExtra{RelayLossStatus: true})
-					if err != nil {
+					r, err := g.step(ctx, "status", "shared", rejoinEnd, ProcessExtra{RelayLossStatus: true, RecoveryStatus: true})
+					if code(err) == "known-call-loss" {
+						callLoss = true
+						if g.unknown {
+							return err
+						}
+					} else if err != nil && (g.unknown || r.Certainty != operator.Failed) {
 						return err
 					}
-					if relayLossHealthy(r.Status) {
+					if (err == nil || code(err) == "known-call-loss") && relayLossHealthy(r.Status) {
 						joined = true
 						break
 					}
@@ -226,6 +231,9 @@ func RunRelayLossGate(ctx context.Context, c *ProcessConfig, p RelayLossPorts, e
 		}
 	} else if !isolated && !g.unknown {
 		in.Restore = "restored"
+	}
+	if callLoss && procErr == nil {
+		procErr = fault("known-call-loss")
 	}
 	if in.TargetInsufficient {
 		out.Reason = "relay-loss-target-insufficient"
@@ -291,8 +299,12 @@ func RunRelayLossGate(ctx context.Context, c *ProcessConfig, p RelayLossPorts, e
 			out.Status = operator.Inconclusive
 		}
 	}
-	if code(procErr) == "known-call-loss" {
+	if code(procErr) == "known-call-loss" || callLoss {
 		out.Status = operator.Failure
+		out.Process.RelayLoss.Outcome = "fail"
+		if !slices.Contains(out.Process.RelayLoss.Causes, "relay-loss-call-lost") {
+			out.Process.RelayLoss.Causes = append(out.Process.RelayLoss.Causes, "relay-loss-call-lost")
+		}
 	}
 	out.Completed = !in.TargetInsufficient && procErr == nil && !g.unknown && in.Restore == "restored"
 	if out.Media == nil {

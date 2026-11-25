@@ -208,7 +208,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		}
 		parameters.TargetDir = "/opt/relais/preview/" + r.Pins[i].Version
 	}
-	// Only the failover recovery wait opts in; see host.RecoveryStatus.
+	// Only recovery waits opt in; see host.RecoveryStatus.
 	recoveryStatus := op == "status" && extra.RecoveryStatus
 	var script string
 	if recoveryStatus {
@@ -448,8 +448,8 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	return observed, nil
 }
 
-// failedStatusRead is a definite failed control status read in the failover
-// recovery wait. Its code stays precondition-failed:<host code>.
+// failedStatusRead is a definite failed control status read in a recovery
+// wait. Its code stays precondition-failed:<host code>.
 type failedStatusRead struct{ error }
 
 func (e failedStatusRead) Unwrap() error { return e.error }

@@ -54,9 +54,9 @@ func Process(operation string, parameters any, stage *Stage) (string, error) {
 	return process(operation, parameters, stage, IsPureRead(operation))
 }
 
-// RecoveryStatus renders control status for the failover recovery wait only.
+// RecoveryStatus renders control status for recovery waits.
 // Control status stays effectful: a reconcile can run before the read fails.
-// That wait accepts a definite failed read as a missing sample.
+// These waits accept a definite failed read as a missing sample.
 func RecoveryStatus(parameters any) (string, error) {
 	return process("status", parameters, nil, true)
 }
