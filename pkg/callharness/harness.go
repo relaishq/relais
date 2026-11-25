@@ -233,9 +233,26 @@ func (h *Harness) Close() error {
 // worker: it POSTs the offer and returns the answer and the call's resource
 // URL (from Location).
 func (h *Harness) postOffer(ctx context.Context, worker int, offer string, relayChange ...bool) (answer, resourceURL string, err error) {
+	return h.postOfferWithWorker(ctx, worker, "", offer, relayChange...)
+}
+
+func (h *Harness) postOfferWithWorker(ctx context.Context, worker int, name, offer string, relayChange ...bool) (answer, resourceURL string, err error) {
 	target, err := h.offerURL(worker)
 	if err != nil {
 		return "", "", err
+	}
+	if name != "" {
+		if h.external == nil {
+			return "", "", errors.New("callharness: named worker requires external topology")
+		}
+		u, parseErr := url.Parse(target)
+		if parseErr != nil {
+			return "", "", parseErr
+		}
+		q := u.Query()
+		q.Set(workerParam, name)
+		u.RawQuery = q.Encode()
+		target = u.String()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(offer))
 	if err != nil {

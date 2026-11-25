@@ -21,6 +21,8 @@ const (
 // offsets from the moment the caller started dialing. Nothing is recorded
 // after hangup, so tearing the call down does not show up as a failure.
 type recorder struct {
+	relayLossEvidence          bool
+	relayEpisodes              []relayEpisodeRecord
 	distributed                *DistributedOptions
 	armed                      map[OperationIdentity]time.Time
 	audioSends, videoSends     []evidenceRef

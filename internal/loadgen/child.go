@@ -19,6 +19,7 @@ import (
 )
 
 type ChildOptions struct {
+	RelayLoss      bool
 	EventRetention time.Duration
 	Distributed    *DistributedConfig
 
@@ -86,6 +87,9 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	if o.Callers < 1 || o.Duration <= 0 || o.SampleEvery <= 0 {
 		return errors.New("invalid child counts or durations")
 	}
+	if o.RelayLoss && (o.Callers != 4 || !o.Video || o.Distributed != nil || o.PlaceOnWorker || o.Soak) {
+		return errors.New("relay-loss caller requires four video calls, named placement and caller-local evidence")
+	}
 	history, err := eventRetention(o.EventRetention, o.Distributed != nil)
 	if err != nil {
 		return err
@@ -143,12 +147,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			defer func() { <-slots }()
 			dial, stop := context.WithTimeout(ctx, dialTimeout)
 			defer stop()
-			worker := -1
-			if o.PlaceOnWorker {
-				worker = 0
-			}
-			recording := callharness.RecordingOptions{History: history, DecodeEvery: 30, MaintenancePhase: o.Desync.Maintenance(i)}
-			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: worker, Recording: recording, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
+			call, err := h.Dial(dial, o.callOptions(i, history, meter))
 			if err != nil {
 				errs[i], m.Error = err, err.Error()
 				var failure *callharness.DialError
@@ -182,6 +181,9 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	mux := http.NewServeMux()
 	if o.Distributed != nil {
 		registerDistributedFeed(mux, calls, bursts)
+	}
+	if o.RelayLoss {
+		registerRelayLossProbes(mux, o.Topology.SignalingURL, o.Topology.HTTPClient)
 	}
 	if o.Soak {
 		registerMemoryDiagnostics(mux, calls)
@@ -298,7 +300,11 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			if err := errors.Join(sendErr, hangErr); err != nil {
 				m.Error = err.Error()
 			}
-			writer.Write(m)
+			if o.RelayLoss {
+				writer.writeRelayLoss(m, c.RelayLossEpisodes())
+			} else {
+				writer.Write(m)
+			}
 		}()
 	}
 	go func() { wg.Wait(); close(finished) }()

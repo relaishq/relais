@@ -34,6 +34,7 @@ type Phase string
 const (
 	Survivor          Phase = "survivor"
 	AdmissionBoundary Phase = "admission-boundary"
+	RelayLoss         Phase = "relay-loss"
 )
 
 type Identity struct {
@@ -52,7 +53,11 @@ var sessionPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 var operationPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{7,63}$`)
 
 func (i Identity) Validate() error {
-	if len(i.Unit()) > 255 || !runPattern.MatchString(i.RunID) || !i.Gate.Valid() || (i.Phase != Survivor && i.Phase != AdmissionBoundary) || !positivePattern.MatchString(i.CallerID) || !positivePattern.MatchString(i.Attempt) || !shaPattern.MatchString(i.PublicSHA) {
+	phaseOK := i.Phase == Survivor || i.Phase == AdmissionBoundary
+	if i.Gate == operator.RelayHostLoss {
+		phaseOK = i.Phase == RelayLoss
+	}
+	if len(i.Unit()) > 255 || !runPattern.MatchString(i.RunID) || !i.Gate.Valid() || !phaseOK || !positivePattern.MatchString(i.CallerID) || !positivePattern.MatchString(i.Attempt) || !shaPattern.MatchString(i.PublicSHA) {
 		return errors.New("invalid-caller-identity")
 	}
 	return nil
@@ -85,9 +90,21 @@ func NewPlan(phase Phase, seconds int, sha string) Plan {
 	return Plan{1, phase, 1, calls, 2, seconds, sha}
 }
 
+// NewRelayLossPlan is the part R caller population. The phase selects lean
+// recording, named-worker placement and caller-local relay evidence explicitly.
+func NewRelayLossPlan(seconds int, sha string) Plan {
+	return Plan{1, RelayLoss, 1, 4, 2, seconds, sha}
+}
+
 // Validate leaves five minutes of CallerMaximum for startup, collection and stop.
 func (p Plan) Validate() error {
-	if p != NewPlan(p.Phase, p.DurationSeconds, p.PublicSHA) || (p.Phase != Survivor && p.Phase != AdmissionBoundary) || p.DurationSeconds < 1 || p.DurationSeconds > 1680 || !shaPattern.MatchString(p.PublicSHA) {
+	expected := NewPlan(p.Phase, p.DurationSeconds, p.PublicSHA)
+	phaseOK := p.Phase == Survivor || p.Phase == AdmissionBoundary
+	if p.Phase == RelayLoss {
+		expected = NewRelayLossPlan(p.DurationSeconds, p.PublicSHA)
+		phaseOK = true
+	}
+	if p != expected || !phaseOK || p.DurationSeconds < 1 || p.DurationSeconds > 1680 || !shaPattern.MatchString(p.PublicSHA) {
 		return errors.New("invalid-caller-plan")
 	}
 	return nil
@@ -113,6 +130,9 @@ func CallerArgs(p Plan, e Endpoints) ([]string, error) {
 	bind, berr := netip.ParseAddrPort(e.Bind)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "/calls" || u.RawQuery != "" || u.Fragment != "" || rerr != nil || berr != nil || !relay.Addr().Is4() || !bind.Addr().Is4() || !runPattern.MatchString(e.RunID) || e.TokenFile == "" || strings.ContainsAny(e.TokenFile, "\r\n\x00") || e.FrontendControlBoundNS < 0 || e.FrontendWorkerBoundNS < 0 || e.DriftPPM <= 0 || e.FrontendControlBoundNS > maxSafeInteger || e.FrontendWorkerBoundNS > maxSafeInteger || e.DriftPPM > maxSafeInteger {
 		return nil, errors.New("invalid-caller-endpoints")
+	}
+	if p.Phase == RelayLoss {
+		return []string{"-external-caller", "-relay-loss-caller", "-callers=4", "-gomaxprocs=2", fmt.Sprint("-duration=", p.DurationSeconds, "s"), "-sample-every=1s", "-video=true", "-caller-bind=" + e.Bind, "-signaling=" + e.Signaling, "-relay=" + e.Relay, "-bearer-token-file=" + e.TokenFile, "-event-retention=15s"}, nil
 	}
 	return []string{"-external-caller", "-distributed", "-run-id=" + e.RunID, fmt.Sprint("-callers=", p.Calls), "-gomaxprocs=2", fmt.Sprint("-duration=", p.DurationSeconds, "s"), "-sample-every=1s", "-video=true", "-caller-bind=" + e.Bind, "-signaling=" + e.Signaling, "-relay=" + e.Relay, "-bearer-token-file=" + e.TokenFile, fmt.Sprint("-frontend-control-bound=", e.FrontendControlBoundNS, "ns"), fmt.Sprint("-frontend-worker-bound=", e.FrontendWorkerBoundNS, "ns"), fmt.Sprint("-clock-drift-ppm=", e.DriftPPM), "-event-retention=180s"}, nil
 }
