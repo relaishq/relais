@@ -125,12 +125,12 @@ class IsolationTests(unittest.TestCase):
                 self.assertEqual(isolation.relay_isolation('relay-restore', {}, self.command), {'completed': True})
         self.assertEqual([c for c in self.calls if c[1] == 'delete'], [['/sbin/nft', 'delete', 'table', 'inet', isolation.ISOLATION_TABLE]])
 
-    def test_restore_requires_the_set_generation(self):
+    def test_restore_clears_a_table_without_generation(self):
         self.present = True
         self.generation = None
-        with patch.object(isolation.shutil, 'which', return_value='/sbin/nft'), self.assertRaisesRegex(ValueError, 'generation'):
+        with patch.object(isolation.shutil, 'which', return_value='/sbin/nft'):
             isolation.relay_isolation('relay-restore', {}, self.command)
-        self.assertFalse(any(c[1] == 'delete' for c in self.calls))
+        self.assertTrue(any(c[1] == 'delete' for c in self.calls))
 
     def test_relay_status_uses_the_selected_endpoint(self):
         endpoints = {'relay': 'http://192.0.2.1:24700', 'relayTwo': 'http://192.0.2.2:24700'}

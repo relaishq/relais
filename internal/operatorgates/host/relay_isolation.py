@@ -43,10 +43,6 @@ def isolation_table(nft, command):
 
 def isolation_restore(nft, command):
     if isolation_table(nft, command):
-        rows = json.loads(command([nft, "-j", "list", "table", "inet", ISOLATION_TABLE]))["nftables"]
-        if not any(x.get("set", {}).get("family") == "inet" and x["set"].get("table") == ISOLATION_TABLE
-                   and x["set"].get("name") == "isolated" and x["set"].get("comment") for x in rows):
-            raise ValueError("isolation generation missing")
         command([nft, "delete", "table", "inet", ISOLATION_TABLE])
 
 

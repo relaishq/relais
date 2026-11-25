@@ -2106,7 +2106,8 @@ on nested declarations inside `create table` to install child objects.
 Before applying the table atomically, the step arms a transient host-owned
 systemd timer. The timer matches the generation on the `isolated` set and
 deletes only the table generation it owns, even if the operator process has
-exited. Explicit restore checks the current set owner under the same lock.
+exited. Explicit restore deletes the dedicated table under the same lock,
+whatever its generation, so a table left by a failed timer can always be cleared.
 Kernel set elements also expire after the supplied duration, so packet drops
 end within that duration even if timer dispatch is
 late. Timer cleanup normally removes the empty table within about one more
