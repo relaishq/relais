@@ -168,11 +168,21 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	if e := os.MkdirAll(c.Output, 0700); e != nil {
 		return report, e
 	}
-	log, e := os.OpenFile(filepath.Join(c.Output, "host-diagnostics.log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	publicLog, e := os.OpenFile(filepath.Join(c.Output, "host-diagnostics.log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		return report, e
 	}
-	defer log.Close()
+	defer publicLog.Close()
+	log := publicLog
+	if c.PartR {
+		// Raw R diagnostics never enter an upload path. Publish only the completed
+		// projection after scoped cleanup has emitted its final host observations.
+		log, e = os.CreateTemp("", "relais-private-diagnostics-")
+		if e != nil {
+			return report, e
+		}
+		defer func() { _ = log.Close(); _ = os.Remove(log.Name()) }()
+	}
 	work, e := os.MkdirTemp("", "relais-rehearsal-")
 	if e != nil {
 		return report, e
@@ -192,6 +202,12 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		if r.session != nil {
 			report.Latched = r.session.Latched()
 			report.Uncertainties = r.session.Uncertainties()
+		}
+		if c.PartR {
+			if e := savePartRDiagnostics(log.Name(), publicLog, r.topology); e != nil {
+				report.Errors = append(report.Errors, "diagnostics-save-failed")
+				err = errors.Join(err, e)
+			}
 		}
 		report.Evaluate()
 		if e := report.Save(filepath.Join(c.Output, "report.json")); e != nil {

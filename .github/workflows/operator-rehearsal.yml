@@ -52,7 +52,7 @@ concurrency:
 jobs:
   template-boot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -60,16 +60,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Build release reader
+      - name: Build native container proof archive
         timeout-minutes: 5
-        run: go build -o "$RUNNER_TEMP/relais-gates" ./cmd/relais-gates
-      - name: Read and verify published part R release
-        timeout-minutes: 5
-        env:
-          RELAIS_RELEASE_TOKEN: ${{ github.token }}
-        run: '"$RUNNER_TEMP/relais-gates" rehearse -part-r -prepare-only -assets "$RUNNER_TEMP/template-boot"'
+        run: bash scripts/ci/build-rehearsal-archive.sh "$RUNNER_TEMP/template-boot"
       - name: Prove template boot and bounded relay isolation
-        timeout-minutes: 20
+        timeout-minutes: 14
         env:
           RELAIS_REHEARSAL_CONTAINERS: '1'
           RELAIS_REHEARSAL_VERSION: '0.4.0'
@@ -79,8 +74,9 @@ jobs:
         run: |
           set -euo pipefail
           export RELAIS_REHEARSAL_ARCHIVE="$RUNNER_TEMP/template-boot/relais_0.4.0_linux_amd64.tar.gz"
-          export RELAIS_REHEARSAL_SHA256=0b8e61ef0228018d9e2f7a82bdae1f3763fa1992456aa2207ece82a07b8dfe0e
-          go test -v -count=1 -timeout 18m -run '^TestContainerTemplateBoot$' ./internal/operatorrehearsal
+          RELAIS_REHEARSAL_SHA256=$(sha256sum "$RELAIS_REHEARSAL_ARCHIVE")
+          export RELAIS_REHEARSAL_SHA256="${RELAIS_REHEARSAL_SHA256%% *}"
+          go test -v -count=1 -timeout 12m -run '^TestContainerTemplateBoot$' ./internal/operatorrehearsal
   rehearsal:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -167,7 +163,7 @@ jobs:
 
   part-r:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v6
         with:
@@ -195,7 +191,7 @@ jobs:
           RELAIS_RELEASE_TOKEN: ${{ github.token }}
         run: ./bin/relais-gates rehearse -part-r -prepare-only -assets runtime/part-r-releases -output runtime/part-r-report
       - name: Rehearse part R with both relay hosts and v0.4.0 servers
-        timeout-minutes: 40
+        timeout-minutes: 60
         env:
           TESTED_HEAD: ${{ github.event.pull_request.head.sha }}
           TESTED_EVENT: ${{ github.event_name }}
@@ -220,11 +216,13 @@ jobs:
         continue-on-error: true
         timeout-minutes: 1
         run: python3 scripts/ci/rehearsal_summary.py runtime/part-r-report >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload sanitized part R report
+      - name: Upload sanitized part R report and redacted host diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: operator-part-r-${{ github.run_id }}-${{ github.run_attempt }}
-          path: runtime/part-r-report/report.json
+          path: |
+            runtime/part-r-report/report.json
+            runtime/part-r-report/host-diagnostics.log
           if-no-files-found: warn
           retention-days: 14

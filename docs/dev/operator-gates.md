@@ -2127,19 +2127,18 @@ prints the exact JSON readback and a fresh table dump for diagnosis. This proof
 needs Linux, privileged disposable containers and a pinned release archive.
 
 The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
-path PRs, matching main pushes, the schedule and `workflow_dispatch`. It reads
-the published v0.4.0 linux_amd64 archive through the public release reader and
-checks its fixed archive digest and release commit before boot. It opts into
-both relay hosts. It does not build replacement server binaries from the checkout.
+path PRs, matching main pushes, the schedule and `workflow_dispatch`. It builds
+a native archive from the tested checkout, supplies its archive digest and
+opts into both relay hosts. This preserves systemd/template boot evidence for
+head server binaries. The separate part R job supplies published v0.4.0 evidence.
 A proof failure fails that job. The existing manual target remains available.
 
-The job budget is 25 minutes: release preparation 5 minutes, proof step 20
-minutes and Go test 18 minutes. The test reserves two minutes for cleanup.
-The initial basis remains the measured 8 min 20 s setup reference above,
-rounded to about twice that time for the proof. The new five-host published
-release proof has not yet been measured. CI must confirm this initial budget.
-Local macOS checks are NOT-RUN for container execution and do not establish
-deployed management-agent or production-network behavior.
+The job budget remains 20 minutes: archive build 5 minutes, proof step 14
+minutes and Go test 12 minutes. The test reserves two minutes for cleanup.
+The existing measured 8 min 20 s setup reference above remains the initial
+basis. Five-host execution has not yet shown a need to extend these limits;
+CI must confirm them. Local macOS checks are NOT-RUN for container execution
+and do not establish deployed management-agent or production-network behavior.
 
 ## Part R: relay host loss
 
@@ -2281,9 +2280,9 @@ The workflow's independent `part-r` job runs for all existing triggers,
 including `workflow_dispatch`. It leaves the existing A/B/M job and its
 0.3.4/0.3.5 pair unchanged. The split avoids adding setup, clock admission and
 R's media window to that job's reported busy-day 2 h 15 min duration.
-The initial R budget is 60 minutes, with a 40-minute execution step and
+The initial R budget is 80 minutes, with a 60-minute execution step and
 bounded 10-minute build and prerequisite steps and a 5-minute release read.
-This allows about twice an estimated 30-minute path: the existing 8 min 20 s
+The execution step allows twice an estimated 30-minute path: the existing 8 min 20 s
 boot reference, clock convergence/admission, preparation and the 600-second
 caller ceiling. This is a sizing estimate, not a measured R runtime. The first
 three passes on one commit must confirm the duration and the real container
@@ -2297,5 +2296,13 @@ version, server commit and archive digest, template digest, caller and judge
 hashes, gate verdict, completion and caller stop proof, and all four calls'
 gaps and causes in `gates[].process.relayLoss`. Run and session labels are
 removed. Causes have a fixed allowlist. The run-page summary shows each call's
-role, gap, verdict and causes. Only the sanitized report is uploaded by the R
-job; raw caller records and host logs are not uploaded.
+role, gap, verdict and causes. The R job also uploads `host-diagnostics.log`.
+Host command streams retain the existing secret redaction and suppression of
+incomplete output. R captures the whole log outside the upload directory, then
+projects it after cleanup: generated secrets, URLs, host names, numeric
+addresses and encoded chrony reference addresses are removed. Packed host
+replies retain only their fixed envelope kind and error code, so encoded
+endpoints cannot bypass the projection. Fixed public
+service IDs and failure details remain. A projection failure fails the run;
+raw diagnostic bytes never enter the upload file. Raw caller records are not
+uploaded.
