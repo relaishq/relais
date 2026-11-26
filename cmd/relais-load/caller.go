@@ -24,6 +24,7 @@ func validateExternalCaller(fs *flag.FlagSet, c config) error {
 		"gomaxprocs": true, "duration": true, "sample-every": true,
 		"video": true, "output": true, "seed": true, "caller-process": true,
 		"distributed": true, "run-id": true, "frontend-control-bound": true, "frontend-worker-bound": true, "clock-drift-ppm": true, "event-retention": true,
+		"relay-loss-caller": true,
 	}
 	var unsupported error
 	fs.Visit(func(f *flag.Flag) {

@@ -18,12 +18,13 @@ const (
 	UpgradeRollback Gate = "upgrade-rollback"
 	Failover        Gate = "failover"
 	RelayDeploy     Gate = "relay-deploy"
+	RelayHostLoss   Gate = "relay-host-loss"
 	Load            Gate = "load"
 )
 
 func (g Gate) Valid() bool {
 	switch g {
-	case Rollout, ControlRestart, UpgradeRollback, Failover, RelayDeploy, Load:
+	case Rollout, ControlRestart, UpgradeRollback, Failover, RelayDeploy, RelayHostLoss, Load:
 		return true
 	}
 	return false

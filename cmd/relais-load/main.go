@@ -48,6 +48,7 @@ type config struct {
 	Capacity                                      bool
 	Topology                                      string
 	PlaceOnWorker                                 bool
+	RelayLoss                                     bool
 	CapacityStart, CapacityMax, CallersPerProcess int
 	Prices                                        string
 	StoreOpsBudget, StoreBytesBudget              float64
@@ -597,6 +598,7 @@ func runArgs(args []string) error {
 	retention := fs.Duration("event-retention", 0, "caller event history; default 15s local, 180s distributed")
 	bearerTokenFile := fs.String("bearer-token-file", "", "file containing the HTTPS signaling bearer token")
 	fs.BoolVar(&c.PlaceOnWorker, "place-on-worker", false, "internal capacity placement on worker zero")
+	fs.BoolVar(&c.RelayLoss, "relay-loss-caller", false, "part R: four named-worker callers with caller-local relay-loss evidence")
 	parentPID := fs.Int("parent-pid", 0, "internal caller owner PID")
 	callerProcess := fs.Int("caller-process", 0, "generator process index; with -seed it seeds each caller's media start offset and periodic-work phases")
 	fs.IntVar(&c.Callers, "callers", 10, "total simultaneous harness callers")
@@ -643,6 +645,9 @@ func runArgs(args []string) error {
 	}
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if c.RelayLoss && (!*externalCaller || *distributed || c.Callers != 4 || c.GOMAXPROCS != 2 || !c.Video || c.Soak || c.PlaceOnWorker) {
+		return errors.New("relay-loss caller requires external-caller, four video calls, gomaxprocs=2 and caller-local evidence")
 	}
 	if *lean != "" || *leanScheduleOnly {
 		return runLean(fs, *lean, c.Output, c.Prices, *leanScheduleOnly)
@@ -710,9 +715,9 @@ func runArgs(args []string) error {
 				}
 			}
 		}
-		return loadgen.RunChild(ctx, loadgen.ChildOptions{EventRetention: *retention, Distributed: distributedConfig, PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak, Desync: loadgen.Desync{Seed: c.Seed, Process: *callerProcess}})
+		return loadgen.RunChild(ctx, loadgen.ChildOptions{RelayLoss: c.RelayLoss, EventRetention: *retention, Distributed: distributedConfig, PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak, Desync: loadgen.Desync{Seed: c.Seed, Process: *callerProcess}})
 	}
-	for _, name := range []string{"signaling", "relay", "caller-namespace", "caller-bind", "signaling-cert", "bearer-token-file", "parent-pid", "caller-process", "distributed", "run-id", "frontend-control-bound", "frontend-worker-bound", "clock-drift-ppm", "event-retention"} {
+	for _, name := range []string{"signaling", "relay", "caller-namespace", "caller-bind", "signaling-cert", "bearer-token-file", "parent-pid", "caller-process", "distributed", "run-id", "frontend-control-bound", "frontend-worker-bound", "clock-drift-ppm", "event-retention", "relay-loss-caller"} {
 		if flagWasSet(fs, name) {
 			return fmt.Errorf("-%s requires -external-caller or -child", name)
 		}

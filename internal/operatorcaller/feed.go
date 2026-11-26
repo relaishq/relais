@@ -101,6 +101,10 @@ func Deliver(ctx context.Context, record Feed, sessions []string, local Local, h
 				return ack, err
 			}
 		}
+	case "relay-loss-finish":
+		if err := local(ctx, "/relay-loss-finish", struct{}{}, nil); err != nil {
+			return ack, err
+		}
 	case "finish":
 	case "hangup":
 		hangup()

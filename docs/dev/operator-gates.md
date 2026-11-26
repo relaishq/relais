@@ -2070,8 +2070,7 @@ Process parameters carry `relay` and optional `relayTwo` private HTTP endpoints.
 Private relay, control and store endpoints refuse ports 443 and 53 so call
 traffic cannot use the management or DNS exceptions.
 The second endpoint is required for a scenario with the second host. Existing
-single-relay callers omit it. This foundation does not add a relay-loss gate or
-part R; those are a separate step.
+single-relay callers omit it. Part R uses this opt-in foundation; its relay-host-loss gate is described below.
 
 `relay-status` selects the corresponding endpoint. The fixed `relay-isolate`
 and `relay-restore` steps target `relay` or the opted-in
@@ -2139,3 +2138,127 @@ above as its initial sizing basis; the isolated job's own cold-run duration
 has not yet been measured. CI must confirm that budget against its first runs.
 Local macOS checks are NOT-RUN for container execution and do not establish
 deployed management-agent or production-network behavior.
+
+## Part R: relay host loss
+
+Part R is an explicit scenario: `relayTwo: true`, with `gates` equal to
+`["relay-host-loss"]` only. It requires both named relay slots from the pinned
+boot template (`preview` on `relay`, `preview-two` on `relay-two`). It runs four
+lean video calls, two on each worker, with caller relay-change evidence enabled.
+R's media plan has a 600-second limit. This exceeds twice the capped 280-second path
+to the finish feed: 30 seconds of warmup, four 60-second steps (two relay reads,
+one control read and isolation), and twice the relay-loss budget for observation.
+The existing caller-window admission includes this longer duration.
+It does not send `/arm-event` feeds. Parts A, B and M keep their existing plans,
+scenario encodings, receipts and pinned judge path.
+
+Build the caller and its bridge from the final public caller commit. Build the
+separate R judge with `operatorevidence.BuildRelayLossPinned`, and use
+`RelayLossJudge.BindScenario` before binding the clock receipt. The scenario's
+existing judge identity binds the R executable's SHA256. The R build archives
+the caller commit and overlays only R judge sources; it neither copies
+`judge-src` nor replaces `observe`. The executable's bytes are checked at each
+invocation. The ordinary pinned release judges remain unchanged.
+
+After warmup, one control `/status` read supplies exactly four registered call
+assignments, including each relay slot and generation. Generation zero is valid.
+The gate selects the host carrying the most calls; a tie selects `relay` first.
+A target with fewer than two calls gives `relay-loss-target-insufficient` and
+performs no isolation. Fewer than four unique registered calls is missing
+evidence, rather than target-insufficient. Unknown assignments, pending changes,
+extra calls or unhealthy relays refuse the fault. The survivor's public endpoint and the
+relays' epochs come from independent host status reads.
+
+The gate runs `relay-isolate` once on the selected host and waits `2*relayloss.Budget`
+after the confirmed fault receipt. That receipt bounds the procedure; it is not
+a media timing anchor. An R-only graceful finish feed stops the senders and
+lets the ordinary hangup and report paths finish normally. The gate collects
+those reports before `relay-restore`. The bridge separately publishes the
+existing stats samples in `relay-loss-stats.json`; R compares them with the
+inline samples. Terminal abort remains a different, nonqualifying outcome.
+
+The isolation duration is computed, not an adapter choice: 60 seconds for the
+isolate step, twice the product budget (10 seconds), 30 seconds for bounded
+caller collection, 60 seconds for restore admission/command, and 10 seconds
+of safety margin: **170 seconds**, below the host maximum of 300. Collection
+is included because it must finish while old-path output remains blocked.
+Service startup and rejoin waits run after firewall removal. Expiry is a safety
+backstop; known completion always performs explicit restore. Unknown effects
+keep the existing latch: no repeated isolation or unauthorized restoration.
+
+### Caller evidence and media order
+
+All media times use each caller's clock. L is the last decrypted arrival before
+the first restart attempt's start. Applied is when the new-generation answer is
+applied. V is the first non-repeated decodable video frame after application;
+A is the first advancing audio after application. Each affected call must have
+one episode at preflight generation plus one, with the answer candidate equal
+to the survivor endpoint. Unaffected calls must have no restart episodes or
+ICE restarts. A restart on an unaffected call is inconclusive, with cause
+`relay-loss-unaffected-restart`. Its gap checks still fail real disruptions
+that exceed the budget.
+
+The per-run invariant is: **no media arrives on any track in (L, Applied]**.
+The isolation drops all old relay output. The ordering assumption is that packets
+already in flight arrive before the two-second stall detection starts the
+restart. Survivor media needs the new answer's ICE candidate. Any early media
+is counted and rejected, rather than inferred away. The judge checks
+`L < restartStart <= Applied <= V,A` and requires exactly one explicit arrival
+count per received track, matched by kind and SSRC. Nonzero counts produce
+`relay-loss-media-order-violated`, inconclusive. Absent, null, duplicate or
+incomplete counts are missing evidence. The recorder leaves counts unset if
+retained history starts after L. No TTL self-fence premise is used.
+
+The recovery gap is `max(V,A)-L`. Each call's final gap is the maximum of that
+qualified recovery gap, each track's existing `MediaGap`, and each trailing gap
+`HungUpAt-LastArrival`. The judge uses the shared `relayloss.Budget` (5 seconds):
+a gap at the limit passes, and a valid larger gap fails as `relay-loss-slow`,
+even when other evidence is missing. Complete evidence with no recovery and
+`HungUpAt-L >= 2*Budget` fails as `relay-loss-unrecovered`. Otherwise recovery
+is missing and inconclusive. Unaffected calls have separate rows and the same
+gap ceiling. Positive call-loss, decryption and duplication evidence remains a
+failure. Missing evidence cannot turn it into a pass. The existing generator
+cadence, saturation and event-overlap checks also qualify R.
+
+Unit tests characterize the anchors, in-flight and early arrivals, history
+retention, judgment and procedure ordering. They do not prove real network
+ordering. That proof belongs to the #560 container rehearsal and the paid run.
+
+### Restoration by host
+
+A store outage does not make an active relay fence at lease expiry. With no
+successor, renewal can restore the same holder and epoch. With a successor, the
+renewal CAS returns lease loss; `OnLost` fences packet forwarding and cancels
+the process. Separately, control persists a cutoff and refuses rejoining at or
+below that epoch. Thus a process that kept forwarding internally during the
+partition can still require replacement after the firewall heals.
+
+On `relay`, the primary and standby share the isolated host. After explicit
+network restore the gate inspects the active service. A standby that already
+claimed a higher epoch stays active. If the old epoch remains, the R-only
+`relay-loss-stop` stops that confirmed active service; the waiting standby
+claims the next epoch. The gate never starts a second non-standby relay on the
+public port. It waits for a higher target epoch with both workers registered
+and for both relays to be joined and healthy in control `/status`. It then uses
+`relay-replenish` to restore the inactive unit as a fresh standby. Definite failed
+control reads are missing samples in the bounded rejoin wait. Known call loss
+still fails the run, but does not skip restoration or replenishing the standby.
+
+`relay-two` has one unit and no standby. Both relay units use `Restart=no`.
+**A lost relay-two does not come back on its own after the network heals.**
+The R-only `relay-start` stops a surviving predecessor if necessary, confirms
+MainPID zero and predecessor exit, configures the pinned binary and starts
+that one unit. It then requires the same higher-epoch and control rejoin checks.
+The rejoin wait is bounded at 60 seconds. Known restoration failures produce
+`relay-loss-restore-failed`, with every call row retained. Unknown step results
+remain inconclusive and fenced; they do not authorize another service action.
+
+If a collection error or an unknown result latches the run, the gate skips
+further restoration. The firewall heals by expiry, but `relay-two` can remain
+stopped and the primary host can remain without a standby. The operator must
+then perform the required `relay-restore`, `relay-start` or `relay-replenish`
+steps by hand. Expiry restores network reachability; it does not restore services.
+
+These restoration choices follow the lease, cutoff and unit code and are tested
+with memory-store/control tests and offline host transcripts. Actual host/service
+recovery and management transport timing remain #560 and paid-run evidence.

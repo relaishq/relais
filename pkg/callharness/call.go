@@ -32,7 +32,13 @@ const (
 
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
-	RelayChange bool // advertise relay-change support and open the event stream
+	// ExternalWorker selects a named worker on an external control endpoint.
+	// Empty preserves the existing Worker index/automatic placement behavior.
+	ExternalWorker string
+	// RelayLossEvidence enables the dedicated operator caller's episode record.
+	// It does not change the shared Report JSON or enable relay changes itself.
+	RelayLossEvidence bool
+	RelayChange       bool // advertise relay-change support and open the event stream
 	// MediaProgress declares A (ADR 0016 section 5) and reports per-MID
 	// progress after each restart. The Pion caller has no audio decoder, so
 	// its report uses fresh per-MID packet progress: a protocol stand-in for
@@ -172,6 +178,7 @@ type Call struct {
 // is a *DialError that carries what the caller observed.
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
+	rec.relayLossEvidence = opts.RelayLossEvidence
 	// A failed dial reads its evidence before it closes the call, so the
 	// teardown does not appear in the report.
 	defer func() {
@@ -279,7 +286,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 	call.offer = pc.LocalDescription().SDP
 	rec.offerAnswerExchange()
-	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer, opts.RelayChange, opts.RelayChange && (opts.MediaProgress || opts.WithholdMediaProgress))
+	answer, resourceURL, err := h.postOfferWithWorker(ctx, opts.Worker, opts.ExternalWorker, call.offer, opts.RelayChange, opts.RelayChange && (opts.MediaProgress || opts.WithholdMediaProgress))
 	if err != nil {
 		return call, err
 	}

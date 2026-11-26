@@ -39,6 +39,9 @@ func (c *Call) startRelayEvents() {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
+				if c.rec.relayLossEvidence {
+					c.rec.observeRelayRestarts(time.Now())
+				}
 				if !c.relayStalled() {
 					continue
 				}
@@ -123,6 +126,7 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 	if event.Generation == 0 && (time.Now().Before(c.relayAttemptUntil) || !c.relayStalled()) {
 		return nil
 	}
+	episode := c.rec.beginRelayRestart(time.Now())
 	c.relayAttemptUntil = event.Deadline
 	if event.Generation == 0 {
 		c.relayAttemptUntil = time.Now().Add(2 * time.Second)
@@ -195,8 +199,10 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 	c.rec.offerAnswerExchange()
 	err = c.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: string(data)})
 	if err == nil {
+		applied := time.Now()
 		_, generation, _ := iceufrag.Parse(iceUfrag(c.pc.RemoteDescription()))
 		c.relayGeneration = generation
+		c.rec.appliedRelayRestart(episode, applied, generation, answerCandidate(string(data)))
 		if c.mediaProgress == 1 && resp.Header.Get("Relais-Relay-Confirmation") == "decode" {
 			var required []string
 			if json.Unmarshal([]byte(resp.Header.Get("Relais-Required-Mids")), &required) == nil && len(required) > 0 {

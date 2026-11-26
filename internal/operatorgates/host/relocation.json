@@ -28,5 +28,13 @@
   },
   "clock.py": {
     "function_sha256": "06e0e0b0c2ae9f4965f5d43238c03ed199ef6d8b264918703045eb8a353cf9ca"
+  },
+  "relay_loss_process.py": {
+    "sha256": "0dc1ccc706d62eeda50ae8bda832d428556157d81dd4ff7e66185718587eeae0",
+    "change": "R-only restoration source and offline transcripts; ordinary host sources and rendered steps stay byte-identical."
+  },
+  "relay_loss_process_test.py": {
+    "sha256": "c9dc982eaeb2d18c68a8a530486ddabdd0d8e5cca22615b08f7c854180f1256c",
+    "change": "R-only restoration source and offline transcripts; ordinary host sources and rendered steps stay byte-identical."
   }
 }

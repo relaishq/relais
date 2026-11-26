@@ -774,3 +774,20 @@ func TestAcquireFrozenHolderSurvivesIsolatedPollBlips(t *testing.T) {
 	require.Positive(t, g.Timing().StoreFailures)
 	t.Logf("FLAPPING_ACQUIRE ttl=%s poll=%s renew=%s failures=33%% takeover=%s", cfg.TTL, cfg.Poll, cfg.Renew, time.Since(start))
 }
+
+// A healed partition does not imply a new tenure. Control can have cut off
+// this epoch even though Redis still accepts its original holder's renewal.
+func TestExpiredTenureCanRenewWithoutSuccessor(t *testing.T) {
+	s := sessionstore.NewMemory()
+	ctx := context.Background()
+	l, err := s.ClaimRelay(ctx, "one", process("a"), time.Millisecond)
+	require.NoError(t, err)
+	time.Sleep(3 * time.Millisecond)
+	expired, err := s.GetRelay(ctx, "one")
+	require.NoError(t, err)
+	require.True(t, expired.Expired)
+	renewed, err := s.RenewRelay(ctx, l, time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, l.Epoch, renewed.Epoch)
+	require.Equal(t, l.Holder, renewed.Holder)
+}

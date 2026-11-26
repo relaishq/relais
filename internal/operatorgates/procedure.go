@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorevidence/relayjudge"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -86,7 +87,9 @@ type ProcessExtra struct {
 	Owner      string   `json:"owner,omitempty"`
 	Epoch      uint64   `json:"epoch,omitempty"`
 	Sessions   []string `json:"sessions,omitempty"`
-	// RecoveryStatus is the failover recovery wait's opt-in for control status.
+	// RelayLossStatus requires R's per-call relay assignment evidence.
+	RelayLossStatus bool `json:"-"`
+	// RecoveryStatus opts recovery waits into definite failed control reads.
 	// It changes only the script's failure branch, never its parameters.
 	RecoveryStatus   bool `json:"-"`
 	IsolationSeconds int  `json:"isolationSeconds,omitempty"`
@@ -157,23 +160,24 @@ type ProcessConfig struct {
 	KillReplacements int
 }
 type ProcessEvidence struct {
-	CompletedSteps            int     `json:"completedSteps"`
-	WorkerRollouts            int     `json:"workerRollouts"`
-	Restarts                  int     `json:"restarts"`
-	ReleaseTargetsVerified    *int    `json:"releaseTargetsVerified,omitempty"`
-	ControlReadyMS            *int64  `json:"controlReadyMs,omitempty"`
-	ControlReadyNormalMS      *int64  `json:"controlReadyNormalMs,omitempty"`
-	ControlReadyDegradedMS    *int64  `json:"controlReadyDegradedMs,omitempty"`
-	ControlReadyTargetMet     *int    `json:"controlReadyTargetMet,omitempty"`
-	RelayEpochDelta           *uint64 `json:"relayEpochDelta,omitempty"`
-	RoutesRestored            *uint64 `json:"routesRestored,omitempty"`
-	DuplicatePackets          *uint64 `json:"duplicatePackets,omitempty"`
-	RelayWindows              string  `json:"relayWindows,omitempty"`
-	RelayLocalTiming          string  `json:"relayLocalTiming,omitempty"`
-	RelayConnectionInvariants string  `json:"relayConnectionInvariants,omitempty"`
-	ExcludedKills             int     `json:"excludedKills,omitempty"`
-	KillReplacements          int     `json:"killReplacements,omitempty"`
-	KillReplacementSkipped    string  `json:"killReplacementSkipped,omitempty"`
+	RelayLoss                 *relayjudge.Result `json:"relayLoss,omitempty"`
+	CompletedSteps            int                `json:"completedSteps"`
+	WorkerRollouts            int                `json:"workerRollouts"`
+	Restarts                  int                `json:"restarts"`
+	ReleaseTargetsVerified    *int               `json:"releaseTargetsVerified,omitempty"`
+	ControlReadyMS            *int64             `json:"controlReadyMs,omitempty"`
+	ControlReadyNormalMS      *int64             `json:"controlReadyNormalMs,omitempty"`
+	ControlReadyDegradedMS    *int64             `json:"controlReadyDegradedMs,omitempty"`
+	ControlReadyTargetMet     *int               `json:"controlReadyTargetMet,omitempty"`
+	RelayEpochDelta           *uint64            `json:"relayEpochDelta,omitempty"`
+	RoutesRestored            *uint64            `json:"routesRestored,omitempty"`
+	DuplicatePackets          *uint64            `json:"duplicatePackets,omitempty"`
+	RelayWindows              string             `json:"relayWindows,omitempty"`
+	RelayLocalTiming          string             `json:"relayLocalTiming,omitempty"`
+	RelayConnectionInvariants string             `json:"relayConnectionInvariants,omitempty"`
+	ExcludedKills             int                `json:"excludedKills,omitempty"`
+	KillReplacements          int                `json:"killReplacements,omitempty"`
+	KillReplacementSkipped    string             `json:"killReplacementSkipped,omitempty"`
 	// FailedStatusReads counts definite failed control status reads in the
 	// failover recovery wait. They are missing samples, not incomplete steps.
 	FailedStatusReads int `json:"failedStatusReads,omitempty"`

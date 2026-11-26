@@ -11,7 +11,7 @@ import (
 	"slices"
 )
 
-//go:embed preview_process.py relay_isolation.py preview_inventory.py preview_telemetry.py clock.py clock_probe.py clock_history.py
+//go:embed preview_process.py relay_loss_process.py relay_isolation.py preview_inventory.py preview_telemetry.py clock.py clock_probe.py clock_history.py
 var Assets embed.FS
 
 // HistoricalClock is unwired. boundary is the gate-owned read boundary, not arm.
@@ -43,7 +43,7 @@ type Stage struct{ Version, Arch, ArchiveSHA256, ManifestSHA256, Pool, Operation
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 var poolPattern = regexp.MustCompile(`^[A-Za-z0-9+/=]+$`)
-var operations = []string{"service-journals", "telemetry", "signal-stop", "signal-start", "move", "status", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "freeze", "unfreeze", "drain", "worker-stop", "replace", "worker-start", "control-stop", "control-start", "worker-down", "relay-stage", "relay-stop", "relay-replenish", "relay-isolate", "relay-restore"}
+var operations = []string{"service-journals", "telemetry", "signal-stop", "signal-start", "move", "status", "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "freeze", "unfreeze", "drain", "worker-stop", "replace", "worker-start", "control-stop", "control-start", "worker-down", "relay-stage", "relay-stop", "relay-replenish", "relay-isolate", "relay-restore", "relay-start", "relay-loss-stop"}
 
 func IsRead(op string) bool { return IsPureRead(op) || op == "telemetry" || op == "status" }
 func IsPureRead(op string) bool {
@@ -54,9 +54,9 @@ func Process(operation string, parameters any, stage *Stage) (string, error) {
 	return process(operation, parameters, stage, IsPureRead(operation))
 }
 
-// RecoveryStatus renders control status for the failover recovery wait only.
+// RecoveryStatus renders control status for recovery waits.
 // Control status stays effectful: a reconcile can run before the read fails.
-// That wait accepts a definite failed read as a missing sample.
+// These waits accept a definite failed read as a missing sample.
 func RecoveryStatus(parameters any) (string, error) {
 	return process("status", parameters, nil, true)
 }
@@ -70,6 +70,13 @@ func process(operation string, parameters any, stage *Stage, readFailure bool) (
 		return "", err
 	}
 	op, _ := json.Marshal(operation)
+	executor := "execute"
+	restoration := ""
+	if operation == "relay-start" || operation == "relay-loss-stop" {
+		executor = "relay_loss_execute"
+		restoration = "\n" + source("relay_loss_process.py")
+	}
+
 	preflight := ""
 	if stage != nil {
 		if !versionPattern.MatchString(stage.Version) || stage.Arch != "arm64" && stage.Arch != "amd64" && stage.Arch != "x86_64" || !digestPattern.MatchString(stage.ArchiveSHA256) || !digestPattern.MatchString(stage.ManifestSHA256) || !poolPattern.MatchString(stage.Pool) || stage.Operation != "upgrade" && stage.Operation != "rollback" {
@@ -102,7 +109,7 @@ func process(operation string, parameters any, stage *Stage, readFailure bool) (
 	if readFailure {
 		failure = "except Exception as error:\n    emit({'kind':'failed','code':read_failure(error)})"
 	}
-	return "python3 - <<'PY'\n" + source("preview_process.py") + "\n" + source("relay_isolation.py") + "\n" + source("preview_telemetry.py") + fmt.Sprintf(`
+	return "python3 - <<'PY'\n" + source("preview_process.py") + "\n" + source("relay_isolation.py") + "\n" + source("preview_telemetry.py") + restoration + fmt.Sprintf(`
 import base64,gzip,tempfile,sys,datetime
 def emit(x): print(base64.b64encode(gzip.compress(json.dumps(x,separators=(',',':')).encode())).decode())
 evidence={}
@@ -112,11 +119,11 @@ try:
     p=json.loads(base64.b64decode('%s'))
     started=datetime.datetime.now(datetime.timezone.utc).isoformat()
     execution_started=time.monotonic()
-    data=execute(%s,p,evidence)
+    data=%s(%s,p,evidence)
     emit({'kind':'ok','started':started,'ended':datetime.datetime.now(datetime.timezone.utc).isoformat(),'data':data})
 %s
 PY
-`, preflight, data, op, failure), nil
+`, preflight, data, executor, op, failure), nil
 }
 
 func Inventory(slot string, pins any, requireRunning bool, architecture ...string) (string, error) {
