@@ -234,7 +234,7 @@ func (d *Deployment) Boot(ctx context.Context) error {
 	}
 	// Hosts first acquire their sandbox and clocks, then boot together so the
 	// template readiness checks can see their peers. No readiness bypass exists.
-	for _, slot := range Slots {
+	for _, slot := range d.Topology.Slots() {
 		host := d.Topology.Hosts[slot]
 		bundle, x := d.Topology.Bundle(slot)
 		if x != nil {
@@ -280,9 +280,9 @@ func (d *Deployment) Boot(ctx context.Context) error {
 	if err = d.startContainer(ctx, "signal-front", "signal-front", proxy); err != nil {
 		return err
 	}
-	errorsBySlot := make(chan error, len(Slots))
+	errorsBySlot := make(chan error, len(d.Topology.Slots()))
 	var group sync.WaitGroup
-	for _, slot := range Slots {
+	for _, slot := range d.Topology.Slots() {
 		group.Go(func() {
 			args, x := d.execArgs(slot, []string{"-e", "RELAIS_TEST_ARCHIVE_URL=file:///release.tar.gz"}, "bash", "/rehearsal/user-data.sh")
 			if x == nil {

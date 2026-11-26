@@ -2064,7 +2064,8 @@ The four-host receipt bytes remain unchanged. A scenario can set `relayTwo: true
 still contains `relay-primary` and `relay-standby`. The scenario identity binds
 this choice. Missing second-host inventory or clock evidence refuses admission.
 Parts A, B and M omit this option and retain the four-host inventory, clock
-reads and procedures. The container comparison still strips the second relay.
+reads and procedures. The A/B/M container comparison still strips the second relay. The separate
+part R rehearsal retains both relay hosts.
 
 Process parameters carry `relay` and optional `relayTwo` private HTTP endpoints.
 Private relay, control and store endpoints refuse ports 443 and 53 so call
@@ -2126,16 +2127,17 @@ prints the exact JSON readback and a fresh table dump for diagnosis. This proof
 needs Linux, privileged disposable containers and a pinned release archive.
 
 The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
-path PRs and matching main pushes. It builds a native archive from the tested
-checkout, supplies the required archive digest and opt-in environment, and
-runs the container test separately from the full media rehearsal. A proof
-failure fails that job. The existing manual target remains available.
+path PRs, matching main pushes, the schedule and `workflow_dispatch`. It reads
+the published v0.4.0 linux_amd64 archive through the public release reader and
+checks its fixed archive digest and release commit before boot. It opts into
+both relay hosts. It does not build replacement server binaries from the checkout.
+A proof failure fails that job. The existing manual target remains available.
 
-The initial job budget is 20 minutes: archive build 5 minutes, proof step 14
-minutes and Go test 12 minutes. The test leaves two minutes for cleanup before
-its Go deadline. This uses the existing measured 8 min 20 s setup reference
-above as its initial sizing basis; the isolated job's own cold-run duration
-has not yet been measured. CI must confirm that budget against its first runs.
+The job budget is 25 minutes: release preparation 5 minutes, proof step 20
+minutes and Go test 18 minutes. The test reserves two minutes for cleanup.
+The initial basis remains the measured 8 min 20 s setup reference above,
+rounded to about twice that time for the proof. The new five-host published
+release proof has not yet been measured. CI must confirm this initial budget.
 Local macOS checks are NOT-RUN for container execution and do not establish
 deployed management-agent or production-network behavior.
 
@@ -2163,8 +2165,7 @@ invocation. The ordinary pinned release judges remain unchanged.
 After warmup, one control `/status` read supplies exactly four registered call
 assignments, including each relay slot and generation. Generation zero is valid.
 The gate selects the host carrying the most calls; a tie selects `relay` first.
-A target with fewer than two calls gives `relay-loss-target-insufficient` and
-performs no isolation. Fewer than four unique registered calls is missing
+Fewer than four unique registered calls is missing
 evidence, rather than target-insufficient. Unknown assignments, pending changes,
 extra calls or unhealthy relays refuse the fault. The survivor's public endpoint and the
 relays' epochs come from independent host status reads.
@@ -2262,3 +2263,39 @@ steps by hand. Expiry restores network reachability; it does not restore service
 These restoration choices follow the lease, cutoff and unit code and are tested
 with memory-store/control tests and offline host transcripts. Actual host/service
 recovery and management transport timing remain #560 and paid-run evidence.
+
+### Free part R rehearsal
+
+`relais-gates rehearse -part-r` runs only part R in disposable runner
+containers. `-prepare-only -part-r` reads one published release:
+v0.4.0, linux_amd64, commit
+`ebb0f7f19595cf62840e6a923c74b6314b6df1c7`, archive SHA256
+`0b8e61ef0228018d9e2f7a82bdae1f3763fa1992456aa2207ece82a07b8dfe0e`.
+It has no upgrade pair. Every server host uses that release. The caller and
+bridge use the tested checkout. The separate R judge is built with
+`BuildRelayLossPinned` from the tested checkout and bound before clock admission.
+Both server identity fields in R's scenario name the same single release;
+A/B/M still require two distinct pinned releases.
+
+The workflow's independent `part-r` job runs for all existing triggers,
+including `workflow_dispatch`. It leaves the existing A/B/M job and its
+0.3.4/0.3.5 pair unchanged. The split avoids adding setup, clock admission and
+R's media window to that job's reported busy-day 2 h 15 min duration.
+The initial R budget is 60 minutes, with a 40-minute execution step and
+bounded 10-minute build and prerequisite steps and a 5-minute release read.
+This allows about twice an estimated 30-minute path: the existing 8 min 20 s
+boot reference, clock convergence/admission, preparation and the 600-second
+caller ceiling. This is a sizing estimate, not a measured R runtime. The first
+three passes on one commit must confirm the duration and the real container
+behavior; they remain NOT-RUN until CI records them.
+
+R uses five-host clock admission and the public resource sequence. It does not
+run the A/B/M calibration or pool judge. The R judge applies its generator,
+media order and 5-second per-call rules without the comparison's timing
+exemptions. The sanitized `report.json` sets `partR: true` and records the
+version, server commit and archive digest, template digest, caller and judge
+hashes, gate verdict, completion and caller stop proof, and all four calls'
+gaps and causes in `gates[].process.relayLoss`. Run and session labels are
+removed. Causes have a fixed allowlist. The run-page summary shows each call's
+role, gap, verdict and causes. Only the sanitized report is uploaded by the R
+job; raw caller records and host logs are not uploaded.

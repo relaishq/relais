@@ -65,3 +65,22 @@ func TestRehearseReleaseReadFailurePrintsRefusalCode(t *testing.T) {
 		}
 	}
 }
+
+func TestRehearsePartRPreparesOnlySingleRelease(t *testing.T) {
+	oldPair, oldSingle := prepareReleases, prepareRelayLossRelease
+	defer func() { prepareReleases, prepareRelayLossRelease = oldPair, oldSingle }()
+	pair, single := 0, 0
+	prepareReleases = func(context.Context, string, string) error { pair++; return nil }
+	prepareRelayLossRelease = func(_ context.Context, assets, token string) error {
+		single++
+		if assets != "/part-r-assets" {
+			t.Fatal(assets)
+		}
+		return nil
+	}
+	var diagnostics bytes.Buffer
+	status := rehearseWithReadiness([]string{"-part-r", "-prepare-only", "-assets", "/part-r-assets"}, func() error { return nil }, &diagnostics)
+	if status != 0 || pair != 0 || single != 1 {
+		t.Fatal(status, pair, single, diagnostics.String())
+	}
+}

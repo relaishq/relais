@@ -1,0 +1,322 @@
+{
+  "relayLoss": {
+    "completed": true,
+    "calls": [
+      {
+        "call": 1,
+        "gapNs": 1000000000,
+        "recovered": true
+      },
+      {
+        "call": 2,
+        "gapNs": 1000000000,
+        "recovered": true
+      },
+      {
+        "call": 3,
+        "gapNs": 1000000000,
+        "recovered": true
+      },
+      {
+        "call": 4,
+        "gapNs": 1000000000,
+        "recovered": true
+      },
+      {
+        "call": 5,
+        "gapNs": 1000000000,
+        "recovered": true
+      },
+      {
+        "call": 6,
+        "gapNs": 1000000000,
+        "recovered": true
+      },
+      {
+        "call": 7,
+        "gapNs": 1000000000,
+        "recovered": true
+      },
+      {
+        "call": 8,
+        "gapNs": 1000000000,
+        "recovered": true
+      }
+    ]
+  },
+  "timingUndecided": [],
+  "uncertainties": [],
+  "schemaVersion": 1,
+  "commit": "",
+  "event": "workflow_dispatch",
+  "scenarioSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "templateSha256": "",
+  "binarySha256": "",
+  "callerSha256": "",
+  "judgeSha256": [],
+  "releaseCommits": [],
+  "archiveSha256": [],
+  "bounds": {
+    "frontendControlBoundNs": 0,
+    "frontendWorkerBoundNs": 0,
+    "driftPpm": 0
+  },
+  "cpu": {
+    "layout": {
+      "Allowed": null,
+      "Caller": null,
+      "Services": null
+    },
+    "topology": "",
+    "driverAffinity": "unavailable",
+    "callerAffinities": [],
+    "calibration": {
+      "checks": [],
+      "passed": true,
+      "samples": 0,
+      "mediaNs": 0,
+      "flaggedNs": 0,
+      "flaggedPercent": 0,
+      "peakP99Ns": 0,
+      "peakMaxNs": 0,
+      "peakCpuPerGomaxprocs": 0,
+      "decoderDropped": 0,
+      "decoderErrors": 0,
+      "completedCalls": 0,
+      "duplicatePackets": 0,
+      "causes": [],
+      "mediaWindow": {
+        "firstVideoSendOffsetMs": 0,
+        "hangUpOffsetMs": 0,
+        "flaggedIntervals": [],
+        "clippedFlaggedMs": 0,
+        "mediaWindowMs": 0
+      }
+    },
+    "phases": []
+  },
+  "gates": [
+    {
+      "gate": "rollout",
+      "status": "passed",
+      "media": {
+        "includedPhases": 0,
+        "droppedPhases": 0,
+        "excludedEvents": 0,
+        "excludedKills": 0,
+        "saturationOverlaps": 0,
+        "undecidedMetrics": [],
+        "phaseDiagnostics": [],
+        "status": "passed",
+        "expectedCalls": 0,
+        "completedCalls": 0,
+        "eventCount": 0,
+        "metricCount": 0,
+        "failedMetrics": 0,
+        "inconclusiveMetrics": 0,
+        "maxMediaGapNs": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0
+      },
+      "process": {
+        "completedSteps": 1,
+        "workerRollouts": 0,
+        "restarts": 0
+      },
+      "procedureCompleted": true,
+      "callerStopped": true
+    },
+    {
+      "gate": "control-restart",
+      "status": "passed",
+      "media": {
+        "includedPhases": 0,
+        "droppedPhases": 0,
+        "excludedEvents": 0,
+        "excludedKills": 0,
+        "saturationOverlaps": 0,
+        "undecidedMetrics": [],
+        "phaseDiagnostics": [],
+        "status": "passed",
+        "expectedCalls": 0,
+        "completedCalls": 0,
+        "eventCount": 0,
+        "metricCount": 0,
+        "failedMetrics": 0,
+        "inconclusiveMetrics": 0,
+        "maxMediaGapNs": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0
+      },
+      "process": {
+        "completedSteps": 1,
+        "workerRollouts": 0,
+        "restarts": 0
+      },
+      "procedureCompleted": true,
+      "callerStopped": true
+    },
+    {
+      "gate": "upgrade-rollback",
+      "status": "passed",
+      "media": {
+        "includedPhases": 0,
+        "droppedPhases": 0,
+        "excludedEvents": 0,
+        "excludedKills": 0,
+        "saturationOverlaps": 0,
+        "undecidedMetrics": [],
+        "phaseDiagnostics": [],
+        "status": "passed",
+        "expectedCalls": 0,
+        "completedCalls": 0,
+        "eventCount": 0,
+        "metricCount": 0,
+        "failedMetrics": 0,
+        "inconclusiveMetrics": 0,
+        "maxMediaGapNs": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0
+      },
+      "process": {
+        "completedSteps": 1,
+        "workerRollouts": 0,
+        "restarts": 0
+      },
+      "procedureCompleted": true,
+      "callerStopped": true
+    },
+    {
+      "gate": "relay-deploy",
+      "status": "inconclusive",
+      "media": {
+        "includedPhases": 0,
+        "droppedPhases": 0,
+        "excludedEvents": 0,
+        "excludedKills": 0,
+        "saturationOverlaps": 0,
+        "undecidedMetrics": [],
+        "phaseDiagnostics": [],
+        "status": "passed",
+        "expectedCalls": 0,
+        "completedCalls": 0,
+        "eventCount": 0,
+        "metricCount": 0,
+        "failedMetrics": 0,
+        "inconclusiveMetrics": 0,
+        "maxMediaGapNs": 0,
+        "decryptionFailures": 0,
+        "iceRestarts": 0
+      },
+      "process": {
+        "completedSteps": 5,
+        "workerRollouts": 0,
+        "restarts": 1,
+        "relayEpochDelta": 1,
+        "routesRestored": 1,
+        "duplicatePackets": 0,
+        "relayLocalTiming": "inconclusive",
+        "relayConnectionInvariants": "inconclusive"
+      },
+      "procedureCompleted": true,
+      "callerStopped": true
+    }
+  ],
+  "pooledMedia": {
+    "completeMedia": true,
+    "lostCalls": 0,
+    "undecidedMetrics": [],
+    "includedPhases": 4,
+    "droppedPhases": 0,
+    "excludedEvents": 0,
+    "excludedKills": 0,
+    "saturationOverlaps": 0,
+    "duplicatePackets": 0,
+    "phaseDiagnostics": [
+      {
+        "gate": "rollout",
+        "eventCount": 14,
+        "phase": 0,
+        "included": true,
+        "cause": "",
+        "excludedEvents": 0,
+        "saturationOverlaps": 0,
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "gate": "control-restart",
+        "eventCount": 13,
+        "phase": 1,
+        "included": true,
+        "cause": "",
+        "excludedEvents": 0,
+        "saturationOverlaps": 0,
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "gate": "upgrade-rollback",
+        "eventCount": 9,
+        "phase": 2,
+        "included": true,
+        "cause": "",
+        "excludedEvents": 0,
+        "saturationOverlaps": 0,
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      },
+      {
+        "gate": "relay-deploy",
+        "eventCount": 0,
+        "phase": 3,
+        "included": true,
+        "cause": "",
+        "excludedEvents": 0,
+        "saturationOverlaps": 0,
+        "issue": {
+          "path": "",
+          "reason": ""
+        }
+      }
+    ],
+    "status": "passed",
+    "qualifiedMoves": 20,
+    "qualifiedTakeovers": 16,
+    "expectedCalls": 4,
+    "completedCalls": 4,
+    "relayCalls": 1,
+    "eventCount": 36,
+    "metricCount": 1,
+    "failedMetrics": 0,
+    "inconclusiveMetrics": 0,
+    "maxMediaGapNs": 0,
+    "decryptionFailures": 0,
+    "iceRestarts": 0
+  },
+  "clocks": [],
+  "errors": [],
+  "latched": false,
+  "cleanup": true,
+  "verdict": "passed",
+  "failures": [],
+  "exemptions": [
+    "relayLocalTiming",
+    "relayConnectionInvariants"
+  ],
+  "limitations": [
+    "local TLS proxy and time reference; shared runner clock",
+    "linux_amd64 only",
+    "store failover and load admission not covered",
+    "one execution; three fixed complete executions are required for initial calibration",
+    "CPU affinity does not prove physical-core or VM scheduling isolation",
+    "on a shared runner, pinned media timing is judged strictly only in the paid run"
+  ],
+  "callerTiming": []
+}

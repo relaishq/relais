@@ -11,7 +11,7 @@ import (
 // media window. Runtime still checks each receipt/manifest and compatibility
 // pool before effects. No network, extraction or build burst occurs in a gate.
 func (r *rehearsal) stage(ctx context.Context) error {
-	for _, slot := range Slots {
+	for _, slot := range r.topology.Slots() {
 		id := r.deployment.ContainerIDs()[slot]
 		for _, pin := range r.pins {
 			archive := filepath.Join(r.c.Assets, "relais_"+pin.Version+"_linux_amd64.tar.gz")

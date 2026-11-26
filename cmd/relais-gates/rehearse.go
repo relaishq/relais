@@ -18,6 +18,7 @@ import (
 )
 
 var prepareReleases = operatorrehearsal.PrepareReleases
+var prepareRelayLossRelease = operatorrehearsal.PrepareRelayLossRelease
 
 func rehearse(args []string) int {
 	return rehearseWithReadiness(args, operatorgates.CheckReadiness, os.Stderr)
@@ -34,6 +35,7 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 	commit := flags.String("commit", "", "full tested commit (PR merge ref when applicable)")
 	head := flags.String("head-commit", "", "PR head commit, separately from tested merge commit")
 	event := flags.String("event", "local", "workflow event")
+	partR := flags.Bool("part-r", false, "rehearse part R alone with published v0.4.0 servers and both relay hosts")
 	prepare := flags.Bool("prepare-only", false, "read and verify fixed releases, then exit")
 	prepared := flags.Bool("prepared", false, "use releases from the separate release-read stage")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
@@ -55,7 +57,11 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 		return v
 	}
 	if *prepare || !*prepared {
-		if e := prepareReleases(ctx, abs(*assets), token); e != nil {
+		prepareRelease := prepareReleases
+		if *partR {
+			prepareRelease = prepareRelayLossRelease
+		}
+		if e := prepareRelease(ctx, abs(*assets), token); e != nil {
 			// Print and save only the public refusal code, never free-form error text.
 			code := "unclassified"
 			var refusal *artifacts.Refusal
@@ -78,7 +84,7 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 		fmt.Fprintln(diagnostics, "compiler-unavailable")
 		return 1
 	}
-	r, e := operatorrehearsal.Rehearse(ctx, operatorrehearsal.RehearseConfig{Checkout: abs(*checkout), Assets: abs(*assets), Output: abs(*output), GoExecutable: abs(executable), RedisExecutable: *redis, Commit: *commit, HeadCommit: *head, Event: *event}, diagnostics)
+	r, e := operatorrehearsal.Rehearse(ctx, operatorrehearsal.RehearseConfig{PartR: *partR, Checkout: abs(*checkout), Assets: abs(*assets), Output: abs(*output), GoExecutable: abs(executable), RedisExecutable: *redis, Commit: *commit, HeadCommit: *head, Event: *event}, diagnostics)
 	if e != nil {
 		fmt.Fprintln(diagnostics, "rehearsal-incomplete")
 	}

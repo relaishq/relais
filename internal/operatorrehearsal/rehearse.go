@@ -19,16 +19,19 @@ import (
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/artifacts"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
 type RehearseConfig struct {
+	PartR                                                                              bool
 	Checkout, Assets, Output, GoExecutable, RedisExecutable, Commit, HeadCommit, Event string
 }
 
 type rehearsal struct {
+	relayJudge              operatorevidence.RelayLossJudge
 	boundInit               operator.Init
 	clockCoverageFalsified  bool
 	c                       RehearseConfig
@@ -161,7 +164,7 @@ func Rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer) (Rep
 }
 
 func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setup func(*rehearsal, context.Context) error) (report Report, err error) {
-	report = Report{SchemaVersion: 1, Commit: c.Commit, HeadCommit: c.HeadCommit, Event: c.Event, Errors: []string{}, Gates: []GateReport{}, Bounds: clocks.Bounds{}}
+	report = Report{PartR: c.PartR, SchemaVersion: 1, Commit: c.Commit, HeadCommit: c.HeadCommit, Event: c.Event, Errors: []string{}, Gates: []GateReport{}, Bounds: clocks.Bounds{}}
 	if e := os.MkdirAll(c.Output, 0700); e != nil {
 		return report, e
 	}
@@ -198,6 +201,10 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	if e = setup(r, ctx); e != nil {
 		r.recordError("setup-failed", e)
 		return report, errors.New("setup-failed")
+	}
+	if c.PartR {
+		err = r.rehearsePartR(ctx)
+		return report, err
 	}
 	scenario := operator.Scenario{SchemaVersion: 1, Gates: CoveredGates, Template: operator.Identity{SourceCommit: r.c.Commit, SHA256: report.TemplateSHA256}, ReleaseA: operator.Identity{SourceCommit: ReleaseACommit, SHA256: ReleaseASHA256}, ReleaseB: operator.Identity{SourceCommit: ReleaseBCommit, SHA256: ReleaseBSHA256}, Judge: operator.Identity{SourceCommit: ReleaseACommit, SHA256: r.judge.pinned.SHA256}, Caller: operator.Identity{SourceCommit: ReleaseACommit, SHA256: report.CallerSHA256}}
 	// The plan identity is fixed here, before any host is booted.
@@ -332,7 +339,7 @@ func (r *rehearsal) recordError(stage string, err error) {
 }
 
 func (r *rehearsal) setup(ctx context.Context) error {
-	plan, e := readReleases(r.c.Assets)
+	plan, e := r.releasePlan()
 	if e != nil {
 		return e
 	}
@@ -355,7 +362,7 @@ func (r *rehearsal) setup(ctx context.Context) error {
 	r.report.CPU.Layout = layout
 	// Pin all current Go threads; future threads inherit a services mask. Caller
 	// systemd units get their own explicit two-CPU mask and GOMAXPROCS=2.
-	r.topology, e = Load(os.DirFS(r.c.Checkout), Config{Name: "relais-gates-" + strconv.Itoa(os.Getpid()), Version: plan.From.Version, Architecture: "x86_64", ArchiveSHA256: plan.From.ArchiveSHA256})
+	r.topology, e = Load(os.DirFS(r.c.Checkout), Config{Name: "relais-gates-" + strconv.Itoa(os.Getpid()), Version: plan.From.Version, Architecture: "x86_64", ArchiveSHA256: plan.From.ArchiveSHA256, RelayTwo: r.c.PartR})
 	if e != nil {
 		return e
 	}
@@ -376,35 +383,62 @@ func (r *rehearsal) setup(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	r.load = filepath.Join(r.work, "relais-load")
-	if e = extractLoad(filepath.Join(r.c.Assets, plan.From.Archive), r.load); e != nil {
-		return e
-	}
-	r.report.CallerSHA256, e = fileHash(r.load)
-	if e != nil {
-		return e
-	}
-	for i, pin := range []struct{ commit string }{{ReleaseACommit}, {ReleaseBCommit}} {
-		pinned, x := operatorevidence.BuildPinned(ctx, r.c.Checkout, pin.commit, r.c.GoExecutable, filepath.Join(r.work, "judge-"+strconv.Itoa(i)), redactingWriter{r})
-		if x != nil {
-			_, _ = io.WriteString(r.diagnostics, "pinned judge preparation failed\nstdout/stderr:\n"+r.topology.Redact(x.Error())+"\n")
-			return x
+	if r.c.PartR {
+		r.load = filepath.Join(r.work, "relais-load-head")
+		if e = copyExecutable(filepath.Join(filepath.Dir(r.bridge), "relais-load"), r.load); e != nil {
+			return e
 		}
-		r.report.JudgeSHA256 = append(r.report.JudgeSHA256, pinned.SHA256)
-		if i == 0 {
-			r.judge = &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error {
-				return saveMediaEvidence(r.c.Output, "media-evidence.json", p, pinned.SHA256, nil)
-			}}
+		r.report.CallerSHA256, e = fileHash(r.load)
+		if e != nil {
+			return e
 		}
+		r.relayJudge, e = operatorevidence.BuildRelayLossPinned(ctx, r.c.Checkout, r.c.Commit, r.c.GoExecutable, filepath.Join(r.work, "judge-r"), redactingWriter{r})
+		if e != nil {
+			return e
+		}
+		identity := r.relayJudge.Identity()
+		// The shared clock/resource wiring needs an executable descriptor. R
+		// never calls recordingJudge.Judge: its resource sequence invokes the
+		// separate RelayLossJudge and bypasses the A/B/M media pool.
+		r.judge = &recordingJudge{pinned: operatorevidence.PinnedJudge{Commit: identity.SourceCommit, SHA256: identity.SHA256, Binary: r.relayJudge.Binary()}}
+		r.report.JudgeSHA256 = []string{identity.SHA256}
+		r.report.ReleaseCommits = []string{ReleaseRCommit}
+		r.report.ArchiveSHA256 = []string{ReleaseRSHA256}
+	} else {
+		r.load = filepath.Join(r.work, "relais-load")
+		if e = extractLoad(filepath.Join(r.c.Assets, plan.From.Archive), r.load); e != nil {
+			return e
+		}
+		r.report.CallerSHA256, e = fileHash(r.load)
+		if e != nil {
+			return e
+		}
+		for i, pin := range []struct{ commit string }{{ReleaseACommit}, {ReleaseBCommit}} {
+			pinned, x := operatorevidence.BuildPinned(ctx, r.c.Checkout, pin.commit, r.c.GoExecutable, filepath.Join(r.work, "judge-"+strconv.Itoa(i)), redactingWriter{r})
+			if x != nil {
+				_, _ = io.WriteString(r.diagnostics, "pinned judge preparation failed\nstdout/stderr:\n"+r.topology.Redact(x.Error())+"\n")
+				return x
+			}
+			r.report.JudgeSHA256 = append(r.report.JudgeSHA256, pinned.SHA256)
+			if i == 0 {
+				r.judge = &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error {
+					return saveMediaEvidence(r.c.Output, "media-evidence.json", p, pinned.SHA256, nil)
+				}}
+			}
+		}
+		r.report.ReleaseCommits = []string{ReleaseACommit, ReleaseBCommit}
+		r.report.ArchiveSHA256 = []string{ReleaseASHA256, ReleaseBSHA256}
 	}
-	r.report.ReleaseCommits = []string{ReleaseACommit, ReleaseBCommit}
-	r.report.ArchiveSHA256 = []string{ReleaseASHA256, ReleaseBSHA256}
 	boot, e := os.ReadFile(filepath.Join(r.c.Checkout, "deploy/aws/boot/run.sh"))
 	if e != nil {
 		return e
 	}
-	for _, p := range []struct{ version, commit, archive, manifest string }{{plan.From.Version, plan.From.Commit, plan.From.ArchiveSHA256, plan.From.ManifestSHA256}, {plan.To.Version, plan.To.Commit, plan.To.ArchiveSHA256, plan.To.ManifestSHA256}} {
-		r.pins = append(r.pins, inventory.Pin{Architecture: "x86_64", Version: p.version, Commit: p.commit, ArchiveSHA256: p.archive, ManifestSHA256: p.manifest, BootSHA256: hash(boot)})
+	releasePins := []artifacts.Pin{plan.From}
+	if !r.c.PartR {
+		releasePins = append(releasePins, plan.To)
+	}
+	for _, p := range releasePins {
+		r.pins = append(r.pins, inventory.Pin{Architecture: "x86_64", Version: p.Version, Commit: p.Commit, ArchiveSHA256: p.ArchiveSHA256, ManifestSHA256: p.ManifestSHA256, BootSHA256: hash(boot)})
 	}
 	var id [10]byte
 	if _, e = rand.Read(id[:]); e != nil {
@@ -440,6 +474,9 @@ func (r *rehearsal) parameters() operatorgates.ProcessParameters {
 	for _, w := range []string{"w1", "w2"} {
 		ip := r.topology.Hosts[w].IP
 		p.Workers[w] = operatorgates.WorkerEndpoint{HTTP: "http://" + ip + ":24701", Media: netip.MustParseAddrPort(ip + ":24711")}
+	}
+	if r.topology.Config.RelayTwo {
+		p.RelayTwo = "http://" + r.topology.Hosts["relay-two"].IP + ":24700"
 	}
 	return p
 }
@@ -622,7 +659,7 @@ func (r *rehearsal) close(ctx context.Context) bool {
 		// Only fixed unit state, PIDs and chrony diagnostics are uploaded. No unit
 		// environments, credential files, command lines or raw mailbox are collected.
 		for slot, id := range r.deployment.ContainerIDs() {
-			if slot != "relay" && slot != "w1" && slot != "w2" && slot != "shared" {
+			if !slices.Contains(r.topology.Slots(), slot) {
 				continue
 			}
 			out := r.runner.Run(ctx, Command{Label: "host-diagnostics", Args: []string{"docker", "exec", id, "sh", "-c", "systemctl show 'relais-*' -p Id -p ActiveState -p SubState -p MainPID; chronyc -n tracking; chronyc -n sources"}})

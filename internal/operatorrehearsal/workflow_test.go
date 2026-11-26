@@ -51,11 +51,33 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 	proof := false
 	for _, step := range boot.Steps {
 		if strings.Contains(step.Run, "-run '^TestContainerTemplateBoot$'") {
-			proof = step.Env["RELAIS_REHEARSAL_CONTAINERS"] == "1" && strings.Contains(step.Run, "RELAIS_REHEARSAL_ARCHIVE=") && strings.Contains(step.Run, "RELAIS_REHEARSAL_SHA256=") && !step.ContinueOnError
+			proof = step.Env["RELAIS_REHEARSAL_CONTAINERS"] == "1" && strings.Contains(step.Run, "RELAIS_REHEARSAL_ARCHIVE=") && strings.Contains(step.Run, "RELAIS_REHEARSAL_SHA256=") && step.Env["RELAIS_REHEARSAL_RELAY_TWO"] == "1" && strings.Contains(step.Run, ReleaseRSHA256) && !step.ContinueOnError
 		}
 	}
 	if !proof {
 		t.Fatal("container proof can silently skip or fail open")
+	}
+	rJob := w.Jobs["part-r"]
+	if rJob.RunsOn != "ubuntu-24.04" || rJob.TimeoutMinutes != 60 {
+		t.Fatal("part R requires its own bounded hosted job")
+	}
+	preparedR, ranR, uploadedR, summaryR := false, false, false, false
+	for _, step := range rJob.Steps {
+		if strings.Contains(step.Run, "-prepare-only") {
+			preparedR = strings.Contains(step.Run, "-part-r") && step.Env["RELAIS_RELEASE_TOKEN"] == "${{ github.token }}"
+		}
+		if strings.Contains(step.Run, "-part-r -prepared") {
+			ranR = preparedR && strings.Contains(step.Run, "sha256sum --strict --check") && strings.Contains(step.Run, `-go="$(go env GOROOT)/bin/go"`)
+		}
+		if strings.Contains(step.Run, "rehearsal_summary.py runtime/part-r-report") {
+			summaryR = step.If == "always()" && step.ContinueOnError
+		}
+		if strings.HasPrefix(step.Uses, "actions/upload-artifact@") {
+			uploadedR = step.With["path"] == "runtime/part-r-report/report.json" && step.If == "always()"
+		}
+	}
+	if !preparedR || !ranR || !uploadedR || !summaryR {
+		t.Fatal("part R dispatch path or sanitized evidence missing", preparedR, ranR, uploadedR, summaryR)
 	}
 	job := w.Jobs["rehearsal"]
 	if job.RunsOn != "ubuntu-24.04" {

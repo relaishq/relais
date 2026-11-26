@@ -92,3 +92,39 @@ func TestResourceInventoryTampering(t *testing.T) {
 		})
 	}
 }
+
+func TestResourceConfigPartRSingleRelease(t *testing.T) {
+	raw, err := os.ReadFile("testdata/resource-session.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Scenario operator.Scenario
+		Config   ResourceConfig
+	}
+	if err = json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	f.Scenario.RelayTwo = true
+	f.Scenario.Gates = []operator.Gate{operator.RelayHostLoss}
+	f.Scenario.ReleaseB = f.Scenario.ReleaseA
+	f.Config.Pins = f.Config.Pins[:1]
+	f.Config.Parameters.RelayTwo = "http://192.0.2.2:24700"
+	f.Config.JudgeBinary = filepath.Join(t.TempDir(), "judge")
+	if err = os.WriteFile(f.Config.JudgeBinary, []byte("judge-stub"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	session := &Session{scenario: f.Scenario}
+	if err = (ResourceRunner{Config: f.Config}).validate(session); err != nil {
+		t.Fatal("single R release refused", err)
+	}
+	// There is no upgrade destination in part R.
+	runtime := ProcessRuntime{Session: session, Pins: f.Config.Pins}
+	if err = runtime.Inventory(t.Context(), "to", 0); code(err) != "invalid-release-pins" {
+		t.Fatal("R accepted a second release target", err)
+	}
+	f.Config.Pins = append(f.Config.Pins, f.Config.Pins[0])
+	if err = (ResourceRunner{Config: f.Config}).validate(session); err == nil {
+		t.Fatal("R accepted a release pair")
+	}
+}
