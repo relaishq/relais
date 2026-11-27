@@ -9,6 +9,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGeneratorAggregatesWorstViolation(t *testing.T) {
+	for _, row := range []struct {
+		rule                string
+		first, second, want float64
+	}{
+		{"generator-cadence-ns-min", 900000000, 500000000, 500000000},
+		{"generator-cpu-percent-max", 86, 99, 99},
+	} {
+		t.Run(row.rule, func(t *testing.T) {
+			g := &GeneratorEvidence{}
+			g.check(row.rule, row.first, 1, false)
+			g.check(row.rule, row.second, 1, true)
+			require.Equal(t, row.want, g.Checks[0].Observed)
+			require.Equal(t, 2, g.Checks[0].Count)
+			require.Equal(t, 1, g.Checks[0].EventOverlaps)
+		})
+	}
+}
+
 func TestGeneratorExplainsEventRefusal(t *testing.T) {
 	in, calls := fixture(t)
 	var sample loadgen.Message
@@ -91,7 +110,7 @@ func TestGeneratorExplainsPolicyRules(t *testing.T) {
 			s.At = s.At.Add(time.Duration(i+1) * 100 * time.Millisecond)
 		}},
 		{"generator-start-coverage-ns-max", 1100000000, 1000000000, func(_ int, s *loadgen.Stats) { s.At = s.At.Add(2100 * time.Millisecond) }},
-		{"generator-end-coverage-ns-min", 0, 100000000, func(_ int, s *loadgen.Stats) { s.At = s.At.Add(-100 * time.Millisecond) }},
+		{"generator-end-coverage-ns-max", 100000000, 0, func(_ int, s *loadgen.Stats) { s.At = s.At.Add(-100 * time.Millisecond) }},
 		{"generator-flagged-percent-max", 100, 1, func(_ int, s *loadgen.Stats) { s.CPUPerGOMAXPROCS = 86 }},
 	} {
 		t.Run(row.rule, func(t *testing.T) {
@@ -144,7 +163,7 @@ func TestGeneratorExplainsEventCoverage(t *testing.T) {
 		if end {
 			calls[0].Episodes[0].Last = ptr(10 * time.Second)
 			calls[0].Episodes[0].Video = ptr(30 * time.Second)
-			want = GeneratorCheck{Rule: "generator-event-end-coverage-ns-min", Limit: 1000000000, Count: 1}
+			want = GeneratorCheck{Rule: "generator-event-end-coverage-ns-max", Observed: 1000000000, Count: 1}
 		}
 		result := Judge(wire(t, in, calls))
 		require.Contains(t, result.Generator.Checks, want)

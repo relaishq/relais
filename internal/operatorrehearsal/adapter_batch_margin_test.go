@@ -2,6 +2,7 @@ package operatorrehearsal
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestPartRFiveHostReplyMargin(t *testing.T) {
 	}
 	packed, err := json.Marshal(worstPacked)
 	require.NoError(t, err)
-	for _, mode := range []string{"packed", "twice-packed", "decoder-oversized", "oversized"} {
+	for _, mode := range []string{"packed", "twice-packed", "exact-limit", "decoder-oversized", "oversized"} {
 		t.Run(mode, func(t *testing.T) {
 			output := strings.Repeat("A", operator.MaxHostOutputBytes-1) + "\n"
 			if mode == "twice-packed" {
@@ -32,7 +33,7 @@ func TestPartRFiveHostReplyMargin(t *testing.T) {
 			if mode == "oversized" {
 				output = strings.Repeat("\x00", 20000)
 			}
-			if mode == "decoder-oversized" {
+			if mode == "decoder-oversized" || mode == "exact-limit" {
 				// 257002 bytes: fits the former adapter limit (258048), but
 				// cannot be read by the public strict decoder (256000).
 				output = strings.Repeat(`"`, operator.MaxHostOutputBytes-831) + strings.Repeat("<", 831)
@@ -40,6 +41,17 @@ func TestPartRFiveHostReplyMargin(t *testing.T) {
 			ids := fixtureContainerIDs()
 			ids["relay-two"] = strings.Repeat("e", 64)
 			adapter := &Adapter{Topology: partRTopology(t), Containers: ids, Runner: &fakeRunner{result: CommandResult{Code: code(0), Stdout: []byte(output)}}}
+			if mode == "exact-limit" {
+				adapter.Runner = leaseRunner(func(_ context.Context, c Command) CommandResult {
+					stdout := output
+					if c.Args[3] == ids["relay"] {
+						// Replace 1002 escaped quotes with ordinary ASCII. This
+						// removes exactly 1002 encoded bytes from the envelope.
+						stdout = strings.Repeat("A", 1002) + output[1002:]
+					}
+					return CommandResult{Code: code(0), Stdout: []byte(stdout)}
+				})
+			}
 			req := batchRequest()
 			var args operator.HostReadBatchArgs
 			require.NoError(t, json.Unmarshal(req.Args, &args))
@@ -60,10 +72,17 @@ func TestPartRFiveHostReplyMargin(t *testing.T) {
 				require.Equal(t, operator.Succeeded, child.Transport)
 				var host operator.HostOutput
 				require.NoError(t, json.Unmarshal(child.Payload, &host))
-				require.Equal(t, output, host.Stdout)
+				want := output
+				if mode == "exact-limit" && child.ID == "relay" {
+					want = strings.Repeat("A", 1002) + output[1002:]
+				}
+				require.Equal(t, want, host.Stdout)
 			}
 			if mode == "twice-packed" {
 				require.GreaterOrEqual(t, len(reply.Payload), 2*len(packed))
+			}
+			if mode == "exact-limit" {
+				require.Len(t, reply.Payload, 256000)
 			}
 			// Prove the enlarged reply also fits the unchanged public paid-path
 			// codec, including frame metadata and its newline.

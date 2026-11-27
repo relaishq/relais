@@ -144,6 +144,7 @@ R_CAUSES = frozenset((
     'relay-loss-missing', 'relay-loss-generator', 'relay-loss-target-insufficient',
     'relay-loss-restore-failed', 'relay-loss-call-lost', 'relay-loss-decryption',
     'relay-loss-duplicate', 'relay-loss-unaffected-restart', 'relay-loss-episode-count',
+    'relay-loss-ice-restart-missing',
     'relay-loss-generation-mismatch', 'relay-loss-candidate-mismatch',
     'relay-loss-anchor-order', 'relay-loss-media-order-violated',
     'relay-loss-unrecovered', 'relay-loss-slow', 'unclassified'))
@@ -161,6 +162,12 @@ def r_causes(value):
     return ', '.join(r_value(v, R_CAUSES) for v in value) or 'none'
 
 
+def r_count(value):
+    if value is MISSING:
+        return 'missing'
+    return str(value) if type(value) is int and 0 <= value <= 2**53 - 1 else 'unreadable'
+
+
 def part_r_lines(report):
     gates = report.get('gates')
     gate = gates[0] if isinstance(gates, list) and len(gates) == 1 else {}
@@ -173,11 +180,13 @@ def part_r_lines(report):
     calls = field(result, 'calls')
     if not isinstance(calls, list):
         return lines + ['Call gaps: missing']
-    lines += ['', '| Call | Role | Graded gap (ns) | Verdict | Causes |',
-              '| --- | --- | ---: | --- | --- |']
+    lines += ['', '| Call | Role | Episode count | ICE restarts | Graded gap (ns) | Verdict | Causes |',
+              '| --- | --- | ---: | ---: | ---: | --- | --- |']
     for call in calls:
         lines.append(f'| {count(field(call, "ordinal"))} | '
                      f'{r_value(field(call, "role"), ("affected", "unaffected", "unknown"))} | '
+                     f'{r_count(field(call, "episodeCount"))} | '
+                     f'{r_count(field(call, "iceRestarts"))} | '
                      f'{count(field(call, "gapNs"))} | '
                      f'{r_value(field(call, "outcome"), ("pass", "fail", "inconclusive"))} | '
                      f'{r_causes(field(call, "causes"))} |')

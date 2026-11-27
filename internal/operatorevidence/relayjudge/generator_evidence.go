@@ -1,5 +1,7 @@
 package relayjudge
 
+import "strings"
+
 // GeneratorEvidence contains no process, session or wall-clock identity. Checks
 // aggregate violations by fixed rule name; EventOverlaps counts samples that
 // also intersect an event window (including the maximum-lateness reach).
@@ -27,7 +29,11 @@ func (g *GeneratorEvidence) check(rule string, observed, limit float64, overlap 
 		c := &g.Checks[i]
 		if c.Rule == rule {
 			c.Count++
-			c.Observed = max(c.Observed, observed)
+			if strings.HasSuffix(rule, "-min") {
+				c.Observed = min(c.Observed, observed)
+			} else {
+				c.Observed = max(c.Observed, observed)
+			}
 			if overlap {
 				c.EventOverlaps++
 			}
@@ -45,7 +51,7 @@ func (g *GeneratorEvidence) check(rule string, observed, limit float64, overlap 
 // errors and sample contents. A new diagnosis must be explicitly admitted here.
 func GeneratorRuleAllowed(rule string) bool {
 	switch rule {
-	case "generator-samples-min", "generator-sample-invalid", "generator-sample-sum-overflow", "generator-inline-invalid", "generator-sample-join", "generator-packets-min", "generator-call-span-invalid", "generator-event-span-invalid", "generator-numbers-invalid", "generator-timestamps-ordered", "generator-clock-delta-ns-max", "generator-clock-sum-overflow", "generator-clock-excursion-ns-max", "generator-cadence-ns-min", "generator-regular-samples-min", "generator-start-coverage-ns-max", "generator-end-coverage-ns-min", "generator-event-start-coverage-ns-max", "generator-event-end-coverage-ns-min", "generator-cpu-percent-max", "generator-p99-ns-max", "generator-max-ns-max", "generator-skipped-percent-max", "generator-interval-ns-max", "generator-event-overlaps-max", "generator-flagged-percent-max":
+	case "generator-samples-min", "generator-sample-invalid", "generator-sample-sum-overflow", "generator-inline-invalid", "generator-sample-join", "generator-packets-min", "generator-call-span-invalid", "generator-event-span-invalid", "generator-numbers-invalid", "generator-timestamps-ordered", "generator-clock-delta-ns-max", "generator-clock-sum-overflow", "generator-clock-excursion-ns-max", "generator-cadence-ns-min", "generator-regular-samples-min", "generator-start-coverage-ns-max", "generator-end-coverage-ns-max", "generator-event-start-coverage-ns-max", "generator-event-end-coverage-ns-max", "generator-cpu-percent-max", "generator-p99-ns-max", "generator-max-ns-max", "generator-skipped-percent-max", "generator-interval-ns-max", "generator-event-overlaps-max", "generator-flagged-percent-max":
 		return true
 	}
 	return false

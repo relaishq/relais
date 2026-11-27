@@ -188,7 +188,7 @@ func generatorWindowEvidence(samples []loadgen.Stats, start, end time.Time, wind
 		return false
 	}
 	if samples[len(samples)-1].At.Before(end) {
-		g.check("generator-end-coverage-ns-min", 0, float64(end.Sub(samples[len(samples)-1].At)), false)
+		g.check("generator-end-coverage-ns-max", float64(end.Sub(samples[len(samples)-1].At)), 0, false)
 		return false
 	}
 	// Match statsClockExcursion: the largest absolute cumulative excursion
@@ -206,7 +206,7 @@ func generatorWindowEvidence(samples []loadgen.Stats, start, end time.Time, wind
 			return false
 		}
 		if gap := w.end.Sub(samples[len(samples)-1].At); gap > 0 {
-			g.check("generator-event-end-coverage-ns-min", 0, float64(gap), false)
+			g.check("generator-event-end-coverage-ns-max", float64(gap), 0, false)
 			return false
 		}
 	}

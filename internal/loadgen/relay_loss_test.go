@@ -60,6 +60,20 @@ func TestRelayLossWrapperLeavesNormalMessageBytes(t *testing.T) {
 	require.JSONEq(t, normal.String(), string(plain))
 }
 
+func TestRelayLossWrapperRetainsEveryEpisode(t *testing.T) {
+	var out bytes.Buffer
+	episodes := []callharness.RelayRestartEpisode{{Generation: 1, AppliedNS: time.Second}, {Generation: 2, AppliedNS: 2 * time.Second}}
+	m := Message{Type: "call", Call: &callharness.Report{ICERestarts: 1}}
+	NewWriter(&out).writeRelayLoss(m, episodes)
+	var saved struct {
+		Call     *callharness.Report
+		Episodes []callharness.RelayRestartEpisode `json:"relayLossEpisodes"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &saved))
+	require.Equal(t, episodes, saved.Episodes)
+	require.Equal(t, 1, saved.Call.ICERestarts)
+}
+
 func TestRelayLossRegistrationProbesNeedNoClockTracker(t *testing.T) {
 	var samples atomic.Int64
 	signal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

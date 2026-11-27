@@ -2198,6 +2198,17 @@ ICE restarts. A restart on an unaffected call is inconclusive, with cause
 `relay-loss-unaffected-restart`. Its gap checks still fail real disruptions
 that exceed the budget.
 
+Affected calls with zero or multiple recorded episodes report
+`relay-loss-episode-count`. A single episode without a positive ICE restart
+counter reports `relay-loss-ice-restart-missing`. The separate numeric
+`episodeCount` and `iceRestarts` fields are included for affected and unaffected
+calls; unavailable or invalid counters are omitted. These are nonnegative
+integers in the safe JSON range, with no caller identity. The ICE state counter
+is not a substitute for episode cardinality. An outstanding, unapplied offer's
+retry retains its first episode; a fresh restart after application or after an
+episode freezes remains a separate episode. Multiple applied generations in
+one control recovery do not relax R's exactly-one-episode criterion.
+
 The per-run invariant is: **no media arrives on any track in (L, Applied]**.
 The isolation drops all old relay output. The ordering assumption is that packets
 already in flight arrive before the two-second stall detection starts the
@@ -2314,7 +2325,9 @@ coverage or sample-join refusal stops qualification at its named check. These
 numbers contain no wall-clock, process, address or session identity. All four
 calls share this caller-process qualification; a generator cause on four rows
 does not mean four independent generator failures. The run-page summary shows each call's
-role, gap, verdict and causes. The R job also uploads `host-diagnostics.log`.
+role, episode count, ICE restart count, gap, verdict and causes. End-coverage
+diagnostics report the missing ns as observed and zero as the limit; minimum
+rules retain their smallest observed value. The R job also uploads `host-diagnostics.log`.
 Host command streams retain the existing secret redaction and suppression of
 incomplete output. R captures the whole log outside the upload directory, then
 projects it after cleanup: generated secrets, URLs, host names, numeric

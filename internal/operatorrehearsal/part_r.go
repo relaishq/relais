@@ -125,7 +125,7 @@ func (r *Report) evaluatePartR() {
 // Only the fixed judge vocabulary can reach reports or the run-page summary.
 func relayLossCause(s string) bool {
 	switch s {
-	case "relay-loss-missing", "relay-loss-generator", "relay-loss-target-insufficient", "relay-loss-restore-failed", "relay-loss-call-lost", "relay-loss-decryption", "relay-loss-duplicate", "relay-loss-unaffected-restart", "relay-loss-episode-count", "relay-loss-generation-mismatch", "relay-loss-candidate-mismatch", "relay-loss-anchor-order", "relay-loss-media-order-violated", "relay-loss-unrecovered", "relay-loss-slow":
+	case "relay-loss-missing", "relay-loss-generator", "relay-loss-target-insufficient", "relay-loss-restore-failed", "relay-loss-call-lost", "relay-loss-decryption", "relay-loss-duplicate", "relay-loss-unaffected-restart", "relay-loss-episode-count", "relay-loss-ice-restart-missing", "relay-loss-generation-mismatch", "relay-loss-candidate-mismatch", "relay-loss-anchor-order", "relay-loss-media-order-violated", "relay-loss-unrecovered", "relay-loss-slow":
 		return true
 	}
 	return false
@@ -150,8 +150,17 @@ func publicRelayLoss(in relayjudge.Result) relayjudge.Result {
 			role = "unknown"
 		}
 		out.Calls[i] = relayjudge.CallResult{Ordinal: c.Ordinal, Role: role, Outcome: publicRelayLossOutcome(c.Outcome), Causes: publicRelayLossCauses(c.Causes), Gap: c.Gap}
+		out.Calls[i].EpisodeCount = publicRelayLossCount(c.EpisodeCount)
+		out.Calls[i].ICERestarts = publicRelayLossCount(c.ICERestarts)
 	}
 	return out
+}
+func publicRelayLossCount(in *int) *int {
+	if in == nil || observe.Numbers(*in) != nil {
+		return nil
+	}
+	n := *in
+	return &n
 }
 func publicRelayLossOutcome(s string) string {
 	if s == "pass" || s == "fail" || s == "inconclusive" {
