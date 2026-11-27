@@ -22,7 +22,7 @@ import (
 )
 
 func relayLossPin() artifacts.Pin {
-	return artifacts.Pin{Version: ReleaseRVersion, Tag: "v0.4.0", Arch: "x86_64", Commit: ReleaseRCommit, Archive: "relais_0.4.0_linux_amd64.tar.gz", ArchiveSHA256: ReleaseRSHA256, ManifestSHA256: strings.Repeat("a", 64)}
+	return artifacts.Pin{Version: ReleaseRVersion, Tag: "v" + ReleaseRVersion, Arch: "x86_64", Commit: ReleaseRCommit, Archive: "relais_" + ReleaseRVersion + "_linux_amd64.tar.gz", ArchiveSHA256: ReleaseRSHA256, ManifestSHA256: strings.Repeat("a", 64)}
 }
 func TestPartRReleasePin(t *testing.T) {
 	pin := relayLossPin()

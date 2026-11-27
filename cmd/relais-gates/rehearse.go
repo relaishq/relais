@@ -35,7 +35,7 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 	commit := flags.String("commit", "", "full tested commit (PR merge ref when applicable)")
 	head := flags.String("head-commit", "", "PR head commit, separately from tested merge commit")
 	event := flags.String("event", "local", "workflow event")
-	partR := flags.Bool("part-r", false, "rehearse part R alone with published v0.4.0 servers and both relay hosts")
+	partR := flags.Bool("part-r", false, "rehearse part R alone with published v0.4.1 servers and both relay hosts")
 	prepare := flags.Bool("prepare-only", false, "read and verify fixed releases, then exit")
 	prepared := flags.Bool("prepared", false, "use releases from the separate release-read stage")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
