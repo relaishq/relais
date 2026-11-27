@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -116,6 +117,42 @@ func TestReadBatchValidatesAllChildrenBeforeSubmission(t *testing.T) {
 			reply := a.Execute(context.Background(), req)
 			if !reply.NotSubmitted || reply.Transport != operator.Failed || len(runner.commands) != 0 {
 				t.Fatal("MUTATION: batch-validation-before-submit", reply)
+			}
+		})
+	}
+}
+
+func TestPartRReadBatchRequiresExactTopology(t *testing.T) {
+	for _, mode := range []string{"missing", "duplicate", "order", "script-size", "wire-size"} {
+		t.Run(mode, func(t *testing.T) {
+			runner := &fakeRunner{}
+			ids := fixtureContainerIDs()
+			ids["relay-two"] = strings.Repeat("e", 64)
+			a := &Adapter{Topology: partRTopology(t), Runner: runner, Containers: ids}
+			req := batchRequest()
+			var args operator.HostReadBatchArgs
+			if err := json.Unmarshal(req.Args, &args); err != nil {
+				t.Fatal(err)
+			}
+			args.Reads = append(args.Reads, operator.HostRead{Target: "relay-two", Script: []byte("printf observation")})
+			switch mode {
+			case "missing":
+				args.Reads = args.Reads[:4]
+			case "duplicate":
+				args.Reads[4].Target = "relay"
+			case "order":
+				args.Reads[0], args.Reads[4] = args.Reads[4], args.Reads[0]
+			case "script-size":
+				args.Reads[4].Script = make([]byte, operator.MaxScriptBytes+1)
+			case "wire-size":
+				for i := range args.Reads {
+					args.Reads[i].Script = make([]byte, operator.MaxScriptBytes/2)
+				}
+			}
+			req.Args, _ = json.Marshal(args)
+			reply := a.Execute(t.Context(), req)
+			if !reply.NotSubmitted || reply.RefusalCode != "invalid-request" || len(runner.commands) != 0 {
+				t.Fatal("part R admitted an incomplete or oversized batch", reply)
 			}
 		})
 	}

@@ -2,7 +2,6 @@ package operatorrehearsal
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -28,8 +27,7 @@ func (a *Adapter) executeLeaseRead(ctx context.Context, req operator.Request) (r
 		return refusal(req.ID, "invalid-request")
 	}
 	if req.Operation == operator.HostLeaseReadBatch {
-		req.Args, _ = json.Marshal(operator.HostReadBatchArgs{Reads: reads})
-		return a.executeReadBatch(ctx, req)
+		return a.executeReadBatch(ctx, req, reads)
 	}
 	req.Script = reads[0].Script
 	return a.executeHost(ctx, req)

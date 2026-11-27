@@ -54,6 +54,7 @@ func (r *rehearsal) bindAdmission(ctx context.Context, scenario operator.Scenari
 		return err
 	}
 	peer := NewLocalPeer(adapter, r.run, init)
+	session.SetObservationFailureSink(r.preconditionDiagnostic)
 	if err = session.BindClock(ctx, peer, r.clockConfig(r.judge.pinned.Binary), min(session.Budget.PoolEnd(), r.clock.Elapsed()+2*time.Minute)); err != nil {
 		_ = peer.Close()
 		return err
@@ -75,7 +76,6 @@ func (r *rehearsal) bindAdmission(ctx context.Context, scenario operator.Scenari
 	r.runtime.Leases = guard
 	r.boundInit = init
 	r.report.ScenarioSHA256 = init.Scenario.Digest
-	session.SetObservationFailureSink(r.preconditionDiagnostic)
 	session.SetUncertaintySink(func(u operator.Uncertainty) {
 		raw, _ := json.Marshal(u)
 		_, _ = fmt.Fprintf(r.diagnostics, "command-result-unknown %s\n", raw)

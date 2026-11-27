@@ -160,6 +160,24 @@ func TestPartRReportVerdictsAndPrivacy(t *testing.T) {
 	require.True(t, slices.Contains(saved.Gates[0].Process.RelayLoss.Calls[1].Causes, "relay-loss-slow"))
 }
 
+func TestPartRReportGateCountAfterBindingStop(t *testing.T) {
+	r := passingPartRReport()
+	r.Gates = nil
+	r.Errors = []string{"clock-binding-failed", "precondition-failed"}
+	r.Evaluate()
+	require.Equal(t, []string{"clock-binding-failed", "precondition-failed", "gate-count-differs"}, r.Failures)
+	// The completed R procedure contributes one gate, without a calibration gate.
+	r = passingPartRReport()
+	r.Gates = gateRows(nil, operatorgates.SequenceResult{
+		Gates:      []operator.GateResult{{Gate: operator.RelayHostLoss, Status: operator.Passed}},
+		Procedures: []operatorgates.ProcedureResult{r.Gates[0].ProcedureResult},
+	}, map[operator.Gate]bool{operator.RelayHostLoss: true})
+	require.Len(t, r.Gates, 1)
+	r.Evaluate()
+	require.Empty(t, r.Failures)
+	require.Equal(t, operator.Passed, r.Verdict)
+}
+
 func TestPartRBootIncludesFifthSystemdHost(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "release.tar.gz")

@@ -23,7 +23,7 @@ func (r *rehearsal) preconditionDiagnostic(slot, observation string, err error) 
 	if category == "unclassified" {
 		category = "precondition-failed:observation"
 	}
-	if !slices.Contains(Slots, slot) {
+	if !slices.Contains(operator.HostSlots(true), slot) {
 		slot = "unavailable"
 	}
 	observation = (operator.Uncertainty{Action: observation}).Public().Action

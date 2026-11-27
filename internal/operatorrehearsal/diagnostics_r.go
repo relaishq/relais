@@ -17,7 +17,8 @@ var diagnosticEnvelope = regexp.MustCompile(`(?m)^H4sI[A-Za-z0-9+/]*={0,2}\r?$`)
 
 var diagnosticURL = regexp.MustCompile(`\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 var diagnosticHost = regexp.MustCompile(`\b[a-zA-Z0-9](?:[a-zA-Z0-9-]*\.)+[a-zA-Z]{2,63}\b`)
-var diagnosticAddress = regexp.MustCompile(`[a-zA-Z0-9_.:%\[\]-]+`)
+var diagnosticIPv4 = regexp.MustCompile(`(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::[0-9]+)?`)
+var diagnosticIPv6 = regexp.MustCompile(`[0-9a-fA-F:.%]+`)
 var diagnosticReference = regexp.MustCompile(`(?m)(Reference ID\s*:\s*)\S+`)
 
 // Keep existing secret redaction and incomplete-command suppression. The R
@@ -44,17 +45,27 @@ func savePartRDiagnostics(private string, public io.Writer, topology *Topology) 
 		return "[address]"
 	})
 	text = diagnosticReference.ReplaceAllString(text, "${1}[address]")
-	text = diagnosticAddress.ReplaceAllStringFunc(text, func(token string) string {
-		// Brackets and punctuation can surround an address in stderr transcripts.
-		candidate := strings.Trim(token, "[].")
-		if _, err := netip.ParseAddr(candidate); err == nil {
-			return "[address]"
+	// Match IPv6 before dotted quads so mapped IPv4-in-IPv6 literals are
+	// removed as a whole. Brackets, arrows and label separators split candidates.
+	text = diagnosticIPv6.ReplaceAllStringFunc(text, func(token string) string {
+		if strings.Count(token, ":") < 2 {
+			return token
 		}
-		if _, err := netip.ParseAddrPort(strings.TrimRight(token, ".:")); err == nil {
-			return "[address]"
+		// Check within the candidate too: a hex label, zone or extra separator
+		// can make the whole token invalid without concealing its address.
+		// An unzoned IPv6 literal is at most 45 bytes, including a dotted tail.
+		for start := range len(token) {
+			for end := min(len(token), start+45); end >= start+2; end-- {
+				if address, err := netip.ParseAddr(token[start:end]); err == nil && address.Is6() {
+					return "[address]"
+				}
+			}
 		}
 		return token
 	})
+	// No word boundary or surrounding-token validation: labels and punctuation
+	// must not prevent a dotted quad from being removed.
+	text = diagnosticIPv4.ReplaceAllString(text, "[address]")
 	_, err = io.WriteString(public, text)
 	return err
 }

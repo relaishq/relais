@@ -1,10 +1,12 @@
 package operatorrehearsal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +58,7 @@ func TestPartRHostDiagnosticsRedactsUploadedFile(t *testing.T) {
 				}
 				return
 			}
+			assertNoDiagnosticAddresses(t, text)
 			for _, private := range append(addresses, secret, "0A2A003C", "H4sI") {
 				if strings.Contains(text, private) {
 					t.Errorf("uploaded diagnostic retained %q", private)
@@ -67,5 +70,70 @@ func TestPartRHostDiagnosticsRedactsUploadedFile(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPartRDiagnosticAddressNeighbours(t *testing.T) {
+	cases := []string{
+		"10.42.0.10:24700->10.42.0.11:80",
+		"[10.42.0.10]:24700",
+		"172.17.0.2:24700]",
+		"src=10.42.0.10:24700-",
+		"a_10.42.0.10",
+		"10.42.0.10_",
+		"host-10.42.0.10",
+		"udp4 10.42.0.10:24700:",
+		"addr 10.42.0.10/24",
+		"[2001:db8::1]:24700->[2001:db8::2]:80",
+		"2001:db8::1->2001:db8::2",
+		"[2001:db8::1]:24700]",
+		"2001:db8::1]",
+		"src=[2001:db8::1]:24700-",
+		"src=2001:db8::1-",
+		"a_2001:db8::1",
+		"a2001:db8::1_",
+		"2001:db8::1:24700]",
+		"2001:db8::1_",
+		"udp6 [2001:db8::1]:24700:",
+		"[::ffff:10.42.0.10]:80",
+		"::ffff:10.42.0.10",
+		"fe80::1%eth0:24700",
+		"[fe80::1%eth0]:24700->[fe80::2%en0]:80",
+		"a_fe80::1%enp0s1-",
+		"2001:db8:0:1:2:3:4:5->2001:db8:0:1:2:3:4:6",
+	}
+	for _, input := range cases {
+		t.Run(input, func(t *testing.T) {
+			private := filepath.Join(t.TempDir(), "capture")
+			transcript := "read udp " + input + ": connection refused\n"
+			if err := os.WriteFile(private, []byte(transcript), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var public bytes.Buffer
+			if err := savePartRDiagnostics(private, &public, nil); err != nil {
+				t.Fatal(err)
+			}
+			assertNoDiagnosticAddresses(t, public.String())
+			if !strings.Contains(public.String(), "connection refused") {
+				t.Fatal("failure detail lost", public.String())
+			}
+		})
+	}
+}
+
+// Scan every substring of each output field with the standard address parser.
+// This deliberately does not reuse the production tokenizer: punctuation or
+// labels must not hide an address inside a larger, invalid token.
+func assertNoDiagnosticAddresses(t *testing.T, text string) {
+	t.Helper()
+	for _, field := range strings.Fields(text) {
+		for start := range len(field) {
+			for end := start + 1; end <= len(field); end++ {
+				if _, err := netip.ParseAddr(field[start:end]); err == nil {
+					t.Errorf("address remains in projected output: %q in %q", field[start:end], text)
+					return
+				}
+			}
+		}
 	}
 }
