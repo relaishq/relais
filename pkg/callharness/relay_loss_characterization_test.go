@@ -40,8 +40,9 @@ func TestRelayLossEpisodeRetryCharacterization(t *testing.T) {
 	}
 }
 
-// The host's public path disappears while its lease view remains live. This
-// exercises real SDP/ICE and both caller trigger paths, without restoring it.
+// The public path and renewal stop together. Keep control loss detection off
+// in this case, so the caller deterministically requests recovery before the
+// slot is marked lost. Real SDP/ICE runs without restoring the failed path.
 func TestRelayLossPublicIsolationCharacterization(t *testing.T) {
 	characterizeRelayLossIsolation(t, false)
 }
@@ -50,7 +51,7 @@ func TestRelayLossHostIsolationCharacterization(t *testing.T) {
 	characterizeRelayLossIsolation(t, true)
 }
 
-func characterizeRelayLossIsolation(t *testing.T, stopPrimaryRenew bool) {
+func characterizeRelayLossIsolation(t *testing.T, observeLoss bool) {
 	t.Helper()
 	store := sessionstore.NewMemory()
 	p, w, h, relays, _ := relayChangeTopology(t, store, false, false)
@@ -71,7 +72,9 @@ func characterizeRelayLossIsolation(t *testing.T, stopPrimaryRenew bool) {
 	life, stopLife := context.WithCancel(ctx)
 	renewed, detector := make(chan struct{}), make(chan error, 1)
 	require.NoError(t, p.Heartbeat(w.LocalAddr()))
-	go func() { detector <- p.Run(life) }()
+	if observeLoss {
+		go func() { detector <- p.Run(life) }()
+	}
 	go func() {
 		defer close(renewed)
 		tick := time.NewTicker(50 * time.Millisecond)
@@ -83,7 +86,7 @@ func characterizeRelayLossIsolation(t *testing.T, stopPrimaryRenew bool) {
 			case <-tick.C:
 				_ = p.Heartbeat(w.LocalAddr())
 				for i, token := range tokens {
-					if stopPrimaryRenew && i == 0 && blocked.Load() {
+					if i == 0 && blocked.Load() {
 						continue
 					}
 					tokens[i], _ = leases.RenewRelay(life, token, time.Minute)
@@ -91,7 +94,13 @@ func characterizeRelayLossIsolation(t *testing.T, stopPrimaryRenew bool) {
 			}
 		}
 	}()
-	defer func() { stopLife(); <-renewed; require.NoError(t, <-detector) }()
+	defer func() {
+		stopLife()
+		<-renewed
+		if observeLoss {
+			require.NoError(t, <-detector)
+		}
+	}()
 	call, err := h.Dial(ctx, CallOptions{Video: true, RelayChange: true, RelayLossEvidence: true, Recording: RecordingOptions{DecodeEvery: 30}})
 	require.NoError(t, err)
 	media, stop := context.WithCancel(ctx)
@@ -122,16 +131,10 @@ func characterizeRelayLossIsolation(t *testing.T, stopPrimaryRenew bool) {
 	}
 	require.NotEmpty(t, rows)
 	require.Positive(t, report.ICERestarts)
-	if !stopPrimaryRenew {
-		require.Len(t, rows, 2)
-	} else {
-		require.LessOrEqual(t, len(rows), 2)
-	}
-	if len(rows) == 2 {
-		require.EqualValues(t, 1, rows[0].Generation)
-		require.EqualValues(t, 2, rows[1].Generation)
-		require.Positive(t, rows[0].AppliedNS)
-		require.Greater(t, rows[1].RestartStartNS, rows[0].AppliedNS)
-		require.NotEqual(t, rows[0].AnswerCandidate, rows[1].AnswerCandidate)
-	}
+	require.Len(t, rows, 1)
+	require.EqualValues(t, 1, rows[0].Generation)
+	require.Positive(t, rows[0].AppliedNS)
+	require.Equal(t, relays[1].PublicAddr().String(), rows[0].AnswerCandidate)
+	require.LessOrEqual(t, rows[0].FirstAudioNS-rows[0].LastBeforeNS, 5*time.Second)
+	require.LessOrEqual(t, rows[0].FirstVideoNS-rows[0].LastBeforeNS, 5*time.Second)
 }

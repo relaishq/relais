@@ -282,6 +282,7 @@ func TestRelayChangeRollbackKeepsPlannedKind(t *testing.T) {
 		_, rec, err := confirmations(p.store).RelayConfirmation(ctx, id)
 		require.NoError(t, err)
 		require.Equal(t, "planned", rec.Attempt.Kind, "kind is persisted, not rewritten for status")
+		require.Equal(t, "r1", rec.Attempt.From, "rollback retains its original slot without liveness evidence")
 		require.True(t, rec.Episode.Open())
 		require.Equal(t, rec.Episode.Token, rec.Attempt.Episode)
 		require.False(t, rec.Attempt.PlannedDeadline.IsZero())

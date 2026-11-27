@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/relaishq/relais/internal/relaylease"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
@@ -992,12 +993,16 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 			}
 		}
 	}
+	var verifiedEpoch uint64
+	if sameSlot && !tried[from.Slot] {
+		verifiedEpoch = p.verifyRelayRenewal(ctx, from.Slot)
+	}
 	target := ""
 	p.mu.Lock()
 	if original != "" && !tried[original] && p.callRelayPairLocked(c, original) {
 		target = original
 	}
-	if sameSlot && !p.relaySet[from.Slot].lost && p.callRelayPairLocked(c, from.Slot) && !tried[from.Slot] {
+	if sameSlot && verifiedEpoch != 0 && p.relaySet[from.Slot].epoch == verifiedEpoch && !p.relaySet[from.Slot].lost && p.callRelayPairLocked(c, from.Slot) && !tried[from.Slot] {
 		target = from.Slot
 	}
 	if target == "" {
@@ -1056,4 +1061,49 @@ func (p *Plane) recoverRelay(ctx context.Context, c *call, sameSlot bool, tried 
 		return p.waitRelayChange(ctx, c, pending, time.Until(e.deadline), opt)
 	}
 	return errors.Join(err, abortErr)
+}
+
+// verifyRelayRenewal requires a deadline advance from the admitted instance,
+// observed now, rather than treating "not lost yet" or a long lease as proof
+// of life. Store deadlines are compared only to each other, not our clock.
+// Twice the normal renewal + poll interval allows scheduling/store jitter.
+// This bound grants no authority and changes none of the loss detector's rules.
+func (p *Plane) verifyRelayRenewal(ctx context.Context, slot string) uint64 {
+	p.mu.Lock()
+	b := p.relaySet[slot]
+	p.mu.Unlock()
+	if b.lost || b.pending || b.epoch == 0 {
+		return 0
+	}
+	leases, ok := p.store.(sessionstore.RelayLeases)
+	if !ok {
+		return 0 // no renewal observations are available
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*(relaylease.DefaultRenew+relaylease.DefaultPoll))
+	defer cancel()
+	read := func() (sessionstore.RelayLease, error) {
+		bounded, stop := context.WithTimeout(ctx, relaylease.DefaultPoll)
+		defer stop()
+		return leases.GetRelay(bounded, slot)
+	}
+	first, err := read()
+	if err != nil || first.Expired || first.Epoch != b.epoch || first.Holder.Owner != b.instance {
+		return 0
+	}
+	tick := time.NewTicker(relaylease.DefaultPoll)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return 0
+		case <-tick.C:
+			latest, err := read()
+			if err != nil || ctx.Err() != nil || latest.Expired || latest.Epoch != first.Epoch || latest.Holder != first.Holder || latest.Forwarder != first.Forwarder || latest.PreviousHolder != first.PreviousHolder {
+				return 0
+			}
+			if latest.ExpiresAt.After(first.ExpiresAt) {
+				return latest.Epoch
+			}
+		}
+	}
 }
