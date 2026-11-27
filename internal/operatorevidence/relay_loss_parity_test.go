@@ -42,6 +42,22 @@ func TestRelayLossSharedGuardParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	shortCall := func(c *callharness.Report) {
+		c.FirstVideoSentAt = 171310816 * time.Nanosecond // earliest of four seed-41 callers
+		c.HungUpAt = 60 * time.Second
+		for i := range c.Tracks {
+			c.Tracks[i].LastArrival = c.HungUpAt
+		}
+	}
+	seededSamples := func(relayLoss bool) func(int, *loadgen.Stats) {
+		o := loadgen.ChildOptions{RelayLoss: relayLoss, SampleEvery: time.Second, Desync: loadgen.Desync{Seed: 41}}
+		return func(i int, s *loadgen.Stats) {
+			s.At = s.At.Add(o.FirstSampleDelay() - time.Second)
+			if i == 1 {
+				s.Interval = o.FirstSampleDelay()
+			}
+		}
+	}
 	for _, tc := range []struct {
 		name  string
 		stats func(int, *loadgen.Stats)
@@ -49,10 +65,18 @@ func TestRelayLossSharedGuardParity(t *testing.T) {
 		want  string
 	}{
 		{"clean", nil, nil, "pass"},
+		{"short-seeded-long-first-interval", seededSamples(false), shortCall, "inconclusive"},
+		{"short-seeded-R-partial-first-interval", seededSamples(true), shortCall, "pass"},
 		{"cpu-boundary", func(_ int, s *loadgen.Stats) { s.CPUPerGOMAXPROCS = loadgen.DefaultLimits().CPUPercent }, nil, "pass"},
 		{"cpu", func(_ int, s *loadgen.Stats) { s.CPUPerGOMAXPROCS = 86 }, nil, "inconclusive"},
 		{"p99", func(_ int, s *loadgen.Stats) { s.IntervalLateness.P99 = 21 * time.Millisecond }, nil, "inconclusive"},
 		{"max", func(_ int, s *loadgen.Stats) { s.IntervalLateness.Max = 501 * time.Millisecond }, nil, "inconclusive"},
+		{"max-boundary", func(_ int, s *loadgen.Stats) { s.IntervalLateness.Max = 500 * time.Millisecond }, nil, "pass"},
+		{"max-outside-under-one-percent", func(i int, s *loadgen.Stats) {
+			if i == 150 {
+				s.IntervalLateness.Max = 501 * time.Millisecond
+			}
+		}, nil, "pass"},
 		{"skips", func(_ int, s *loadgen.Stats) { s.IntervalPacing = loadgen.Pacing{SentFrames: 98, SkippedFrames: 2} }, nil, "inconclusive"},
 		{"time-weighted-under-one-percent", func(i int, s *loadgen.Stats) {
 			if i == 150 {

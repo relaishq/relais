@@ -2291,11 +2291,29 @@ behavior; they remain NOT-RUN until CI records them.
 R uses five-host clock admission and the public resource sequence. It does not
 run the A/B/M calibration or pool judge. The R judge applies its generator,
 media order and 5-second per-call rules without the comparison's timing
-exemptions. The sanitized `report.json` sets `partR: true` and records the
+exemptions. R samples first at its seeded phase (a partial first interval),
+then every second on that same phase. Its short run therefore avoids a
+deliberate first interval longer than 1.025 seconds consuming the unchanged
+1% generator budget. All startup work is still sampled. Ordinary A/B/M callers
+keep their original first interval of one second plus the seeded phase.
+The sanitized `report.json` sets `partR: true` and records the
 version, server commit and archive digest, template digest, caller and judge
 hashes, gate verdict, completion and caller stop proof, and all four calls'
 gaps and causes in `gates[].process.relayLoss`. Run and session labels are
-removed. Causes have a fixed allowlist. The run-page summary shows each call's
+removed. Causes have a fixed allowlist. The same object has a shared-process
+`generator` diagnosis: sample and inline sample counts, media and flagged time
+in ns, flagged percent, maximum cumulative clock excursion in ns, and `checks`.
+Each check has an allow-listed rule, observed value, limit, violation count,
+and `eventOverlaps` (the count of violating samples that intersect any padded
+event window, including their maximum-lateness reach). Timing checks use ns;
+CPU, skips and the weighted budget use percent; other checks use counts.
+`generator-event-overlaps-max` or `generator-flagged-percent-max` refuses
+otherwise valid samples. Individual sample violations outside event windows
+can still qualify within the unchanged 1% time-weighted budget. Cadence, clock,
+coverage or sample-join refusal stops qualification at its named check. These
+numbers contain no wall-clock, process, address or session identity. All four
+calls share this caller-process qualification; a generator cause on four rows
+does not mean four independent generator failures. The run-page summary shows each call's
 role, gap, verdict and causes. The R job also uploads `host-diagnostics.log`.
 Host command streams retain the existing secret redaction and suppression of
 incomplete output. R captures the whole log outside the upload directory, then

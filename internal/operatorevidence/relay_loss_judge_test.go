@@ -87,6 +87,9 @@ func TestRelayLossPinnedBuildAndHash(t *testing.T) {
 	if err != nil || len(got.Calls) != 4 || got.Outcome != "fail" {
 		t.Fatal(got, err)
 	}
+	if got.Generator == nil || len(got.Generator.Checks) != 1 || got.Generator.Checks[0].Rule != "generator-samples-min" {
+		t.Fatal("pinned binary lost generator diagnosis", got.Generator)
+	}
 	in.Scenario.Judge.SHA256 = strings.Repeat("0", 64)
 	if _, err = p.Judge(ctx, in); err == nil {
 		t.Fatal("accepted different R binary identity")

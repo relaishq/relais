@@ -10,10 +10,10 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-// Five maximum packed host replies need about 121 KiB. Keep more than twice
-// that payload room inside the 256 KiB public frame, reserving 4 KiB for its
-// outer metadata. External request arguments retain their 128 KiB limit.
-const hostBatchReplyLimit = operator.MaxFrameBytes - (4 << 10)
+// Five maximum packed host replies need about 121 KB. Keep more than twice
+// that payload room, matching observe.Decode's strict 256000-byte limit and
+// leaving frame metadata room. External request arguments retain 128 KiB.
+const hostBatchReplyLimit = 256000
 
 // Validate every read before submission. Inventory remains serial to avoid
 // disturbing the media baseline; fixed lease observations run concurrently.

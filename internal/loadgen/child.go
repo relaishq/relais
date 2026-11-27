@@ -323,8 +323,9 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	go func() { wg.Wait(); close(finished) }()
 	// Generator processes sample on their own seeded phases, so they do not
 	// all read CPU and memory on the same instant. Only the first interval is
-	// longer (SampleEvery plus the phase); later samples keep SampleEvery.
-	first := time.NewTimer(o.SampleEvery + o.Desync.SamplePhase(o.SampleEvery))
+	// longer (SampleEvery plus the phase) for ordinary callers. R uses a
+	// partial first sample; later samples keep SampleEvery on the same phase.
+	first := time.NewTimer(o.FirstSampleDelay())
 	defer first.Stop()
 	ticks := first.C
 	var tick *time.Ticker

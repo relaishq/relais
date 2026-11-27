@@ -74,7 +74,8 @@ func Judge(in Input) Result {
 		in.TargetInsufficient = true
 	}
 	messages, streamOK := readMessages(in)
-	generatorOK := qualifyGenerator(in, messages)
+	out.Generator = &GeneratorEvidence{Checks: []GeneratorCheck{}}
+	generatorOK := qualifyGenerator(in, messages, out.Generator)
 	for i := range out.Calls {
 		r := &out.Calls[i]
 		if valid {

@@ -8,6 +8,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence/relayjudge"
 	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/artifacts"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -131,6 +132,18 @@ func relayLossCause(s string) bool {
 }
 func publicRelayLoss(in relayjudge.Result) relayjudge.Result {
 	out := relayjudge.Result{Outcome: publicRelayLossOutcome(in.Outcome), Causes: publicRelayLossCauses(in.Causes), Calls: make([]relayjudge.CallResult, len(in.Calls))}
+	if in.Generator != nil {
+		g := *in.Generator
+		g.Checks = []relayjudge.GeneratorCheck{}
+		if observe.Numbers(g) == nil {
+			for _, check := range in.Generator.Checks {
+				if relayjudge.GeneratorRuleAllowed(check.Rule) && observe.Numbers(check) == nil {
+					g.Checks = append(g.Checks, check)
+				}
+			}
+			out.Generator = &g
+		}
+	}
 	for i, c := range in.Calls {
 		role := c.Role
 		if role != "affected" && role != "unaffected" && role != "unknown" {

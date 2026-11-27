@@ -21,7 +21,7 @@ func TestPartRFiveHostReplyMargin(t *testing.T) {
 	}
 	packed, err := json.Marshal(worstPacked)
 	require.NoError(t, err)
-	for _, mode := range []string{"packed", "twice-packed", "oversized"} {
+	for _, mode := range []string{"packed", "twice-packed", "decoder-oversized", "oversized"} {
 		t.Run(mode, func(t *testing.T) {
 			output := strings.Repeat("A", operator.MaxHostOutputBytes-1) + "\n"
 			if mode == "twice-packed" {
@@ -31,6 +31,11 @@ func TestPartRFiveHostReplyMargin(t *testing.T) {
 			}
 			if mode == "oversized" {
 				output = strings.Repeat("\x00", 20000)
+			}
+			if mode == "decoder-oversized" {
+				// 257002 bytes: fits the former adapter limit (258048), but
+				// cannot be read by the public strict decoder (256000).
+				output = strings.Repeat(`"`, operator.MaxHostOutputBytes-831) + strings.Repeat("<", 831)
 			}
 			ids := fixtureContainerIDs()
 			ids["relay-two"] = strings.Repeat("e", 64)
@@ -42,7 +47,7 @@ func TestPartRFiveHostReplyMargin(t *testing.T) {
 			req.Args, err = json.Marshal(args)
 			require.NoError(t, err)
 			reply := adapter.Execute(t.Context(), req)
-			if mode == "oversized" {
+			if mode == "oversized" || mode == "decoder-oversized" {
 				require.Equal(t, operator.Unknown, reply.Transport)
 				require.Equal(t, "truncated-output", reply.UncertaintyRule)
 				return
