@@ -44,6 +44,41 @@ type pendingCreateWorker struct {
 	started, release chan struct{}
 }
 
+type publishedCreateWorker struct {
+	*fakeWorker
+	published, release chan struct{}
+}
+
+func (w *publishedCreateWorker) CreateSession(ctx context.Context, offer string) (string, string, error) {
+	id, answer, err := w.fakeWorker.CreateSession(ctx, offer)
+	close(w.published)
+	select {
+	case <-w.release:
+	case <-ctx.Done():
+		return "", "", ctx.Err()
+	}
+	return id, answer, err
+}
+
+func TestWorkerCapPublishedCreateIsTemporarilyCountedTwice(t *testing.T) {
+	p, a, _, _ := setup(t)
+	p.config.WorkerCallCap = 2
+	gate := &publishedCreateWorker{fakeWorker: a, published: make(chan struct{}), release: make(chan struct{})}
+	p.workers["a"].worker = gate
+	done := make(chan error, 1)
+	go func() { _, _, err := p.Create(t.Context(), "offer", "a"); done <- err }()
+	<-gate.published
+	_, _, err := p.Create(t.Context(), "offer", "a")
+	require.ErrorIs(t, err, ErrAtCapacity)
+	close(gate.release)
+	require.NoError(t, <-done)
+	p.workers["a"].worker = a
+	_, _, err = p.Create(t.Context(), "offer", "a")
+	require.NoError(t, err, "settlement frees the conservative duplicate count")
+	_, _, err = p.Create(t.Context(), "third offer", "a")
+	require.ErrorIs(t, err, ErrAtCapacity, "the product cap remains two")
+}
+
 func (w *pendingCreateWorker) CreateSession(ctx context.Context, offer string) (string, string, error) {
 	blocked := false
 	w.once.Do(func() { blocked = true; close(w.started) })

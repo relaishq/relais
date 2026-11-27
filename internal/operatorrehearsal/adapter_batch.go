@@ -10,6 +10,11 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
+// Five maximum packed host replies need about 121 KiB. Keep more than twice
+// that payload room inside the 256 KiB public frame, reserving 4 KiB for its
+// outer metadata. External request arguments retain their 128 KiB limit.
+const hostBatchReplyLimit = operator.MaxFrameBytes - (4 << 10)
+
 // Validate every read before submission. Inventory remains serial to avoid
 // disturbing the media baseline; fixed lease observations run concurrently.
 // Join every child, preserving its certainty and original deadline.
@@ -59,7 +64,7 @@ func (a *Adapter) executeReadBatch(ctx context.Context, req operator.Request, re
 	}
 	pending.Wait()
 	payload, err := json.Marshal(out)
-	if err != nil || len(payload) > operator.MaxFrameBytes/2 {
+	if err != nil || len(payload) > hostBatchReplyLimit {
 		return operator.Reply{ID: req.ID, Transport: operator.Unknown, UncertaintyRule: "truncated-output"}
 	}
 	zero := 0

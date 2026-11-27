@@ -90,6 +90,9 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	if o.RelayLoss && (o.Callers != 4 || !o.Video || o.Distributed != nil || o.PlaceOnWorker || o.Soak) {
 		return errors.New("relay-loss caller requires four video calls, named placement and caller-local evidence")
 	}
+	if o.RelayLoss {
+		o.Topology.HTTPClient = relayLossHTTPClient(o.Topology.HTTPClient)
+	}
 	history, err := eventRetention(o.EventRetention, o.Distributed != nil)
 	if err != nil {
 		return err
