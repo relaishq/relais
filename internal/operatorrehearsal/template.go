@@ -40,6 +40,7 @@ type Config struct {
 	Name, Version, Architecture, ArchiveSHA256 string
 	// ExpectedTemplateSHA256 optionally binds a separately pinned template.
 	ExpectedTemplateSHA256 string
+	RelayTwo               bool
 	StorePort              int
 }
 type File struct {
@@ -160,10 +161,14 @@ func Load(root fs.FS, c Config) (*Topology, error) {
 		return str(prop(r[ref(obj(a[0])["NetworkInterfaceId"])])["PrivateIpAddress"])
 	}
 	params["RelayAddress"] = ip("RelayHost")
+	params["RelayTwoAddress"] = ip("RelayTwoHost")
 	e := evaluator{params: params, conditions: obj(doc["Conditions"]), port: c.StorePort}
 	seen := map[string]bool{StoreIP: true, TimeIP: true, SignalIP: true}
-	for _, slot := range Slots {
+	for _, slot := range t.Slots() {
 		name := resources[slot]
+		if slot == "relay-two" {
+			name = "RelayTwoHost"
+		}
 		raw := obj(r[name])
 		addr := ip(name)
 		a, parseErr := netip.ParseAddr(addr)
@@ -228,9 +233,11 @@ func Load(root fs.FS, c Config) (*Topology, error) {
 			return nil, errors.New("empty-secret-scope")
 		}
 		// The pinned four-gate comparison predates relay sets. Keep its single
-		// relay launcher path; the tested-head netns phase covers host loss.
+		// relay launcher path; part R retains both hosts.
 		file := h.Metadata.Files["/etc/relais/node.env"]
-		file.Content = strings.ReplaceAll(file.Content, "RELAY_TWO_PRIVATE="+str(prop(r["RelayTwoInterface"])["PrivateIpAddress"]), "RELAY_TWO_PRIVATE=")
+		if !c.RelayTwo {
+			file.Content = strings.ReplaceAll(file.Content, "RELAY_TWO_PRIVATE="+str(prop(r["RelayTwoInterface"])["PrivateIpAddress"]), "RELAY_TWO_PRIVATE=")
+		}
 		h.Metadata.Files["/etc/relais/node.env"] = file
 		t.Hosts[slot] = h
 	}
@@ -530,4 +537,12 @@ func ACLRules(access string) ([]string, error) {
 		return nil, errors.New("empty-store-acl")
 	}
 	return rules, nil
+}
+
+// Slots returns the scenario host order. The comparison keeps its four hosts.
+func (t *Topology) Slots() []string {
+	if t.Config.RelayTwo {
+		return []string{"relay", "w1", "w2", "shared", "relay-two"}
+	}
+	return Slots
 }

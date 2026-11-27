@@ -375,7 +375,7 @@ func TestSpecificEpisodeCausesDoNotAddMissing(t *testing.T) {
 	}{
 		{"absent", "relay-loss-episode-count", func(m *message) { m.Episodes = nil }},
 		{"extra", "relay-loss-episode-count", func(m *message) { m.Episodes = append(m.Episodes, m.Episodes[0]) }},
-		{"restart-count", "relay-loss-episode-count", func(m *message) { *m.Call.ICERestarts = 0 }},
+		{"restart-count", "relay-loss-ice-restart-missing", func(m *message) { *m.Call.ICERestarts = 0 }},
 		{"early-media", "relay-loss-media-order-violated", func(m *message) { *m.Episodes[0].Counts[0].Count = 1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

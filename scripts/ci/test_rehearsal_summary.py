@@ -70,6 +70,11 @@ class Summary(unittest.TestCase):
         for secret in SECRETS:
             self.assertNotIn(secret, text)
 
+    def test_abm_summary_bytes(self):
+        for name, report in (("passed", PASSED), ("inconclusive", inconclusive())):
+            expected = (Path(__file__).parent / "testdata" / f"abm-summary-{name}.md").read_text()
+            self.assertEqual(self.render(report, ADMITTED), expected)
+
     def test_passed_report_shows_each_listed_value(self):
         text = self.render(PASSED, ADMITTED)
         lines = text.splitlines()
@@ -206,6 +211,46 @@ class RelayHostLossSummary(unittest.TestCase):
         self.assertIn('| 1 | 5000000000 | 4000000000 | observed | pass |', text)
         self.assertIn('| 2 | 5000000001 | missing | observed | fail |', text)
         self.assertIn('| 3 | 0 | missing | unobserved | fail |', text)
+
+
+class PartRSummary(unittest.TestCase):
+    def test_episode_counts_and_specific_restart_cause(self):
+        call = {'ordinal': 0, 'role': 'affected', 'gapNs': 2233456140,
+                'outcome': 'inconclusive', 'causes': ['relay-loss-ice-restart-missing'],
+                'episodeCount': 2, 'iceRestarts': 0}
+        report = {'schemaVersion': 1, 'partR': True, 'gates': [{'status': 'inconclusive',
+                  'process': {'relayLoss': {'calls': [call]}}}]}
+        text = '\n'.join(report_lines(report))
+        self.assertIn('| 0 | affected | 2 | 0 | 2233456140 | inconclusive | relay-loss-ice-restart-missing |', text)
+        for bad in (-1, 0.5, float('nan'), float('inf'), True, 2**53, 'private-host'):
+            call.update(episodeCount=bad, iceRestarts=bad)
+            text = '\n'.join(report_lines(report))
+            self.assertIn('| 0 | affected | unreadable | unreadable |', text)
+            self.assertNotIn('private-host', text)
+
+    def test_verdict_gaps_and_causes(self):
+        report = {'schemaVersion': 1, 'partR': True, 'gates': [
+            {'status': 'inconclusive', 'procedureCompleted': False, 'process': {'relayLoss': {
+                'outcome': 'inconclusive', 'causes': ['relay-loss-missing'], 'calls': [
+                    {'ordinal': 0, 'role': 'affected', 'gapNs': 5000000001, 'outcome': 'fail', 'causes': ['relay-loss-slow']},
+                    {'ordinal': 1, 'role': 'unaffected', 'gapNs': 1000, 'outcome': 'pass', 'causes': []},
+                    {'ordinal': 2, 'role': 'unknown', 'gapNs': 0, 'outcome': 'inconclusive', 'causes': ['relay-loss-missing']},
+                    {'ordinal': 3, 'role': 'affected', 'gapNs': 10000000000, 'outcome': 'fail', 'causes': ['relay-loss-unrecovered']}
+                ]}}}]}
+        text = '\n'.join(report_lines(report))
+        self.assertIn('### Part R: relay host loss (5 s budget)', text)
+        self.assertIn('Verdict: **inconclusive**', text)
+        self.assertIn('| 0 | affected | missing | missing | 5000000001 | fail | relay-loss-slow |', text)
+        self.assertIn('| 1 | unaffected | missing | missing | 1000 | pass | none |', text)
+        self.assertIn('| 2 | unknown | missing | missing | 0 | inconclusive | relay-loss-missing |', text)
+        self.assertIn('| 3 | affected | missing | missing | 10000000000 | fail | relay-loss-unrecovered |', text)
+        result = report['gates'][0]['process']['relayLoss']
+        result['causes'] = ['relay-host-secret', '10.0.0.1', 'token_abc']
+        result['calls'][0].update(role='private-host', outcome='secret', causes=['private-name'])
+        text = '\n'.join(report_lines(report))
+        for private in ('relay-host-secret', '10.0.0.1', 'token_abc', 'private-host', 'private-name'):
+            self.assertNotIn(private, text)
+        self.assertIn('unreadable', text)
 
 
 if __name__ == '__main__':

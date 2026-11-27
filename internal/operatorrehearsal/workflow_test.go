@@ -2,6 +2,7 @@ package operatorrehearsal
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 			TimeoutMinutes int    `yaml:"timeout-minutes"`
 			Steps          []struct {
 				Name, Run, Uses string
+				TimeoutMinutes  int    `yaml:"timeout-minutes"`
 				If              string `yaml:"if"`
 				ContinueOnError bool   `yaml:"continue-on-error"`
 				Env             map[string]string
@@ -45,17 +47,45 @@ func TestWorkflowUsesPublicRunnerAndNarrowArtifacts(t *testing.T) {
 		t.Fatal("nightly clashes with existing CI")
 	}
 	boot := w.Jobs["template-boot"]
-	if boot.RunsOn != "ubuntu-24.04" || boot.TimeoutMinutes <= 0 {
+	if boot.RunsOn != "ubuntu-24.04" || boot.TimeoutMinutes != 20 {
 		t.Fatal("missing bounded Linux container proof job")
 	}
-	proof := false
+	proof, headArchive := false, false
 	for _, step := range boot.Steps {
+		if strings.Contains(step.Run, "scripts/ci/build-rehearsal-archive.sh") {
+			headArchive = step.TimeoutMinutes == 5
+		}
+		if strings.Contains(step.Run, "-prepare-only") {
+			t.Fatal("template boot must test the head-built servers")
+		}
 		if strings.Contains(step.Run, "-run '^TestContainerTemplateBoot$'") {
-			proof = step.Env["RELAIS_REHEARSAL_CONTAINERS"] == "1" && strings.Contains(step.Run, "RELAIS_REHEARSAL_ARCHIVE=") && strings.Contains(step.Run, "RELAIS_REHEARSAL_SHA256=") && !step.ContinueOnError
+			proof = step.TimeoutMinutes == 14 && step.Env["RELAIS_REHEARSAL_CONTAINERS"] == "1" && strings.Contains(step.Run, "RELAIS_REHEARSAL_ARCHIVE=") && strings.Contains(step.Run, "RELAIS_REHEARSAL_SHA256=") && step.Env["RELAIS_REHEARSAL_RELAY_TWO"] == "1" && strings.Contains(step.Run, "sha256sum") && strings.Contains(step.Run, "-timeout 12m") && !step.ContinueOnError
 		}
 	}
-	if !proof {
+	if !proof || !headArchive {
 		t.Fatal("container proof can silently skip or fail open")
+	}
+	rJob := w.Jobs["part-r"]
+	if rJob.RunsOn != "ubuntu-24.04" || rJob.TimeoutMinutes != 80 {
+		t.Fatal("part R requires its own bounded hosted job")
+	}
+	preparedR, ranR, uploadedR, summaryR := false, false, false, false
+	for _, step := range rJob.Steps {
+		if strings.Contains(step.Run, "-prepare-only") {
+			preparedR = strings.Contains(step.Run, "-part-r") && step.Env["RELAIS_RELEASE_TOKEN"] == "${{ github.token }}"
+		}
+		if strings.Contains(step.Run, "-part-r -prepared") {
+			ranR = step.TimeoutMinutes == 60 && preparedR && strings.Contains(step.Run, "sha256sum --strict --check") && strings.Contains(step.Run, `-go="$(go env GOROOT)/bin/go"`)
+		}
+		if strings.Contains(step.Run, "rehearsal_summary.py runtime/part-r-report") {
+			summaryR = step.If == "always()" && step.ContinueOnError
+		}
+		if strings.HasPrefix(step.Uses, "actions/upload-artifact@") {
+			uploadedR = slices.Equal(strings.Fields(step.With["path"].(string)), []string{"runtime/part-r-report/report.json", "runtime/part-r-report/host-diagnostics.log"}) && step.If == "always()"
+		}
+	}
+	if !preparedR || !ranR || !uploadedR || !summaryR {
+		t.Fatal("part R dispatch path or sanitized evidence missing", preparedR, ranR, uploadedR, summaryR)
 	}
 	job := w.Jobs["rehearsal"]
 	if job.RunsOn != "ubuntu-24.04" {

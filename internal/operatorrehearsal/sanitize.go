@@ -24,7 +24,7 @@ func publicPreconditionCategory(s string) bool {
 		"value-error", "key-error", "type-error", "file-not-found-error", "permission-error", "timeout-error", "timeout-expired", "called-process-error", "connection-refused-error", "connection-reset-error", "url-error", "ssl-error", "ssl-cert-verification-error", "json-decode-error":
 		return true
 	}
-	for _, slot := range Slots {
+	for _, slot := range operator.HostSlots(true) {
 		if code, ok := strings.CutPrefix(s, slot+"-"); ok {
 			switch code {
 			case "shape", "participant", "manifest-identity", "architecture", "release-differs", "unavailable", "topology", "not-running", "service-config", "manifest", "archive", "boot-script", "unit-start", "binary", "budgets", "build-identity", "value-error", "key-error", "type-error", "file-not-found-error", "permission-error", "timeout-expired", "called-process-error", "not-alive", "draining", "not-empty", "local-inventory", "inventory-unknown":
@@ -134,7 +134,7 @@ func (r *Report) sanitize() {
 	r.Clocks = append([]clocks.Evidence{}, r.Clocks...)
 	for i, e := range r.Clocks {
 		rows := map[string]clocks.Sample{}
-		for _, slot := range Slots {
+		for _, slot := range operator.HostSlots(true) {
 			if s, ok := e.Clocks[slot]; ok {
 				s = clocks.PublicSample(s)
 				if !regexp.MustCompile(`^[0-9]{19}$`).MatchString(s.MeasuredUnixNS) {
@@ -164,6 +164,10 @@ func sanitizeGates(gates []GateReport) []GateReport {
 			g.Gate = "unavailable"
 		}
 		g.Status = publicVerdict(g.Status)
+		if g.Process.RelayLoss != nil {
+			public := publicRelayLoss(*g.Process.RelayLoss)
+			g.Process.RelayLoss = &public
+		}
 		g.Reason = publicCode(g.Reason)
 		g.Category = publicCode(g.Category)
 		for _, s := range []*string{&g.Process.RelayWindows, &g.Process.RelayLocalTiming, &g.Process.RelayConnectionInvariants} {

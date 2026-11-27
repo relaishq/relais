@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,6 +58,20 @@ func TestRelayLossWrapperLeavesNormalMessageBytes(t *testing.T) {
 	plain, err := json.Marshal(object)
 	require.NoError(t, err)
 	require.JSONEq(t, normal.String(), string(plain))
+}
+
+func TestRelayLossWrapperRetainsEveryEpisode(t *testing.T) {
+	var out bytes.Buffer
+	episodes := []callharness.RelayRestartEpisode{{Generation: 1, AppliedNS: time.Second}, {Generation: 2, AppliedNS: 2 * time.Second}}
+	m := Message{Type: "call", Call: &callharness.Report{ICERestarts: 1}}
+	NewWriter(&out).writeRelayLoss(m, episodes)
+	var saved struct {
+		Call     *callharness.Report
+		Episodes []callharness.RelayRestartEpisode `json:"relayLossEpisodes"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &saved))
+	require.Equal(t, episodes, saved.Episodes)
+	require.Equal(t, 1, saved.Call.ICERestarts)
 }
 
 func TestRelayLossRegistrationProbesNeedNoClockTracker(t *testing.T) {
@@ -107,4 +123,51 @@ func TestRunRelayLossCallerPlacesTwoCallsPerNamedWorker(t *testing.T) {
 	require.EqualValues(t, 2, w1.Load())
 	require.EqualValues(t, 2, w2.Load())
 	require.EqualValues(t, 4, capable.Load())
+}
+
+func TestRunRelayLossCallerRetriesCapacityRefusal(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]int{}
+	workers := map[string]int{}
+	signal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		mu.Lock()
+		defer mu.Unlock()
+		key := r.URL.String() + string(body)
+		seen[key]++
+		workers[r.URL.Query().Get("worker")]++
+		if seen[key] == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"code":"at_capacity","message":"retry the identical message"}`)
+			return
+		}
+		// Stop before media: only the unchanged offer/worker retry is under test.
+		http.Error(w, "definite test refusal after capacity settled", http.StatusBadRequest)
+	}))
+	defer signal.Close()
+	err := RunChild(t.Context(), ChildOptions{RelayLoss: true, Callers: 4, Video: true, Duration: time.Second, SampleEvery: time.Second, ParentPID: os.Getppid(), Output: filepath.Join(t.TempDir(), "caller.jsonl"), Topology: callharness.ExternalTopology{SignalingURL: signal.URL + "/calls", RelayAddr: netip.MustParseAddrPort("127.0.0.1:24780")}})
+	require.ErrorContains(t, err, "definite test refusal after capacity settled")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, seen, 4)
+	for _, attempts := range seen {
+		require.Equal(t, 2, attempts)
+	}
+	require.Equal(t, map[string]int{"w1": 4, "w2": 4}, workers)
+}
+
+func TestOrdinaryCallerDoesNotRetryCapacity(t *testing.T) {
+	var attempts atomic.Int64
+	signal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"code":"at_capacity"}`)
+	}))
+	defer signal.Close()
+	err := RunChild(t.Context(), ChildOptions{Callers: 4, Video: true, Duration: time.Second, SampleEvery: time.Second, ParentPID: os.Getppid(), Output: filepath.Join(t.TempDir(), "caller.jsonl"), Topology: callharness.ExternalTopology{SignalingURL: signal.URL + "/calls", RelayAddr: netip.MustParseAddrPort("127.0.0.1:24780")}})
+	require.ErrorContains(t, err, "at_capacity")
+	require.EqualValues(t, 4, attempts.Load())
 }

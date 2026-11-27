@@ -108,10 +108,6 @@ func RunRelayLossGate(ctx context.Context, c *ProcessConfig, p RelayLossPorts, e
 		}
 		in.SurvivorEndpoint = endpoints[survivor]
 		priorEpoch = epochs[in.TargetSlot]
-		if counts[in.TargetSlot] < 2 {
-			in.TargetInsufficient = true
-			return nil
-		}
 		if p.Broker != nil {
 			if err := p.Broker.CheckStopped(ctx); err != nil {
 				return err

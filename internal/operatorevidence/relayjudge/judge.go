@@ -74,7 +74,8 @@ func Judge(in Input) Result {
 		in.TargetInsufficient = true
 	}
 	messages, streamOK := readMessages(in)
-	generatorOK := qualifyGenerator(in, messages)
+	out.Generator = &GeneratorEvidence{Checks: []GeneratorCheck{}}
+	generatorOK := qualifyGenerator(in, messages, out.Generator)
 	for i := range out.Calls {
 		r := &out.Calls[i]
 		if valid {
@@ -195,10 +196,19 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 			evaluateCall(row, duplicate, a, survivor, noFault)
 		}
 	}
+	row.EpisodeCount, row.ICERestarts = nil, nil
 	c := m.Call
 	if c == nil {
 		missing()
 		return
+	}
+	if !m.invalid {
+		episodes := len(m.Episodes)
+		row.EpisodeCount = &episodes
+		if count(c.ICERestarts) {
+			restarts := *c.ICERestarts
+			row.ICERestarts = &restarts
+		}
 	}
 	if m.Error != "" || m.invalid {
 		missing()
@@ -298,7 +308,7 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 				row.add("inconclusive", "relay-loss-candidate-mismatch")
 			}
 			if !positive(c.ICERestarts) {
-				row.add("inconclusive", "relay-loss-episode-count")
+				row.add("inconclusive", "relay-loss-ice-restart-missing")
 				binding = false
 			}
 			ordered := anchors && *e.Applied >= *e.Start
@@ -351,7 +361,7 @@ func evaluateCall(row *CallResult, m message, a Assignment, survivor string, noF
 				row.Gap = max(row.Gap, max(*e.Video, *e.Audio)-*e.Last)
 			} else if unrecovered {
 				row.add("fail", "relay-loss-unrecovered")
-			} else if !mediaOrderViolated && !slices.Contains(row.Causes, "relay-loss-episode-count") {
+			} else if !mediaOrderViolated && !slices.Contains(row.Causes, "relay-loss-episode-count") && !slices.Contains(row.Causes, "relay-loss-ice-restart-missing") {
 				missing()
 			}
 		}

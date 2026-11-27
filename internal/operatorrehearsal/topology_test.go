@@ -380,7 +380,7 @@ func TestContainerTemplateBoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := Config{Name: fmt.Sprintf("relais-template-%d", os.Getpid()), Version: os.Getenv("RELAIS_REHEARSAL_VERSION"), Architecture: os.Getenv("RELAIS_REHEARSAL_ARCH"), ArchiveSHA256: os.Getenv("RELAIS_REHEARSAL_SHA256"), StorePort: 16379}
+	config := Config{Name: fmt.Sprintf("relais-template-%d", os.Getpid()), Version: os.Getenv("RELAIS_REHEARSAL_VERSION"), Architecture: os.Getenv("RELAIS_REHEARSAL_ARCH"), ArchiveSHA256: os.Getenv("RELAIS_REHEARSAL_SHA256"), StorePort: 16379, RelayTwo: os.Getenv("RELAIS_REHEARSAL_RELAY_TWO") == "1"}
 	topology, err := Load(os.DirFS("../.."), config)
 	if err != nil {
 		t.Fatal(err)

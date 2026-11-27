@@ -92,6 +92,8 @@ def report_lines(report):
     if type(version) is not int or version != 1:
         return ['`report.json` schema version is not 1; its fields are not shown.']
     lines = [f'Verdict: **{code(report.get("verdict", MISSING))}**', '']
+    if report.get("partR") is True:
+        return lines + part_r_lines(report)
     gates = report.get('gates', MISSING)
     if isinstance(gates, list):
         lines += ['| Gate | Status | Media status |', '| --- | --- | --- |']
@@ -133,6 +135,61 @@ def report_lines(report):
             lines.append(f'| {count(field(call, "call"))} | {count(gap)} | {count(field(call, "recoveryGapNs"))} | {recovery} | {within} |')
     else:
         lines.append('Call gaps: ' + code(calls))
+    return lines
+
+
+# R uses the separate pinned judge contract. These are finite vocabularies,
+# not the generic code-shaped filter: host labels must never become causes.
+R_CAUSES = frozenset((
+    'relay-loss-missing', 'relay-loss-generator', 'relay-loss-target-insufficient',
+    'relay-loss-restore-failed', 'relay-loss-call-lost', 'relay-loss-decryption',
+    'relay-loss-duplicate', 'relay-loss-unaffected-restart', 'relay-loss-episode-count',
+    'relay-loss-ice-restart-missing',
+    'relay-loss-generation-mismatch', 'relay-loss-candidate-mismatch',
+    'relay-loss-anchor-order', 'relay-loss-media-order-violated',
+    'relay-loss-unrecovered', 'relay-loss-slow', 'unclassified'))
+
+
+def r_value(value, allowed):
+    return 'missing' if value is MISSING else value if isinstance(value, str) and value in allowed else 'unreadable'
+
+
+def r_causes(value):
+    if value is MISSING:
+        return 'missing'
+    if not isinstance(value, list):
+        return 'unreadable'
+    return ', '.join(r_value(v, R_CAUSES) for v in value) or 'none'
+
+
+def r_count(value):
+    if value is MISSING:
+        return 'missing'
+    return str(value) if type(value) is int and 0 <= value <= 2**53 - 1 else 'unreadable'
+
+
+def part_r_lines(report):
+    gates = report.get('gates')
+    gate = gates[0] if isinstance(gates, list) and len(gates) == 1 else {}
+    result = field(gate, 'process', 'relayLoss')
+    completed = field(gate, 'procedureCompleted')
+    lines = ['', '### Part R: relay host loss (5 s budget)', '',
+             'Verdict: **' + r_value(field(gate, 'status'), ('passed', 'failed', 'inconclusive', 'not-run')) + '**',
+             'Procedure completed: ' + ('yes' if completed is True else 'no' if completed is False else 'missing'),
+             'Causes: ' + r_causes(field(result, 'causes'))]
+    calls = field(result, 'calls')
+    if not isinstance(calls, list):
+        return lines + ['Call gaps: missing']
+    lines += ['', '| Call | Role | Episode count | ICE restarts | Graded gap (ns) | Verdict | Causes |',
+              '| --- | --- | ---: | ---: | ---: | --- | --- |']
+    for call in calls:
+        lines.append(f'| {count(field(call, "ordinal"))} | '
+                     f'{r_value(field(call, "role"), ("affected", "unaffected", "unknown"))} | '
+                     f'{r_count(field(call, "episodeCount"))} | '
+                     f'{r_count(field(call, "iceRestarts"))} | '
+                     f'{count(field(call, "gapNs"))} | '
+                     f'{r_value(field(call, "outcome"), ("pass", "fail", "inconclusive"))} | '
+                     f'{r_causes(field(call, "causes"))} |')
     return lines
 
 

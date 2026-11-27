@@ -32,6 +32,8 @@ type CPUReport struct {
 	Phases           []Calibration `json:"phases"`
 }
 type Report struct {
+	ReleaseVersion  string                    `json:"releaseVersion,omitempty"`
+	PartR           bool                      `json:"partR,omitempty"`
 	RelayLoss       *relayloss.Report         `json:"relayLoss,omitempty"`
 	ClockSelection  *ClockSelectionReport     `json:"clockSelection,omitempty"`
 	TimingUndecided []TimingUndecided         `json:"timingUndecided"`
@@ -69,6 +71,10 @@ type Report struct {
 // Evaluate applies the free-rehearsal rule. The pinned media status remains
 // strict; only the three fully reported timing metrics may remain undecided.
 func (r *Report) Evaluate() {
+	if r.PartR {
+		r.evaluatePartR()
+		return
+	}
 	r.Failures = append([]string{}, r.Errors...)
 	r.Exemptions = []string{}
 	r.TimingUndecided = []TimingUndecided{}
@@ -150,11 +156,14 @@ func PublicCode(s string) string {
 // Reports are typed projections: no raw mailbox, script, environment, product
 // response or error string is serializable here. Restrict all remaining labels.
 func publicCode(s string) string {
+	if relayLossCause(s) {
+		return s
+	}
 	if calibrationCause(s) || publicPreconditionCategory(s) {
 		return s
 	}
 	switch s {
-	case "clock-binding-failed", "clock-history-incomplete", "clock-binding-missing", "clock-select-ceiling":
+	case "diagnostics-save-failed", "clock-binding-failed", "clock-history-incomplete", "clock-binding-missing", "clock-select-ceiling":
 		return s
 	case "clock-lease-missing", "clock-lease-expired", "clock-lease-bound", "clock-config-differ":
 		return s
@@ -175,6 +184,11 @@ func (r Report) Write(w io.Writer) error {
 }
 func (r Report) write(w io.Writer) error {
 	r.sanitize()
+	if r.PartR {
+		r.ReleaseVersion = ReleaseRVersion
+	} else {
+		r.ReleaseVersion = ""
+	}
 	switch r.Event {
 	case "pull_request", "push", "schedule", "workflow_dispatch", "local":
 	default:
@@ -182,6 +196,9 @@ func (r Report) write(w io.Writer) error {
 	}
 	r.Evaluate()
 	r.Limitations = []string{"local TLS proxy and time reference; shared runner clock", "linux_amd64 only", "store failover and load admission not covered", "one execution; three fixed complete executions are required for initial calibration", "CPU affinity does not prove physical-core or VM scheduling isolation", "on a shared runner, pinned media timing is judged strictly only in the paid run"}
+	if r.PartR {
+		r.Limitations = []string{"container rehearsal; shared runner clock and local TLS proxy", "linux_amd64 only", "one execution; three complete executions on one commit are required", "no deployed network or paid run evidence"}
+	}
 	e := json.NewEncoder(w)
 	e.SetIndent("", "  ")
 	return e.Encode(r)

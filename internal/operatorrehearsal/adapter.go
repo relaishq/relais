@@ -107,7 +107,7 @@ func (a *Adapter) Execute(ctx context.Context, req operator.Request) operator.Re
 	case operator.HostLeaseRead, operator.HostLeaseReadBatch:
 		return a.executeLeaseRead(bounded, req)
 	case operator.HostReadBatch:
-		return a.executeReadBatch(bounded, req)
+		return a.executeScriptReadBatch(bounded, req)
 	case operator.HostExecute:
 		return a.executeHost(bounded, req)
 

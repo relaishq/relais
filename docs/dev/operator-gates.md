@@ -2064,7 +2064,8 @@ The four-host receipt bytes remain unchanged. A scenario can set `relayTwo: true
 still contains `relay-primary` and `relay-standby`. The scenario identity binds
 this choice. Missing second-host inventory or clock evidence refuses admission.
 Parts A, B and M omit this option and retain the four-host inventory, clock
-reads and procedures. The container comparison still strips the second relay.
+reads and procedures. The A/B/M container comparison still strips the second relay. The separate
+part R rehearsal retains both relay hosts.
 
 Process parameters carry `relay` and optional `relayTwo` private HTTP endpoints.
 Private relay, control and store endpoints refuse ports 443 and 53 so call
@@ -2126,18 +2127,18 @@ prints the exact JSON readback and a fresh table dump for diagnosis. This proof
 needs Linux, privileged disposable containers and a pinned release archive.
 
 The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
-path PRs and matching main pushes. It builds a native archive from the tested
-checkout, supplies the required archive digest and opt-in environment, and
-runs the container test separately from the full media rehearsal. A proof
-failure fails that job. The existing manual target remains available.
+path PRs, matching main pushes, the schedule and `workflow_dispatch`. It builds
+a native archive from the tested checkout, supplies its archive digest and
+opts into both relay hosts. This preserves systemd/template boot evidence for
+head server binaries. The separate part R job supplies published v0.4.0 evidence.
+A proof failure fails that job. The existing manual target remains available.
 
-The initial job budget is 20 minutes: archive build 5 minutes, proof step 14
-minutes and Go test 12 minutes. The test leaves two minutes for cleanup before
-its Go deadline. This uses the existing measured 8 min 20 s setup reference
-above as its initial sizing basis; the isolated job's own cold-run duration
-has not yet been measured. CI must confirm that budget against its first runs.
-Local macOS checks are NOT-RUN for container execution and do not establish
-deployed management-agent or production-network behavior.
+The job budget remains 20 minutes: archive build 5 minutes, proof step 14
+minutes and Go test 12 minutes. The test reserves two minutes for cleanup.
+The existing measured 8 min 20 s setup reference above remains the initial
+basis. Five-host execution has not yet shown a need to extend these limits;
+CI must confirm them. Local macOS checks are NOT-RUN for container execution
+and do not establish deployed management-agent or production-network behavior.
 
 ## Part R: relay host loss
 
@@ -2163,8 +2164,7 @@ invocation. The ordinary pinned release judges remain unchanged.
 After warmup, one control `/status` read supplies exactly four registered call
 assignments, including each relay slot and generation. Generation zero is valid.
 The gate selects the host carrying the most calls; a tie selects `relay` first.
-A target with fewer than two calls gives `relay-loss-target-insufficient` and
-performs no isolation. Fewer than four unique registered calls is missing
+Fewer than four unique registered calls is missing
 evidence, rather than target-insufficient. Unknown assignments, pending changes,
 extra calls or unhealthy relays refuse the fault. The survivor's public endpoint and the
 relays' epochs come from independent host status reads.
@@ -2197,6 +2197,17 @@ to the survivor endpoint. Unaffected calls must have no restart episodes or
 ICE restarts. A restart on an unaffected call is inconclusive, with cause
 `relay-loss-unaffected-restart`. Its gap checks still fail real disruptions
 that exceed the budget.
+
+Affected calls with zero or multiple recorded episodes report
+`relay-loss-episode-count`. A single episode without a positive ICE restart
+counter reports `relay-loss-ice-restart-missing`. The separate numeric
+`episodeCount` and `iceRestarts` fields are included for affected and unaffected
+calls; unavailable or invalid counters are omitted. These are nonnegative
+integers in the safe JSON range, with no caller identity. The ICE state counter
+is not a substitute for episode cardinality. An outstanding, unapplied offer's
+retry retains its first episode; a fresh restart after application or after an
+episode freezes remains a separate episode. Multiple applied generations in
+one control recovery do not relax R's exactly-one-episode criterion.
 
 The per-run invariant is: **no media arrives on any track in (L, Applied]**.
 The isolation drops all old relay output. The ordering assumption is that packets
@@ -2262,3 +2273,67 @@ steps by hand. Expiry restores network reachability; it does not restore service
 These restoration choices follow the lease, cutoff and unit code and are tested
 with memory-store/control tests and offline host transcripts. Actual host/service
 recovery and management transport timing remain #560 and paid-run evidence.
+
+### Free part R rehearsal
+
+`relais-gates rehearse -part-r` runs only part R in disposable runner
+containers. `-prepare-only -part-r` reads one published release:
+v0.4.0, linux_amd64, commit
+`ebb0f7f19595cf62840e6a923c74b6314b6df1c7`, archive SHA256
+`0b8e61ef0228018d9e2f7a82bdae1f3763fa1992456aa2207ece82a07b8dfe0e`.
+It has no upgrade pair. Every server host uses that release. The caller and
+bridge use the tested checkout. The separate R judge is built with
+`BuildRelayLossPinned` from the tested checkout and bound before clock admission.
+Both server identity fields in R's scenario name the same single release;
+A/B/M still require two distinct pinned releases.
+
+The workflow's independent `part-r` job runs for all existing triggers,
+including `workflow_dispatch`. It leaves the existing A/B/M job and its
+0.3.4/0.3.5 pair unchanged. The split avoids adding setup, clock admission and
+R's media window to that job's reported busy-day 2 h 15 min duration.
+The initial R budget is 80 minutes, with a 60-minute execution step and
+bounded 10-minute build and prerequisite steps and a 5-minute release read.
+The execution step allows twice an estimated 30-minute path: the existing 8 min 20 s
+boot reference, clock convergence/admission, preparation and the 600-second
+caller ceiling. This is a sizing estimate, not a measured R runtime. The first
+three passes on one commit must confirm the duration and the real container
+behavior; they remain NOT-RUN until CI records them.
+
+R uses five-host clock admission and the public resource sequence. It does not
+run the A/B/M calibration or pool judge. The R judge applies its generator,
+media order and 5-second per-call rules without the comparison's timing
+exemptions. R samples first at its seeded phase (a partial first interval),
+then every second on that same phase. Its short run therefore avoids a
+deliberate first interval longer than 1.025 seconds consuming the unchanged
+1% generator budget. All startup work is still sampled. Ordinary A/B/M callers
+keep their original first interval of one second plus the seeded phase.
+The sanitized `report.json` sets `partR: true` and records the
+version, server commit and archive digest, template digest, caller and judge
+hashes, gate verdict, completion and caller stop proof, and all four calls'
+gaps and causes in `gates[].process.relayLoss`. Run and session labels are
+removed. Causes have a fixed allowlist. The same object has a shared-process
+`generator` diagnosis: sample and inline sample counts, media and flagged time
+in ns, flagged percent, maximum cumulative clock excursion in ns, and `checks`.
+Each check has an allow-listed rule, observed value, limit, violation count,
+and `eventOverlaps` (the count of violating samples that intersect any padded
+event window, including their maximum-lateness reach). Timing checks use ns;
+CPU, skips and the weighted budget use percent; other checks use counts.
+`generator-event-overlaps-max` or `generator-flagged-percent-max` refuses
+otherwise valid samples. Individual sample violations outside event windows
+can still qualify within the unchanged 1% time-weighted budget. Cadence, clock,
+coverage or sample-join refusal stops qualification at its named check. These
+numbers contain no wall-clock, process, address or session identity. All four
+calls share this caller-process qualification; a generator cause on four rows
+does not mean four independent generator failures. The run-page summary shows each call's
+role, episode count, ICE restart count, gap, verdict and causes. End-coverage
+diagnostics report the missing ns as observed and zero as the limit; minimum
+rules retain their smallest observed value. The R job also uploads `host-diagnostics.log`.
+Host command streams retain the existing secret redaction and suppression of
+incomplete output. R captures the whole log outside the upload directory, then
+projects it after cleanup: generated secrets, URLs, host names, numeric
+addresses and encoded chrony reference addresses are removed. Packed host
+replies retain only their fixed envelope kind and error code, so encoded
+endpoints cannot bypass the projection. Fixed public
+service IDs and failure details remain. A projection failure fails the run;
+raw diagnostic bytes never enter the upload file. Raw caller records are not
+uploaded.

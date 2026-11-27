@@ -46,3 +46,5 @@ __pycache__/
 # Local operator rehearsal inputs and sanitized output
 /runtime/operator-releases/
 /runtime/operator-report/
+/runtime/part-r-releases/
+/runtime/part-r-report/

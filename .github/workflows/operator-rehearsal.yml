@@ -69,6 +69,7 @@ jobs:
           RELAIS_REHEARSAL_CONTAINERS: '1'
           RELAIS_REHEARSAL_VERSION: '0.4.0'
           RELAIS_REHEARSAL_ARCH: x86_64
+          RELAIS_REHEARSAL_RELAY_TWO: '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -157,5 +158,71 @@ jobs:
             runtime/operator-report/clock-selection-policy.json
             runtime/operator-report/clock-selection.json
             runtime/operator-report/clock-selection-status.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  part-r:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install caller prerequisites
+        timeout-minutes: 10
+        uses: ./.github/actions/ubuntu-packages
+        with:
+          packages: ffmpeg
+      - name: Prepare head caller, bridge and separate judge dependencies before media
+        timeout-minutes: 10
+        run: |
+          go mod download
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false -o bin/relais-gates ./cmd/relais-gates
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false -o bin/relais-load ./cmd/relais-load
+          sha256sum bin/relais-gates bin/relais-load > "$RUNNER_TEMP/part-r-binaries.sha256"
+          mkdir -p runtime
+      - name: Read and verify published part R release
+        timeout-minutes: 5
+        env:
+          RELAIS_RELEASE_TOKEN: ${{ github.token }}
+        run: ./bin/relais-gates rehearse -part-r -prepare-only -assets runtime/part-r-releases -output runtime/part-r-report
+      - name: Rehearse part R with both relay hosts and v0.4.0 servers
+        timeout-minutes: 60
+        env:
+          TESTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          TESTED_EVENT: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOMODCACHE="$(go env GOMODCACHE)"
+          GOCACHE="$(go env GOCACHE)"
+          export GOMODCACHE GOCACHE
+          sha256sum --strict --check "$RUNNER_TEMP/part-r-binaries.sha256"
+          sudo -n --preserve-env=GOMODCACHE,GOCACHE ./bin/relais-gates rehearse -part-r -prepared \
+            -assets runtime/part-r-releases -output runtime/part-r-report \
+            -go="$(go env GOROOT)/bin/go" -head-commit="$TESTED_HEAD" -event="$TESTED_EVENT"
+      - name: Make sanitized report available to uploader
+        if: always()
+        run: |
+          if [ -d runtime/part-r-report ]; then
+            sudo -n chown -R "$(id -u):$(id -g)" runtime/part-r-report
+          fi
+      - name: Write part R result summary to the run page
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 scripts/ci/rehearsal_summary.py runtime/part-r-report >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload sanitized part R report and redacted host diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-part-r-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            runtime/part-r-report/report.json
+            runtime/part-r-report/host-diagnostics.log
           if-no-files-found: warn
           retention-days: 14

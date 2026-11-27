@@ -38,6 +38,18 @@ func (o ChildOptions) callOptions(i int, history time.Duration, meter *Meter) ca
 	return opts
 }
 
+// FirstSampleDelay preserves the process's seeded sampling phase. R takes a
+// partial first interval so a deliberately long startup tick cannot exhaust
+// its short campaign's unchanged 1% saturation budget. Later ticks keep the
+// ordinary one-second cadence and phase; no sample or startup work is omitted.
+func (o ChildOptions) FirstSampleDelay() time.Duration {
+	phase := o.Desync.SamplePhase(o.SampleEvery)
+	if o.RelayLoss && phase > 0 {
+		return phase
+	}
+	return o.SampleEvery + phase
+}
+
 // Registration still needs its original near-caller burst. R does not create a
 // ClockTracker, distributed events or a background clock-mapping sampler.
 func registerRelayLossProbes(mux *http.ServeMux, signaling string, client *http.Client) {

@@ -208,6 +208,7 @@ func (s *Session) observeHostBatch(ctx context.Context, p Peer, op operator.Oper
 	var childFailure *operator.Uncertainty
 	outcome, err := s.Exchange(ctx, p, op, "hosts", action, raw, nil, end, func(reply operator.Reply) operator.Certainty {
 		if reply.NotSubmitted {
+			observed = errors.New("precondition-failed:" + reply.RefusalCode)
 			return operator.Failed
 		}
 		var batch operator.HostReadBatchOutput

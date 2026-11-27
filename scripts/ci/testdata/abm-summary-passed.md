@@ -1,0 +1,35 @@
+## Operator rehearsal summary
+
+Verdict: **passed**
+
+| Gate | Status | Media status |
+| --- | --- | --- |
+| rollout | passed | passed |
+| control-restart | passed | inconclusive |
+| upgrade-rollback | passed | passed |
+| relay-deploy | inconclusive | passed |
+
+Pooled media: status **passed**, qualified takeovers 10, qualified moves 20
+
+### Timing undecided
+
+none
+
+### Untrusted caller events
+
+- Caller events with `timingEvidence: false`, release callers (`callerTiming`): 2 of 3 events
+- Caller events with `timingEvidence: false`, head caller (`headCaller.callerTiming`): 1 of 2 events
+
+### Relay host loss (5 s budget)
+
+Procedure completed: missing
+Failed phase: missing
+Call gaps: missing
+
+### Clock selection
+
+Cause: **admitted**
+
+Selected bounds: frontendControlBoundNs 120000, frontendWorkerBoundNs 170000, driftPpm 100
+
+Failed windows: 0

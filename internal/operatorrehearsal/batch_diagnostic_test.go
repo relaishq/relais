@@ -55,7 +55,10 @@ func TestBatchObservationRetainsHostReasonAndDiagnostic(t *testing.T) {
 			}
 			expected := "precondition-check host=w1 observation=clock category=command-result-unknown\n"
 			if kind == "outer-refused" {
-				expected = "precondition-check host=unavailable observation=clock category=precondition-failed\n"
+				expected = "precondition-check host=unavailable observation=clock category=precondition-failed:deadline-before-submission\n"
+				if err.Error() != "precondition-failed:deadline-before-submission" {
+					t.Fatal("batch refusal lost its precondition", err)
+				}
 			}
 			if log.String() != expected {
 				t.Fatalf("MUTATION: batch-observation-diagnostic got %q want %q", log.String(), expected)

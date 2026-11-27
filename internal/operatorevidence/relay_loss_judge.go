@@ -30,6 +30,9 @@ var relayJudgeSources embed.FS
 // RelayLossJudge cannot be used through the A/B/M summary decoder.
 type RelayLossJudge struct{ pinned PinnedJudge }
 
+// Binary is the separately built R executable; Judge verifies its bytes at invocation.
+func (p RelayLossJudge) Binary() string { return p.pinned.Binary }
+
 func (p RelayLossJudge) Identity() operator.Identity {
 	return operator.Identity{SourceCommit: p.pinned.Commit, SHA256: p.pinned.SHA256}
 }

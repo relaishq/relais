@@ -36,18 +36,21 @@ type Assignment struct {
 	Generation uint64 `json:"generation"`
 }
 type Result struct {
-	RunID   string       `json:"runId"`
-	Outcome string       `json:"outcome"` // pass, fail, inconclusive
-	Causes  []string     `json:"causes"`
-	Calls   []CallResult `json:"calls"` // always four rows, including procedure failure
+	RunID     string             `json:"runId"`
+	Outcome   string             `json:"outcome"` // pass, fail, inconclusive
+	Causes    []string           `json:"causes"`
+	Calls     []CallResult       `json:"calls"`               // always four rows, including procedure failure
+	Generator *GeneratorEvidence `json:"generator,omitempty"` // one shared caller process
 }
 type CallResult struct {
-	Ordinal int           `json:"ordinal"`
-	Session string        `json:"session"`
-	Role    string        `json:"role"` // affected, unaffected, or unknown
-	Outcome string        `json:"outcome"`
-	Causes  []string      `json:"causes"`
-	Gap     time.Duration `json:"gapNs"`
+	Ordinal      int           `json:"ordinal"`
+	Session      string        `json:"session"`
+	Role         string        `json:"role"` // affected, unaffected, or unknown
+	Outcome      string        `json:"outcome"`
+	Causes       []string      `json:"causes"`
+	Gap          time.Duration `json:"gapNs"`
+	EpisodeCount *int          `json:"episodeCount,omitempty"`
+	ICERestarts  *int          `json:"iceRestarts,omitempty"`
 }
 
 // Decode only what R consumes. Pointers distinguish absent evidence from zero.

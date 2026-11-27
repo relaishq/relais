@@ -33,7 +33,7 @@ func (d *Deployment) NegativeControls(ctx context.Context, afterRestore func(con
 		if err := afterRestore(ctx, control); err != nil {
 			return fmt.Errorf("negative-control-verification-failed: %w", err)
 		}
-		for _, slot := range Slots {
+		for _, slot := range d.Topology.Slots() {
 			script, err := d.Topology.VerifyScript(slot)
 			if err != nil {
 				return err

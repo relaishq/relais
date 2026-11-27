@@ -48,11 +48,17 @@ func Unavailable(slot, stdout string) error {
 
 // ValidatePins binds runtime inventories to the scenario's server releases.
 func ValidatePins(pins []Pin, selected operator.Scenario) error {
-	if len(pins) != 2 || pins[0].Version == pins[1].Version {
+	identities := []operator.Identity{selected.ReleaseA, selected.ReleaseB}
+	if selected.RelayTwo && slices.Equal(selected.Gates, []operator.Gate{operator.RelayHostLoss}) {
+		if len(pins) != 1 || selected.ReleaseA != selected.ReleaseB {
+			return fmt.Errorf("runtime single release pin differs from part R server release")
+		}
+		identities = identities[:1]
+	} else if len(pins) != 2 || pins[0].Version == pins[1].Version {
 		return fmt.Errorf("runtime release pins differ from scenario server releases")
 	}
 	for i, p := range pins {
-		identity := []operator.Identity{selected.ReleaseA, selected.ReleaseB}[i]
+		identity := identities[i]
 		if identity.SourceCommit == "" || identity.SourceCommit != p.Commit || identity.SHA256 != p.ArchiveSHA256 || !sha.MatchString(p.ArchiveSHA256) || !sha.MatchString(p.ManifestSHA256) || !sha.MatchString(p.BootSHA256) {
 			return fmt.Errorf("runtime release pins differ from scenario server releases")
 		}

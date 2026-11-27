@@ -88,12 +88,22 @@ func (r *ProcessRuntime) VerifyClocks(ctx context.Context, end time.Duration) (r
 	}
 	return r.preflightFailure(err, "clocks")
 }
+
+// Pin identities are checked by FreshInventory. This shape check makes pin
+// selection safe while retaining the comparison's two-release requirement.
+func (r *ProcessRuntime) validPinCount() bool {
+	if r.Session.scenario.RelayTwo && slices.Equal(r.Session.scenario.Gates, []operator.Gate{operator.RelayHostLoss}) {
+		return len(r.Pins) == 1
+	}
+	return len(r.Pins) == 2
+}
+
 func (r *ProcessRuntime) Inventory(ctx context.Context, target string, end time.Duration) error {
 	i := 0
 	if target == "to" {
 		i = 1
 	}
-	if len(r.Pins) != 2 {
+	if !r.validPinCount() || i >= len(r.Pins) {
 		return fault("invalid-release-pins")
 	}
 	_, err := r.Session.FreshInventory(ctx, r.Peer, r.Pins, end, r.Pins[i].Commit, true)
@@ -154,7 +164,7 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 	if !host.IsRead(op) {
 		deployed := ""
 		if !r.Config.Mixed {
-			if len(r.Pins) != 2 {
+			if !r.validPinCount() {
 				return StepResult{}, fault("invalid-release-pins")
 			}
 			deployed = r.Pins[0].Commit
@@ -184,6 +194,9 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		if r.Config.Target == "to" {
 			i = 1
 		}
+		if i >= len(r.Pins) {
+			return StepResult{}, fault("invalid-release-pins")
+		}
 		pin := r.Pins[i]
 		operation := r.Config.Operation
 		if operation == "" {
@@ -201,10 +214,13 @@ func (r *ProcessRuntime) step(ctx context.Context, op, slot string, end time.Dur
 		Slot      string `json:"slot"`
 		TargetDir string `json:"targetDir"`
 	}{r.Config.Parameters, extra, slot, ""}
-	if len(r.Pins) == 2 {
+	if r.validPinCount() {
 		i := 0
 		if r.Config.Target == "to" {
 			i = 1
+		}
+		if i >= len(r.Pins) {
+			return StepResult{}, fault("invalid-release-pins")
 		}
 		parameters.TargetDir = "/opt/relais/preview/" + r.Pins[i].Version
 	}
