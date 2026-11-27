@@ -463,6 +463,7 @@ func TestHangupStopsUncertainWatchdog(t *testing.T) {
 // slot (ADR 0016 sections 5 and 10).
 func TestOneSlotSetAcceptsAAndRecoversSameSlot(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		renewRestartRelay(t, store.(sessionstore.RelayLeases), true)
 		p := New(&fakeRelay{}, store)
 		w := &relayProtocolWorker{fakeWorker: &fakeWorker{store: store, addr: netip.MustParseAddrPort("127.0.0.1:17021"), running: map[string]bool{}}}
 		require.NoError(t, p.Register("a", w.addr, w))

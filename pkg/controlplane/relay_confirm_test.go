@@ -338,8 +338,16 @@ func TestUnplannedEpisodeEndsWithDeliveryDetail(t *testing.T) {
 // still awaiting confirmation is adopted with its saved bound and evidence.
 // Saved full A plus the commit completes it; A is not requested again.
 func TestControlRestartAdoptsUnconfirmedAttempt(t *testing.T) {
-	for _, mode := range []string{sessionstore.RelayConfirmDelivery, sessionstore.RelayConfirmDecode} {
-		t.Run(mode, func(t *testing.T) {
+	for _, scenario := range []struct {
+		mode   string
+		caller bool
+	}{{sessionstore.RelayConfirmDelivery, false}, {sessionstore.RelayConfirmDecode, false}, {sessionstore.RelayConfirmDelivery, true}, {sessionstore.RelayConfirmDecode, true}} {
+		mode := scenario.mode
+		name := mode + "/control-restart"
+		if scenario.caller {
+			name = mode + "/caller-restart"
+		}
+		t.Run(name, func(t *testing.T) {
 			forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
 				p, _, _, id := relayFailurePlane(t, store, mode)
 				stopRelayRecoveries(t, p)
@@ -367,7 +375,13 @@ func TestControlRestartAdoptsUnconfirmedAttempt(t *testing.T) {
 				c.relayMode = "" // a restarted control reloads the mode
 				c.stateMu.Unlock()
 
-				p.resumeRelayAttempts(ctx)
+				// A caller request must adopt this committed attempt even without
+				// positive liveness evidence for its slot; it cannot replace it.
+				if scenario.caller {
+					require.NoError(t, p.startRelayRecovery(ctx, c, true))
+				} else {
+					p.resumeRelayAttempts(ctx)
+				}
 				require.Eventually(t, func() bool {
 					_, rec, err := confirmations(store).RelayConfirmation(ctx, id)
 					return err == nil && rec.Attempt.Generation == 1 && rec.Attempt.Phase == sessionstore.RelayPhaseConfirmed
@@ -375,6 +389,10 @@ func TestControlRestartAdoptsUnconfirmedAttempt(t *testing.T) {
 				_, got, err := store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
 				require.NoError(t, err)
 				require.Equal(t, committed, got)
+				restored := attemptOf(t, store, id).Attempt
+				require.True(t, attempt.AttemptBound.Equal(restored.AttemptBound))
+				require.Equal(t, "planned", restored.Kind)
+				require.Equal(t, "r1", restored.From)
 				c.stateMu.Lock()
 				defer c.stateMu.Unlock()
 				require.Empty(t, c.relayEndReason)
