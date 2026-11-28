@@ -130,6 +130,22 @@ public address. Control lists both private relay API URLs. It enrolls every
 worker into both private relay paths before those pairs can carry calls. Outputs
 contain no token, password, snapshot key or credential-bearing URL.
 
+## Operator relay prerequisite
+
+When `EnableSessionManager=true`, boot installs `nftables` on `RelayHost` and
+`RelayTwoHost` for the relay-isolation fault. After verifying the release archive,
+`install.sh` runs `dnf install -y nftables` with a 120-second timeout and a
+10-second forced-stop grace period, then checks `nft --version`. Either failure
+stops boot before any component starts; user-data sends a failed `cfn-signal`.
+The condition uses the node's `relay` component and `ssm` setting. Other hosts,
+and relays with SSM disabled, install no new packages.
+
+Both relay interfaces use `RelayGroup`. Its existing `RelayInternetEgress` rule
+allows TCP 443 to `0.0.0.0/0`, explicitly including OS packages. The relays use
+public subnets with an internet route and their own public addresses. No security
+group change is needed for HTTPS package repositories. Repository availability
+still needs the deployed boot check.
+
 ## Time sync for clock admission
 
 Clock admission needs at least 10 distinct chrony updates from each host in its

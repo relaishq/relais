@@ -18,6 +18,11 @@ spec = importlib.util.spec_from_file_location('boot_test', Path(__file__).with_n
 boot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(boot)
 
+spec = importlib.util.spec_from_file_location('install_test', Path(__file__).with_name('install-test.py'))
+install = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(install)
+InstallBootContracts = install.InstallBootContracts
+
 
 class BootContracts(unittest.TestCase):
     def launcher(self, component, extra=None):
