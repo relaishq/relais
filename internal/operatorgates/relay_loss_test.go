@@ -47,6 +47,10 @@ func TestRelayLossProcedure(t *testing.T) {
 		{"unknown-collect", "inconclusive", "", false, false, false},
 		{"unknown-start", "inconclusive", "", false, true, false},
 		{"rejoin-failed", "fail", "relay-loss-restore-failed", false, false, false},
+		{"rejoin-workers-missing", "fail", "relay-loss-restore-failed", false, false, false},
+		{"rejoin-unhealthy", "fail", "relay-loss-restore-failed", false, false, false},
+		{"self-exited-before-stop", "pass", "", false, false, false},
+		{"unknown-stop", "inconclusive", "", false, false, false},
 		{"second-host", "pass", "", false, true, false},
 		{"transient-inspection", "pass", "", false, false, false},
 		{"transient-control-status", "pass", "", false, false, false},
@@ -62,6 +66,7 @@ func TestRelayLossProcedure(t *testing.T) {
 			var ops []string
 			statusReads := 0
 			inspections := 0
+			rejoinReads := 0
 			renewed := false
 			status := controlplane.Status{Ready: true, Relays: []controlplane.RelayStatus{{Name: "preview"}, {Name: "preview-two"}}}
 			sessions := []string{"a", "b", "c", "d"}
@@ -105,6 +110,9 @@ func TestRelayLossProcedure(t *testing.T) {
 						r.Status = preflight
 					} else {
 						r.Status = status
+						if tc.name == "rejoin-unhealthy" || tc.name == "self-exited-before-stop" && statusReads == 2 {
+							r.Status.Ready = false
+						}
 						if tc.name == "rejoin-call-loss" || tc.name == "rejoin-call-loss-then-recovered-status" && statusReads == 2 {
 							r.Status.LostCount = 1
 							if tc.name == "rejoin-call-loss-then-recovered-status" {
@@ -127,6 +135,20 @@ func TestRelayLossProcedure(t *testing.T) {
 					if renewed {
 						r.Inspection.Status.Continuity.Epoch = 2
 					}
+					if op == "relay-status" && slices.Contains(ops, "relay-loss-stop:relay") {
+						rejoinReads++
+						if tc.name == "self-exited-before-stop" {
+							if rejoinReads > 1 {
+								r.Inspection.Status.Continuity.Epoch = 2
+							}
+							if rejoinReads == 2 {
+								r.Inspection.Status.Stats.Workers = 1
+							}
+						}
+						if tc.name == "rejoin-workers-missing" {
+							r.Inspection.Status.Stats.Workers = 1
+						}
+					}
 					r.Inspection.Active = "relais-relay.service"
 					if op == "relay-inspect" && tc.promoted {
 						renewed = true
@@ -141,8 +163,11 @@ func TestRelayLossProcedure(t *testing.T) {
 						r.Certainty = operator.Unknown
 					}
 				case "relay-start", "relay-loss-stop":
-					renewed = tc.name != "rejoin-failed"
-					if tc.name == "unknown-start" {
+					renewed = tc.name != "rejoin-failed" && tc.name != "self-exited-before-stop"
+					if op == "relay-loss-stop" && extra.ActiveUnit != "relais-relay.service" {
+						t.Fatal("stop must name the inspected predecessor", extra)
+					}
+					if tc.name == "unknown-start" || tc.name == "unknown-stop" {
 						r.Certainty = operator.Unknown
 					}
 				case "relay-restore":
@@ -260,13 +285,16 @@ func TestRelayLossProcedure(t *testing.T) {
 					t.Fatal("call loss not retained across later good status", ops)
 				}
 			}
-			if tc.name == "unknown-restore" || tc.name == "unknown-start" || tc.name == "unknown-collect" {
+			if tc.name == "unknown-restore" || tc.name == "unknown-start" || tc.name == "unknown-stop" || tc.name == "unknown-collect" {
 				want := 6
 				if tc.name == "unknown-collect" {
 					want = 5
 				}
 				if tc.name == "unknown-start" {
 					want = 7
+				}
+				if tc.name == "unknown-stop" {
+					want = 8
 				}
 				if len(ops) != want || out.Reason != "command-result-unknown" {
 					t.Fatal(ops, out)
@@ -286,7 +314,13 @@ func TestRelayLossProcedure(t *testing.T) {
 			if slices.Index(ops, "collect") > slices.Index(ops, "relay-restore:"+target) {
 				t.Fatal("restored before observation collection", ops)
 			}
-			if tc.name == "rejoin-failed" {
+			if tc.name == "self-exited-before-stop" && (rejoinReads != 4 || statusReads != 3 || !out.Completed) {
+				t.Fatal("exited predecessor must still wait for new epoch, two workers and healthy status", out, ops)
+			}
+			if tc.name == "rejoin-failed" || tc.name == "rejoin-workers-missing" || tc.name == "rejoin-unhealthy" {
+				if out.Completed || slices.Contains(ops, "relay-replenish:relay") {
+					t.Fatal("unconfirmed rejoin must not complete", out, ops)
+				}
 				return
 			}
 			if strings.HasPrefix(tc.name, "restore-failed") {
