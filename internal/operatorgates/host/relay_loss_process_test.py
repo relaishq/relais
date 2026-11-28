@@ -21,10 +21,40 @@ class RelayLossRestorationTests(unittest.TestCase):
                 t.calls.append(args)
                 return 'LISTEN 0 128 10.0.0.2:24700 0.0.0.0:* users:(("relay",pid=222,fd=1))'
             return t.command(args)
-        with patch.object(host, "command", changed), patch.object(host, "http", t.http):
+        with patch.object(host, "command", changed), patch.object(host, "http", t.http), patch.object(host.time, "sleep") as sleep:
             with self.assertRaisesRegex(ValueError, "active relay changed"):
                 host.relay_loss_execute("relay-loss-stop", P)
         self.assertFalse(any(c[:2] == ["systemctl", "stop"] for c in t.calls))
+        self.assertEqual(sleep.call_count, 50)
+
+    def test_relay_loss_stop_waits_for_late_systemd_exit(self):
+        # The listener closes before systemd reaps the fenced relay.
+        for listener in ("222", None):
+            with self.subTest(listener=listener):
+                t = Transcript()
+                polls = []
+                def late(args):
+                    if args[0] == "ss":
+                        t.calls.append(args)
+                        return "" if listener is None else f'LISTEN 0 128 10.0.0.2:24700 0.0.0.0:* users:(("relay",pid={listener},fd=1))'
+                    if args[:5] == ["systemctl", "show", "--value", "-p", "MainPID"] and len(polls) < 4:
+                        polls.append(args)
+                        return "111"
+                    if args[:5] == ["systemctl", "show", "--value", "-p", "MainPID"]:
+                        t.pids[P["activeUnit"]] = "0"
+                    return t.command(args)
+                with patch.object(host, "command", late), patch.object(host, "http", t.http), patch.object(host.time, "sleep") as sleep, patch.object(host.pathlib.Path, "exists", autospec=True, return_value=False) as exists:
+                    self.assertEqual(host.relay_loss_execute("relay-loss-stop", P), {"completed": True})
+                exists.assert_called_once_with(Path("/proc/111"))
+                self.assertEqual(sleep.call_count, 3)
+                self.assertFalse(any(c[:2] == ["systemctl", "stop"] for c in t.calls))
+
+    def test_relay_loss_stop_refuses_unknown_unit(self):
+        t = Transcript()
+        with patch.object(host, "command", t.command), patch.object(host, "http", t.http):
+            with self.assertRaisesRegex(ValueError, "active relay unit unknown"):
+                host.relay_loss_execute("relay-loss-stop", dict(P, activeUnit="relais-control.service"))
+        self.assertEqual(t.calls, [])
 
     def test_relay_loss_stop_accepts_already_exited_unit(self):
         for unit, old_pid, listener in (
@@ -111,10 +141,11 @@ class RelayLossRestorationTests(unittest.TestCase):
                 t.calls.append(args)
                 return ""
             return t.command(args)
-        with patch.object(host, "command", no_listener), patch.object(host.pathlib.Path, "exists", return_value=False):
+        with patch.object(host, "command", no_listener), patch.object(host.pathlib.Path, "exists", return_value=False), patch.object(host.time, "sleep") as sleep:
             with self.assertRaisesRegex(ValueError, "active relay unit unknown"):
                 host.relay_loss_execute("relay-loss-stop", P)
         self.assertFalse(any(c[:2] == ["systemctl", "stop"] for c in t.calls))
+        self.assertEqual(sleep.call_count, 50)
 
     def test_relay_loss_stop_uncertain_stop_is_not_replayed(self):
         t = Transcript()

@@ -15,8 +15,15 @@ def relay_loss_execute(op, p, evidence=None):
             matches = re.findall(re.escape(address) + r"\s+.*?pid=(\d+)", command(["ss", "-H", "-lntp"]))
             if matches == [str(old)]:
                 command(["systemctl", "stop", unit])
-            elif command(["systemctl", "show", "--value", "-p", "MainPID", unit]) != "0":
-                raise ValueError("active relay changed" if matches else "active relay unit unknown")
+            else:
+                # A self-exiting relay closes its listener before systemd
+                # records the exit. Wait briefly; never stop another unit.
+                for _ in range(50):
+                    if command(["systemctl", "show", "--value", "-p", "MainPID", unit]) == "0":
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise ValueError("active relay changed" if matches else "active relay unit unknown")
         # Relay units use Restart=no. Never stop a different active unit or
         # infer recovery here: R's rejoin loop checks epoch, workers and health.
         if command(["systemctl", "show", "--value", "-p", "MainPID", unit]) != "0" or old <= 0 or pathlib.Path(f"/proc/{old}").exists():
