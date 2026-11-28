@@ -2130,7 +2130,7 @@ The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
 path PRs, matching main pushes, the schedule and `workflow_dispatch`. It builds
 a native archive from the tested checkout, supplies its archive digest and
 opts into both relay hosts. This preserves systemd/template boot evidence for
-head server binaries. The separate part R job supplies published v0.4.0 evidence.
+head server binaries. The separate part R job supplies published v0.4.1 evidence.
 A proof failure fails that job. The existing manual target remains available.
 
 The job budget remains 20 minutes: archive build 5 minutes, proof step 14
@@ -2278,9 +2278,9 @@ recovery and management transport timing remain #560 and paid-run evidence.
 
 `relais-gates rehearse -part-r` runs only part R in disposable runner
 containers. `-prepare-only -part-r` reads one published release:
-v0.4.0, linux_amd64, commit
-`ebb0f7f19595cf62840e6a923c74b6314b6df1c7`, archive SHA256
-`0b8e61ef0228018d9e2f7a82bdae1f3763fa1992456aa2207ece82a07b8dfe0e`.
+v0.4.1, linux_amd64, commit
+`85a6ebc154feadd1db6a9c74eafd3ad84b09aea3`, archive SHA256
+`d3b5fc74af1f1d5d470d824c996e55970894f96bec06e372562d565069f4a4c4`.
 It has no upgrade pair. Every server host uses that release. The caller and
 bridge use the tested checkout. The separate R judge is built with
 `BuildRelayLossPinned` from the tested checkout and bound before clock admission.

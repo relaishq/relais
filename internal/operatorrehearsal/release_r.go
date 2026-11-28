@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	ReleaseRVersion = "0.4.0"
-	ReleaseRCommit  = "ebb0f7f19595cf62840e6a923c74b6314b6df1c7"
-	ReleaseRSHA256  = "0b8e61ef0228018d9e2f7a82bdae1f3763fa1992456aa2207ece82a07b8dfe0e"
+	ReleaseRVersion = "0.4.1"
+	ReleaseRCommit  = "85a6ebc154feadd1db6a9c74eafd3ad84b09aea3"
+	ReleaseRSHA256  = "d3b5fc74af1f1d5d470d824c996e55970894f96bec06e372562d565069f4a4c4"
 )
 
 // PrepareRelayLossRelease is the token-consuming R stage. Its own directory
@@ -43,7 +43,7 @@ func prepareRelayLossRelease(ctx context.Context, directory string, r *archiveRe
 	return os.WriteFile(filepath.Join(directory, "release-r.json"), raw, 0600)
 }
 func validateRelayLossPin(p artifacts.Pin) error {
-	if p.Version != ReleaseRVersion || p.Tag != "v"+ReleaseRVersion || p.Arch != "x86_64" || p.Commit != ReleaseRCommit || p.Archive != "relais_0.4.0_linux_amd64.tar.gz" || p.ArchiveSHA256 != ReleaseRSHA256 || !fullDigest.MatchString(p.ManifestSHA256) {
+	if p.Version != ReleaseRVersion || p.Tag != "v"+ReleaseRVersion || p.Arch != "x86_64" || p.Commit != ReleaseRCommit || p.Archive != "relais_"+ReleaseRVersion+"_linux_amd64.tar.gz" || p.ArchiveSHA256 != ReleaseRSHA256 || !fullDigest.MatchString(p.ManifestSHA256) {
 		return &artifacts.Refusal{Code: "release-profile-differs", Detail: "release differs from the pinned part R release"}
 	}
 	return nil

@@ -190,7 +190,7 @@ jobs:
         env:
           RELAIS_RELEASE_TOKEN: ${{ github.token }}
         run: ./bin/relais-gates rehearse -part-r -prepare-only -assets runtime/part-r-releases -output runtime/part-r-report
-      - name: Rehearse part R with both relay hosts and v0.4.0 servers
+      - name: Rehearse part R with both relay hosts and v0.4.1 servers
         timeout-minutes: 60
         env:
           TESTED_HEAD: ${{ github.event.pull_request.head.sha }}
