@@ -2081,9 +2081,10 @@ the dedicated table exists. This gives a 60-second procedure twice its expected
 fault duration. Restore is idempotent and follows the existing restoration
 admission path, with fresh inventory but without a clock refresh or quiet gap.
 
-Isolation requires `nft` on the standard host image. The step checks for it
+Isolation requires `nft` on the relay host. The step checks for it
 before mutation and refuses if absent; it does not install packages or modify
-an existing firewall. The rehearsal image explicitly includes `nftables`.
+an existing firewall. Template boot installs `nftables` on relay hosts with
+SSM enabled, including both rehearsal relays; see the boot prerequisite below.
 The selected image and kernel must support the timed `nf_proto` set used here;
 the Linux container proof checks the executable rules, rather than inferring
 support from the image family. No iptables fallback is used.
@@ -2125,6 +2126,17 @@ forms are normalized to the same address space. Missing or
 over-broad rules fail. Existing HTTP and UDP flows must also stop. A failure
 prints the exact JSON readback and a fresh table dump for diagnosis. This proof
 needs Linux, privileged disposable containers and a pinned release archive.
+
+The rehearsal image does not install `nftables` and refuses to build if `nft`
+is already present. Rehearsal resolves `EnableSessionManager=true`, including
+for both relay hosts, and runs the template's user-data unchanged. Relay boot
+therefore installs `nftables` through the same bounded `dnf install -y nftables`
+step as a deployed operator host and checks `nft --version` before services
+start. Install or version-check failure fails boot and its creation signal.
+The rehearsal's Docker bridge is not internal-only; boot needs outbound access
+to the image's package repositories. There is no package-manager shim or cached
+pre-install. Container execution must confirm repository access in CI; it does
+not prove deployed package-repository or security-group reachability.
 
 The `template-boot` job in `operator-rehearsal.yml` runs this test on operator
 path PRs, matching main pushes, the schedule and `workflow_dispatch`. It builds

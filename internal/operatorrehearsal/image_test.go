@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,6 +21,39 @@ func TestImageUsesAL2023CurlProvider(t *testing.T) {
 	for _, word := range strings.Fields(string(raw)) {
 		if word == "curl" || word == "--allowerasing" {
 			t.Fatal("image must retain the base curl-minimal provider")
+		}
+	}
+}
+
+func TestRehearsalLeavesNftInstallationToSSMRelayBoot(t *testing.T) {
+	raw, err := assets.ReadFile("assets/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "RUN ") && strings.Contains(line, "dnf install") && strings.Contains(line, "nftables") {
+			t.Fatal("image pre-installs the relay isolation prerequisite")
+		}
+	}
+	if !strings.Contains(string(raw), "RUN ! command -v nft\n") {
+		t.Fatal("image must refuse an already installed nft")
+	}
+	c := fixtureConfig()
+	c.RelayTwo = true
+	topology, err := Load(os.DirFS("../.."), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, slot := range []string{"relay", "relay-two"} {
+		var node struct {
+			SSM        string   `json:"ssm"`
+			Components []string `json:"components"`
+		}
+		if err := json.Unmarshal([]byte(topology.Hosts[slot].Metadata.Files["/etc/relais/node.json"].Content), &node); err != nil {
+			t.Fatal(err)
+		}
+		if node.SSM != "true" || !slices.Equal(node.Components, []string{"relay"}) {
+			t.Fatalf("%s does not select the template's operator relay install: %+v", slot, node)
 		}
 	}
 }

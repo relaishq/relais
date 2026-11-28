@@ -17,6 +17,12 @@ print(' '.join(c['components'])); print(c['ssm'])
 PY
 )
 "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin" "${settings[3]}"
+# Operator relay isolation requires nft on both relay hosts. Bound the package
+# transaction; any install or executable failure reaches user-data's failure signal.
+if [[ ${settings[4]} == true && " ${settings[3]} " == *" relay "* ]]; then
+  timeout --kill-after=10s 120s dnf install -y nftables
+  nft --version
+fi
 python3 "$boot/prepare.py" "$config" "$root/run/relais"
 "${RELAIS_TEST_SYSCTL:-sysctl}" -p "$root/etc/sysctl.d/60-relais-udp.conf"
 manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
