@@ -30,11 +30,11 @@
     "function_sha256": "06e0e0b0c2ae9f4965f5d43238c03ed199ef6d8b264918703045eb8a353cf9ca"
   },
   "relay_loss_process.py": {
-    "sha256": "0dc1ccc706d62eeda50ae8bda832d428556157d81dd4ff7e66185718587eeae0",
-    "change": "R-only restoration source and offline transcripts; ordinary host sources and rendered steps stay byte-identical."
+    "sha256": "d396a535d0e3b7371d34ebd3a95da28e4fb4a5226e770277139cb2e53814ef63",
+    "change": "For #541, confirm an R-only relay-loss-stop predecessor exit even if the active listener changed or is absent; retain fail-closed stop transcripts and byte-identical ordinary rendered steps."
   },
   "relay_loss_process_test.py": {
-    "sha256": "c9dc982eaeb2d18c68a8a530486ddabdd0d8e5cca22615b08f7c854180f1256c",
-    "change": "R-only restoration source and offline transcripts; ordinary host sources and rendered steps stay byte-identical."
+    "sha256": "df027a19fecd856014d150ab38261839a31d21bf192605b5125086e294f08b4c",
+    "change": "For #541, confirm an R-only relay-loss-stop predecessor exit even if the active listener changed or is absent; retain fail-closed stop transcripts and byte-identical ordinary rendered steps."
   }
 }
